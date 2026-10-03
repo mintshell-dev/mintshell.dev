@@ -1,6 +1,7 @@
 ---
 import { localizePath, stripLocale, useTranslations, type Locale } from '@mintshell/shared';
 
+import BrandMark from './BrandMark.astro';
 import LangSwitch from './LangSwitch.astro';
 import ThemeToggle from './ThemeToggle.astro';
 
@@ -22,9 +23,12 @@ const isActive = (base: string) => current === base || current.startsWith(`${bas
 
 <header class="container header">
   <a class="handle" href={localizePath('/', locale)} aria-label={t('nav.home')}>
-    mintshell
-    <span class="cursor" aria-hidden="true">
-      _
+    <BrandMark variant="mark" />
+    <span class="name">
+      mintshell
+      <span class="cursor" aria-hidden="true">
+        _
+      </span>
     </span>
   </a>
   <nav class="nav" aria-label={t('nav.label')}>
@@ -75,6 +79,9 @@ const isActive = (base: string) => current === base || current.startsWith(`${bas
   .handle {
     grid-area: handle;
     justify-self: start;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
     color: var(--color-text);
     font-family: var(--font-mono);
     font-size: var(--font-size-lg);

@@ -2,6 +2,41 @@
 
 Gọn gàng, nhiều khoảng trắng, gợi cảm giác terminal nhưng dễ đọc. **Mặc định tối**, có chế độ sáng.
 
+## Bộ nhận diện
+
+- **Biểu tượng**: vỏ ốc màu bạc hà, bên trong có dấu nhắc lệnh `>_`. Nét vẽ màu `color.accent` của theme tối (`#3DDC97`) trên nền vuông bo góc màu `color.bg` của theme tối (`#0B0F14`).
+- **Avatar** (mạng xã hội, nền tảng CTF/bug bounty): cùng biểu tượng, thêm đôi mắt màu `color.text` của theme tối (`#E6EDF3`), con ngươi màu `color.bg` tối.
+- **Favicon** lược bỏ mắt để biểu tượng rõ ở cỡ nhỏ (16–32px); chỉ dùng `color.bg` và `color.accent` tối.
+- **Nguồn gốc**: thư mục `brand/` ở gốc repo (`avatar.svg`, `favicon.svg`, bản vector gốc). File trong `apps/web/public/` là **bản xuất** để phục vụ web, không sửa tay: đổi biểu tượng thì sửa trong `brand/` rồi xuất lại.
+- **Metadata nguồn gốc**:
+  - Bản gốc trong `brand/` **giữ** metadata C2PA. Đây là chủ đích, để minh bạch nguồn gốc file. Thư mục này không được phục vụ trên web nên vài KB metadata không ảnh hưởng.
+  - Bản xuất trong `apps/web/public/` **bỏ** metadata: C2PA, chunk văn bản/EXIF của PNG (`caBX`, `tEXt`, `iTXt`, `zTXt`, `eXIf`) và `<metadata>` của SVG. Chỉ giữ dữ liệu ảnh để file nhẹ; `test:dist` kiểm tra.
+- **Favicon** trong `apps/web/public/`, khai báo ở `BaseLayout.astro`:
+
+  | File                   | Kích thước | Dùng cho                               |
+  | ---------------------- | ---------- | -------------------------------------- |
+  | `favicon.svg`          | vector     | trình duyệt hỗ trợ favicon SVG         |
+  | `favicon-32.png`       | 32×32      | trình duyệt không hỗ trợ SVG           |
+  | `apple-touch-icon.png` | 180×180    | iOS/iPadOS khi thêm vào màn hình chính |
+
+- **Trong giao diện**, component `apps/web/src/components/BrandMark.astro`:
+  - SVG nội tuyến, vẽ lại từ phần hình vẽ trong `brand/`. Không có nền, không có metadata.
+  - Màu lấy từ token qua class trong stylesheet, nên tự đổi theo theme. Không dùng `style=`, không ghi cứng mã màu: nét vỏ và `>_` dùng `color.accent`, mắt dùng `color.text`, con ngươi dùng `color.bg`.
+  - Hai biến thể:
+
+    | `variant` | Mắt   | Cỡ                    | Dùng ở                                                                                |
+    | --------- | ----- | --------------------- | ------------------------------------------------------------------------------------- |
+    | `mark`    | không | `size.mark` (28px)    | header, trước chữ `mintshell_`                                                        |
+    | `avatar`  | có    | `size.avatar` (120px) | phần liên hệ của portfolio; di động đặt trên tiêu đề, từ `48rem` đặt bên trái tiêu đề |
+
+  - Luôn `aria-hidden="true"`, vì chữ bên cạnh đã là tên.
+  - Tương phản ≥ 3:1 (thành phần đồ họa, WCAG 1.4.11) ở cả hai theme, có test trong `packages/tokens`: `accent` trên `bg`, `text` trên `bg`, `bg` trên `text`.
+  - Ở theme sáng, mắt có màu tối và con ngươi màu sáng (đảo so với theme tối), vì màu đi theo token.
+  - `test:dist` kiểm tra: header mọi trang có `mark`; portfolio có `avatar`; mọi SVG nội tuyến không có `<script>`, `on*=`, `style=`, metadata, tham chiếu ra ngoài, hay `fill`/`stroke` ghi cứng (chỉ cho `none`/`currentColor`).
+- `<meta name="theme-color">` lấy `color.bg` của theme tối từ `@mintshell/tokens` (theme mặc định), không ghi cứng.
+- Màu trong file ảnh là ngoại lệ có chủ đích: ảnh không đọc được CSS variable, nên giá trị phải trùng token theme tối ở trên; đổi token thì xuất lại ảnh.
+- `favicon.svg` chỉ được chứa hình vẽ: không `<script>`, không thuộc tính `on*=`, không tham chiếu ra ngoài (`test:dist` kiểm tra), vì mở trực tiếp `/favicon.svg` thì trình duyệt chạy script trong SVG.
+
 ## Nguyên tắc
 
 - Code chỉ dùng token (CSS variables); không ghi cứng màu, font, spacing.
@@ -85,7 +120,7 @@ Chiều cao dòng (`$type: number`): `font.lineHeight.tight` 1.1 (tiêu đề l�
 ## Spacing, kích thước và bo góc
 
 - Spacing: bội số 4px, `space.N` = N × 4px. Có sẵn các mức N = 1, 2, 3, 4, 5, 6, 8, 10, 12, 16.
-- Kích thước: `size.control` = 44px (nút vuông, đủ vùng chạm), `size.content` = 64rem (độ rộng tối đa của nội dung).
+- Kích thước: `size.control` = 44px (nút vuông, đủ vùng chạm), `size.content` = 64rem (độ rộng tối đa của nội dung), `size.mark` = 28px và `size.avatar` = 120px (BrandMark).
 - Viền: `border.width.thin` = 1px (viền, gạch chân link), `border.width.focus` = 2px (vòng focus).
 - Bo góc: `radius.sm` = 4px, `radius.md` = 8px.
 - **Breakpoint** `48rem`: ngoại lệ có chủ đích, ghi thẳng trong `@media (min-width: 48rem)` vì CSS variable không dùng được trong media query. Dưới mức này là bố cục một cột (di động).

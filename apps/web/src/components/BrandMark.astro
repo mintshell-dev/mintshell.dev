@@ -1,0 +1,98 @@
+---
+/**
+ * Biểu tượng mintshell (vỏ ốc + dấu nhắc lệnh `>_`), vẽ lại từ brand/favicon.svg và
+ * brand/avatar.svg: chỉ phần hình vẽ, không nền, không metadata. Màu lấy từ token qua class
+ * nên đổi theo theme. Luôn aria-hidden: nơi dùng đã có tên bằng chữ.
+ *
+ * - `mark`: không mắt, nét dày như favicon, cỡ `size.mark` (header).
+ * - `avatar`: có mắt như avatar, cỡ `size.avatar` (phần liên hệ).
+ */
+interface Props {
+  variant: 'mark' | 'avatar';
+}
+
+const { variant } = Astro.props;
+const isAvatar = variant === 'avatar';
+// Khung cắt sát hình vẽ (toạ độ gốc của brand/), avatar rộng hơn để chứa mắt.
+const viewBox = isAvatar ? '56 42 416 416' : '126 70 354 354';
+const stroke = isAvatar ? { shell: 14, prompt: 18 } : { shell: 24, prompt: 28 };
+---
+
+<svg
+  class:list={['brand-mark', `brand-mark--${variant}`]}
+  viewBox={viewBox}
+  aria-hidden="true"
+  focusable="false"
+>
+  <g transform={isAvatar ? 'translate(-14 4)' : undefined}>
+    <path
+      class="accent"
+      d="M150 360 C140 220 230 120 330 126 C420 132 466 210 452 280 C440 340 384 372 316 370 L150 370 Z"
+      fill="none"
+      stroke-width={stroke.shell}
+      stroke-linejoin="round"
+    ></path>
+    <polyline
+      class="accent"
+      points="252,214 304,250 252,286"
+      fill="none"
+      stroke-width={stroke.prompt}
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    ></polyline>
+    <line
+      class="accent"
+      x1="322"
+      y1="290"
+      x2="372"
+      y2="290"
+      stroke-width={stroke.prompt}
+      stroke-linecap="round"
+    ></line>
+    {isAvatar && (
+      <>
+        <g class="eye-stalk" fill="none" stroke-width="12" stroke-linecap="round">
+          <path d="M128 366 L104 300" />
+          <path d="M156 366 L166 296" />
+        </g>
+        <circle class="eye" cx="102" cy="286" r="19" />
+        <circle class="eye" cx="168" cy="282" r="19" />
+        <circle class="pupil" cx="107" cy="289" r="8" />
+        <circle class="pupil" cx="173" cy="285" r="8" />
+      </>
+    )}
+  </g>
+</svg>
+
+<style>
+  .brand-mark {
+    flex: none;
+    display: block;
+  }
+
+  .brand-mark--mark {
+    width: var(--size-mark);
+    height: var(--size-mark);
+  }
+
+  .brand-mark--avatar {
+    width: var(--size-avatar);
+    height: var(--size-avatar);
+  }
+
+  .accent {
+    stroke: var(--color-accent);
+  }
+
+  .eye-stalk {
+    stroke: var(--color-text);
+  }
+
+  .eye {
+    fill: var(--color-text);
+  }
+
+  .pupil {
+    fill: var(--color-bg);
+  }
+</style>
