@@ -12,6 +12,18 @@
     "12": { "$value": "48px" },
     "16": { "$value": "64px" }
   },
+  "size": {
+    "$type": "dimension",
+    "control": { "$value": "44px" },
+    "content": { "$value": "64rem" }
+  },
+  "border": {
+    "width": {
+      "$type": "dimension",
+      "thin": { "$value": "1px" },
+      "focus": { "$value": "2px" }
+    }
+  },
   "radius": {
     "$type": "dimension",
     "sm": { "$value": "4px" },
@@ -25,6 +37,13 @@
     "mono": {
       "$type": "fontFamily",
       "$value": ["JetBrains Mono", "ui-monospace", "monospace"]
+    },
+    "size": {
+      "$type": "dimension",
+      "sm": { "$value": "0.875rem" },
+      "base": { "$value": "1rem" },
+      "lg": { "$value": "1.25rem" },
+      "xl": { "$value": "1.75rem" }
     },
     "weight": {
       "$type": "fontWeight",

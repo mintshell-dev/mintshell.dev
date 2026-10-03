@@ -18,7 +18,8 @@ Triển khai:
 
 ## Luồng động (không có backend riêng)
 
-- **React islands** phía client: chuyển theme tối/sáng, ô tìm kiếm Pagefind.
+- **Chuyển theme tối/sáng**: script nhỏ trong component Astro + `public/theme-init.js` chống nháy, không dùng React ([ADR 0007](adr/0007-layout-theme-url.md)).
+- **React islands** phía client: ô tìm kiếm Pagefind (khi cần).
 - **Newsletter**: form gửi thẳng tới Brevo; Brevo gửi email xác nhận (double opt-in).
 - **Analytics**: beacon Cloudflare Web Analytics.
 - **Đồng bộ Notion (M4)**: script trong `scripts/` lấy trang từ Notion → sinh MDX vào `content/` → đưa vào Git qua Merge Request. Site không gọi Notion lúc chạy.
@@ -33,7 +34,7 @@ Triển khai:
 
 | Trang      | Tiếng Việt            | Tiếng Anh                |
 | ---------- | --------------------- | ------------------------ |
-| Trang chủ  | `/`                   | `/en/`                   |
+| Trang chủ  | `/`                   | `/en`                    |
 | Write-up   | `/writeups/<slug>`    | `/en/writeups/<slug>`    |
 | Cheatsheet | `/cheatsheets/<slug>` | `/en/cheatsheets/<slug>` |
 | Portfolio  | `/portfolio`          | `/en/portfolio`          |
@@ -45,12 +46,19 @@ Quy tắc slug:
 - Dùng chung cho cả hai ngôn ngữ.
 - Đã xuất bản là **vĩnh viễn**; nếu buộc phải đổi thì thêm redirect 301.
 - Mỗi trang có `canonical` và `hreflang` (vi, en, x-default → vi).
+- URL không có `/` cuối (`trailingSlash: 'never'`, `build.format: 'file'`), xem [ADR 0007](adr/0007-layout-theme-url.md).
 - Bản tiếng Anh có `translation: pending` hiển thị thông báo và liên kết sang bản tiếng Việt.
 
 ## Subdomain
 
 - Giai đoạn 1: chỉ apex và `www`.
 - Dự kiến giai đoạn 2: có thể thêm subdomain riêng cho bình luận/API — sẽ quyết bằng ADR khi tới.
+
+## Môi trường dev
+
+- Mọi lệnh chạy trong Dev Container.
+- `astro dev` nghe `127.0.0.1` (`server.host` trong `apps/web/astro.config.ts`): mặc định Astro chỉ nghe `[::1]` (IPv6), còn kênh chuyển tiếp cổng của VS Code kết nối qua IPv4. Chỉ nghe loopback, nên dev server không mở ra mạng ngoài.
+- Kiểm tra bản build: `pnpm test:dist` (turbo chạy `build` trước) đọc `apps/web/dist` để bắt script/style nội tuyến, `data:` URI, tài nguyên ngoài origin, canonical/hreflang sai.
 
 ## Cấu trúc monorepo
 
@@ -61,7 +69,7 @@ Quy tắc slug:
 ├── packages/
 │   ├── tokens/       # design token (W3C) → CSS variables qua Style Dictionary
 │   ├── ui/           # component dùng chung, chỉ dùng token
-│   └── shared/       # kiểu, schema frontmatter, tiện ích, chuỗi i18n
+│   └── shared/       # kiểu, schema frontmatter, tiện ích, i18n (ngôn ngữ, path, từ điển)
 ├── content/          # nội dung MDX (CC BY 4.0)
 ├── scripts/          # script tiện ích (vd. đồng bộ Notion)
 ├── infra/            # cấu hình hạ tầng (headers, redirects, security.txt…)

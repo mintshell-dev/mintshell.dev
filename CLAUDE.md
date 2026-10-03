@@ -17,7 +17,8 @@ pnpm dev                # chạy dev server
 pnpm build              # build toàn bộ
 pnpm lint               # lint
 pnpm typecheck          # kiểm tra kiểu
-pnpm test               # chạy test
+pnpm test               # chạy unit test
+pnpm test:dist          # build rồi kiểm tra bản build (apps/web/dist)
 pnpm --filter web <lệnh>  # chạy lệnh cho một gói
 ```
 
@@ -47,7 +48,7 @@ pnpm --filter web <lệnh>  # chạy lệnh cho một gói
 
 ## Định nghĩa hoàn thành
 
-1. `lint`, `typecheck`, `test`, `build` đều qua.
+1. `lint`, `typecheck`, `test`, `build`, `test:dist` đều qua.
 2. Cập nhật `docs/progress.md`.
 3. Thêm ADR trong `docs/adr/` khi có quyết định kiến trúc.
 

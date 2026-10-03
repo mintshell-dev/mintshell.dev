@@ -5,11 +5,13 @@
   "scripts": {
     "dev": "ASTRO_TELEMETRY_DISABLED=1 astro dev",
     "build": "ASTRO_TELEMETRY_DISABLED=1 astro build",
-    "typecheck": "ASTRO_TELEMETRY_DISABLED=1 astro check"
+    "typecheck": "ASTRO_TELEMETRY_DISABLED=1 astro check",
+    "test:dist": "vitest run --config vitest.dist.config.ts"
   },
   "dependencies": {
     "@fontsource/be-vietnam-pro": "catalog:",
     "@fontsource/jetbrains-mono": "catalog:",
+    "@mintshell/shared": "workspace:*",
     "@mintshell/tokens": "workspace:*"
   },
   "devDependencies": {
