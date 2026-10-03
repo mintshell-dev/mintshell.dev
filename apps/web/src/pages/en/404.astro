@@ -1,0 +1,19 @@
+---
+import { localizePath, useTranslations } from '@mintshell/shared';
+
+import BaseLayout from '../../layouts/BaseLayout.astro';
+
+const t = useTranslations('en');
+const vi = useTranslations('vi');
+---
+
+<BaseLayout title={t('notFound.title')} noindex>
+  <h1>404</h1>
+  <p>{t('notFound.body')}</p>
+  <p>
+    <a href={localizePath('/', 'en')}>{t('notFound.home')}</a>
+  </p>
+  <p lang="vi">
+    {vi('notFound.body')} <a href={localizePath('/', 'vi')}>{vi('notFound.home')}</a>
+  </p>
+</BaseLayout>

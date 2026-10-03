@@ -1,15 +1,11 @@
 ---
-import '../../styles/global.css';
+import { useTranslations } from '@mintshell/shared';
+
+import BaseLayout from '../../layouts/BaseLayout.astro';
+
+const t = useTranslations('en');
 ---
 
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>mintshell</title>
-  </head>
-  <body>
-    <h1>Hello</h1>
-  </body>
-</html>
+<BaseLayout>
+  <h1>{t('home.title')}</h1>
+</BaseLayout>

@@ -4,6 +4,7 @@
     "bg": { "$value": "#0B0F14" },
     "surface": { "$value": "#121821" },
     "border": { "$value": "#1F2A37" },
+    "borderStrong": { "$value": "#5B6B7C" },
     "text": { "$value": "#E6EDF3" },
     "muted": { "$value": "#8B98A5" },
     "accent": { "$value": "#3DDC97" },

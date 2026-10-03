@@ -1,0 +1,38 @@
+---
+import { useTranslations, type Locale } from '@mintshell/shared';
+
+import BaseLayout from '../layouts/BaseLayout.astro';
+
+interface Props {
+  locale: Locale;
+  /** Tên mục, dùng làm tiêu đề trang. */
+  title: string;
+}
+
+const { locale, title } = Astro.props;
+const t = useTranslations(locale);
+---
+
+<BaseLayout title={title}>
+  <h1>{title}</h1>
+  <p class="status">{t('construction.title')}</p>
+  <p>{t('construction.body')}</p>
+</BaseLayout>
+
+<style>
+  h1 {
+    font-family: var(--font-mono);
+    font-size: var(--font-size-xl);
+    font-weight: var(--font-weight-medium);
+  }
+
+  .status {
+    color: var(--color-highlight);
+    font-family: var(--font-mono);
+  }
+
+  .status::before {
+    content: '> ';
+    color: var(--color-muted);
+  }
+</style>

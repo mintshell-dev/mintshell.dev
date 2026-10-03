@@ -15,19 +15,21 @@ Gọn gàng, nhiều khoảng trắng, gợi cảm giác terminal nhưng dễ đ
 
 ## Màu
 
-| Token             | CSS variable        | Tối       | Sáng      |
-| ----------------- | ------------------- | --------- | --------- |
-| `color.bg`        | `--color-bg`        | `#0B0F14` | `#FAFAF7` |
-| `color.surface`   | `--color-surface`   | `#121821` | `#FFFFFF` |
-| `color.border`    | `--color-border`    | `#1F2A37` | `#E2E8F0` |
-| `color.text`      | `--color-text`      | `#E6EDF3` | `#0F172A` |
-| `color.muted`     | `--color-muted`     | `#8B98A5` | `#475569` |
-| `color.accent`    | `--color-accent`    | `#3DDC97` | `#047857` |
-| `color.onAccent`  | `--color-on-accent` | `#0B0F14` | `#FFFFFF` |
-| `color.highlight` | `--color-highlight` | `#F5B841` | `#B45309` |
+| Token                | CSS variable            | Tối       | Sáng      |
+| -------------------- | ----------------------- | --------- | --------- |
+| `color.bg`           | `--color-bg`            | `#0B0F14` | `#FAFAF7` |
+| `color.surface`      | `--color-surface`       | `#121821` | `#FFFFFF` |
+| `color.border`       | `--color-border`        | `#1F2A37` | `#E2E8F0` |
+| `color.borderStrong` | `--color-border-strong` | `#5B6B7C` | `#7C8799` |
+| `color.text`         | `--color-text`          | `#E6EDF3` | `#0F172A` |
+| `color.muted`        | `--color-muted`         | `#8B98A5` | `#475569` |
+| `color.accent`       | `--color-accent`        | `#3DDC97` | `#047857` |
+| `color.onAccent`     | `--color-on-accent`     | `#0B0F14` | `#FFFFFF` |
+| `color.highlight`    | `--color-highlight`     | `#F5B841` | `#B45309` |
 
 - `color.onAccent`: chữ trên nền `color.accent` (nút chính).
-- `color.border` chỉ đạt khoảng 1.2–1.3:1 so với `bg`/`surface`: đủ cho đường phân cách trang trí, **không đủ** làm ranh giới duy nhất của ô nhập liệu hay control (WCAG 1.4.11 cần ≥ 3:1). Xử lý ở M2.
+- `color.border` chỉ đạt khoảng 1.2–1.3:1 so với `bg`/`surface`: chỉ dùng cho đường phân cách trang trí.
+- `color.borderStrong`: ranh giới thành phần tương tác (nút, ô nhập), đạt ≥ 3:1 trên `bg` và `surface` ở cả hai theme (WCAG 1.4.11; tối 3.51/3.26:1, sáng 3.47/3.63:1), có test.
 
 ### Severity (tách theo theme)
 
@@ -49,7 +51,8 @@ Theme tối giữ màu tươi; theme sáng dùng tông đậm để chữ đạt
 
 - `color.text`, `color.muted`, `color.accent`, `color.highlight`;
 - 5 mức `severity.*`;
-- thêm `color.onAccent` trên `color.accent`.
+- thêm `color.onAccent` trên `color.accent`;
+- `color.borderStrong` trên `bg` và `surface`: tối thiểu 3:1 (không phải chữ).
 
 ## Font
 
@@ -64,10 +67,28 @@ Theme tối giữ màu tươi; theme sáng dùng tông đậm để chữ đạt
 - **Không dùng Google Fonts CDN.** Lý do: quyền riêng tư người đọc (không gửi IP sang bên thứ ba) và CSP chặt (`font-src 'self'`).
 - Xem [ADR 0002](adr/0002-astro-frontend.md).
 
-## Spacing và bo góc
+### Cỡ chữ
+
+| Token            | Giá trị    | Dùng cho               |
+| ---------------- | ---------- | ---------------------- |
+| `font.size.sm`   | `0.875rem` | menu, footer, nhãn nút |
+| `font.size.base` | `1rem`     | chữ thường             |
+| `font.size.lg`   | `1.25rem`  | handle `mintshell_`    |
+| `font.size.xl`   | `1.75rem`  | tiêu đề trang          |
+
+## Spacing, kích thước và bo góc
 
 - Spacing: bội số 4px, `space.N` = N × 4px. Có sẵn các mức N = 1, 2, 3, 4, 5, 6, 8, 10, 12, 16.
+- Kích thước: `size.control` = 44px (nút vuông, đủ vùng chạm), `size.content` = 64rem (độ rộng tối đa của nội dung).
+- Viền: `border.width.thin` = 1px (viền, gạch chân link), `border.width.focus` = 2px (vòng focus).
 - Bo góc: `radius.sm` = 4px, `radius.md` = 8px.
+
+## Tương tác và truy cập
+
+- Focus bàn phím: `:focus-visible` vẽ outline `border.width.focus` màu `color.accent`, cách phần tử `space.1`.
+- Nút điều khiển (`.control`): vuông `size.control`, viền `color.borderStrong`; hover đổi viền và chữ sang `color.accent`.
+- Link menu: gạch chân chạy từ trái sang khi hover/focus, thời lượng `motion.duration.base`. Link nằm giữa chữ cùng màu (footer) luôn gạch chân.
+- Link "Bỏ qua tới nội dung" là phần tử focus đầu tiên của mọi trang.
 
 ## Chuyển động
 

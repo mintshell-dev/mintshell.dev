@@ -9,4 +9,12 @@ export default tseslint.config(
   js.configs.recommended,
   tseslint.configs.recommended,
   astro.configs.recommended,
+  {
+    // Script tĩnh chạy thẳng trên trình duyệt, không qua bundler.
+    files: ['apps/web/public/**/*.js'],
+    languageOptions: {
+      sourceType: 'script',
+      globals: { document: 'readonly', localStorage: 'readonly', matchMedia: 'readonly' },
+    },
+  },
 );

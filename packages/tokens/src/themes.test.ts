@@ -4,6 +4,7 @@ import { contrastRatio } from './contrast.ts';
 import { flatten, sources, type TokenNode } from './generate.ts';
 
 const AA_TEXT = 4.5;
+const NON_TEXT = 3;
 
 const themes = { dark: sources.dark, light: sources.light } as const;
 
@@ -32,6 +33,13 @@ describe('theme', () => {
         ).toBeGreaterThanOrEqual(AA_TEXT);
       });
     }
+
+    // WCAG 1.4.11: ranh giới thành phần tương tác (nút, ô nhập) cần ≥ 3:1.
+    it.each(backgrounds)('color.borderStrong trên color.%s ≥ 3:1', (bg) => {
+      expect(
+        contrastRatio(theme.color.borderStrong.$value, theme.color[bg].$value),
+      ).toBeGreaterThanOrEqual(NON_TEXT);
+    });
 
     it('color.onAccent trên color.accent ≥ 4.5:1', () => {
       expect(

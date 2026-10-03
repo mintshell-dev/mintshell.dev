@@ -1,0 +1,104 @@
+---
+import { localizePath, stripLocale, useTranslations, type Locale } from '@mintshell/shared';
+
+import LangSwitch from './LangSwitch.astro';
+import ThemeToggle from './ThemeToggle.astro';
+
+interface Props {
+  locale: Locale;
+  path: string;
+}
+
+const { locale, path } = Astro.props;
+const t = useTranslations(locale);
+const current = stripLocale(path);
+const items = [
+  { base: '/writeups', label: t('nav.writeups') },
+  { base: '/cheatsheets', label: t('nav.cheatsheets') },
+  { base: '/portfolio', label: t('nav.portfolio') },
+] as const;
+const isActive = (base: string) => current === base || current.startsWith(`${base}/`);
+---
+
+<header class="container header">
+  <a class="handle" href={localizePath('/', locale)} aria-label={t('nav.home')}>
+    mintshell
+    <span class="cursor" aria-hidden="true">
+      _
+    </span>
+  </a>
+  <nav class="nav" aria-label={t('nav.label')}>
+    <ul class="links">
+      {items.map(({ base, label }) => (
+        <li>
+          <a
+            class="link-underline"
+            href={localizePath(base, locale)}
+            aria-current={isActive(base) ? 'page' : undefined}
+          >
+            {label}
+          </a>
+        </li>
+      ))}
+    </ul>
+    <div class="controls">
+      <LangSwitch locale={locale} path={path} />
+      <ThemeToggle locale={locale} />
+    </div>
+  </nav>
+</header>
+
+<style>
+  .header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-4);
+    padding-block: var(--space-6);
+  }
+
+  .handle {
+    color: var(--color-text);
+    font-family: var(--font-mono);
+    font-size: var(--font-size-lg);
+    font-weight: var(--font-weight-medium);
+    text-decoration: none;
+  }
+
+  .cursor {
+    color: var(--color-accent);
+  }
+
+  .nav {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-4) var(--space-6);
+  }
+
+  .links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2) var(--space-5);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-family: var(--font-mono);
+    font-size: var(--font-size-sm);
+  }
+
+  .links a {
+    color: var(--color-muted);
+  }
+
+  .links a:hover,
+  .links a[aria-current='page'] {
+    color: var(--color-text);
+  }
+
+  .controls {
+    display: flex;
+    gap: var(--space-2);
+  }
+</style>

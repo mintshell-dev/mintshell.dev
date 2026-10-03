@@ -1,0 +1,22 @@
+---
+import { localizePath, useTranslations, type Locale } from '@mintshell/shared';
+
+interface Props {
+  locale: Locale;
+  path: string;
+}
+
+const { locale, path } = Astro.props;
+const target: Locale = locale === 'vi' ? 'en' : 'vi';
+const t = useTranslations(locale);
+---
+
+<a
+  class="control"
+  href={localizePath(path, target)}
+  hreflang={target}
+  lang={target}
+  aria-label={t('lang.switchLabel')}
+>
+  {t('lang.short')}
+</a>

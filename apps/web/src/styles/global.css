@@ -24,3 +24,95 @@ pre,
 samp {
   font-family: var(--font-mono);
 }
+
+html {
+  font-size: var(--font-size-base);
+}
+
+a {
+  color: var(--color-accent);
+}
+
+/* Focus bàn phím rõ ràng ở mọi theme (accent đạt ≥ 4.5:1 trên bg và surface). */
+:focus-visible {
+  outline: var(--border-width-focus) solid var(--color-accent);
+  outline-offset: var(--space-1);
+}
+
+.container {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: var(--size-content);
+  margin-inline: auto;
+  padding-inline: var(--space-6);
+}
+
+.skip-link {
+  position: absolute;
+  top: var(--space-2);
+  left: var(--space-2);
+  z-index: 1;
+  padding: var(--space-2) var(--space-4);
+  background-color: var(--color-accent);
+  color: var(--color-on-accent);
+  font-family: var(--font-mono);
+  border-radius: var(--radius-sm);
+  transform: translateY(calc(-100% - var(--space-4)));
+  transition: transform var(--motion-duration-fast);
+}
+
+.skip-link:focus {
+  transform: none;
+}
+
+/* Gạch chân chạy từ trái sang khi hover/focus. Thời lượng về 0 khi prefers-reduced-motion (tokens.css). */
+.link-underline {
+  text-decoration: none;
+  background-image: linear-gradient(currentcolor, currentcolor);
+  background-repeat: no-repeat;
+  background-position: left bottom;
+  background-size: 0% var(--border-width-thin);
+  transition: background-size var(--motion-duration-base);
+}
+
+.link-underline:hover,
+.link-underline:focus-visible,
+.link-underline[aria-current='page'] {
+  background-size: 100% var(--border-width-thin);
+}
+
+/* Nút vuông 44px có viền đạt ≥ 3:1 (WCAG 1.4.11). */
+.control {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--size-control);
+  height: var(--size-control);
+  padding: 0;
+  border: var(--border-width-thin) solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background-color: transparent;
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  text-decoration: none;
+  cursor: pointer;
+  transition:
+    border-color var(--motion-duration-fast),
+    color var(--motion-duration-fast);
+}
+
+.control:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skip-link,
+  .link-underline,
+  .control {
+    transition: none;
+  }
+}

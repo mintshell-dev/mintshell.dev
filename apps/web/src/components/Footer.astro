@@ -1,0 +1,59 @@
+---
+import { useTranslations, type Locale } from '@mintshell/shared';
+
+interface Props {
+  locale: Locale;
+}
+
+const { locale } = Astro.props;
+const t = useTranslations(locale);
+const ccBy =
+  locale === 'vi'
+    ? 'https://creativecommons.org/licenses/by/4.0/deed.vi'
+    : 'https://creativecommons.org/licenses/by/4.0/';
+const mit = 'https://gitlab.com/mintshell/mintshell.dev/-/blob/main/LICENSE';
+---
+
+<footer class="container footer">
+  <p>© 2026 mintshell</p>
+  <p>
+    {`${t('footer.license')}: `}
+    <a href={mit} rel="license noopener noreferrer">
+      MIT
+    </a>
+    {` (${t('footer.code')}) · `}
+    <a href={ccBy} rel="license noopener noreferrer">
+      CC BY 4.0
+    </a>
+    {` (${t('footer.content')})`}
+  </p>
+</footer>
+
+<style>
+  .footer {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: var(--space-2) var(--space-6);
+    margin-top: var(--space-16);
+    padding-block: var(--space-8);
+    border-top: var(--border-width-thin) solid var(--color-border);
+    color: var(--color-muted);
+    font-family: var(--font-mono);
+    font-size: var(--font-size-sm);
+  }
+
+  .footer p {
+    margin: 0;
+  }
+
+  /* Link nằm giữa chữ cùng màu nên luôn gạch chân (WCAG 1.4.1). */
+  .footer a {
+    color: var(--color-muted);
+    text-underline-offset: var(--space-1);
+  }
+
+  .footer a:hover {
+    color: var(--color-text);
+  }
+</style>
