@@ -41,6 +41,17 @@ describe('theme', () => {
       ).toBeGreaterThanOrEqual(NON_TEXT);
     });
 
+    // Biểu tượng thương hiệu (BrandMark) là thành phần đồ họa (WCAG 1.4.11): ≥ 3:1.
+    it.each([
+      ['accent', 'bg'],
+      ['text', 'bg'],
+      ['bg', 'text'],
+    ] as const)('đồ họa thương hiệu: color.%s trên color.%s ≥ 3:1', (fg, bg) => {
+      expect(contrastRatio(theme.color[fg].$value, theme.color[bg].$value)).toBeGreaterThanOrEqual(
+        NON_TEXT,
+      );
+    });
+
     it('color.onAccent trên color.accent ≥ 4.5:1', () => {
       expect(
         contrastRatio(theme.color.onAccent.$value, theme.color.accent.$value),

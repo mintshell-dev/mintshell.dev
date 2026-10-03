@@ -71,6 +71,9 @@ Quỹ thời gian: 5–10 giờ/tuần, mỗi mốc khoảng 1 tuần.
 - [x] Xóa `BaseLayout.astro.save` bị commit nhầm; `.gitignore` thêm mẫu file tạm của trình soạn thảo
 - [x] Đính chính dữ liệu cho trung thực: kinh nghiệm 6 năm (4 năm lập trình web, 2 năm bảo mật), TryHackMe 100k+ điểm, bỏ HackTheBox và Hall of Fame; danh sách ghi nhận được phép rỗng (rỗng thì ẩn phần "// ghi nhận")
 - [x] Sửa cache turbo: `apps/web/turbo.json` thêm `content/**` vào đầu vào của `build` (trước đó sửa YAML vẫn `cache hit`, build và `test:dist` chạy trên dữ liệu cũ)
+- [x] Bộ nhận diện: `favicon.svg`, `favicon-32.png`, `apple-touch-icon.png`, `theme-color` từ token; `test:dist` kiểm tra thẻ icon trên mọi trang và favicon SVG an toàn
+- [x] Bỏ metadata C2PA khỏi favicon (PNG 7036 → 1266 B và 11424 → 5654 B, SVG 8409 → 635 B, pixel không đổi); `test:dist` chặn chunk metadata PNG và `<metadata>` SVG; `brand/` là nguồn gốc bộ nhận diện
+- [x] `BrandMark.astro` (SVG nội tuyến, màu theo token, biến thể `mark`/`avatar`): header mọi trang và phần liên hệ portfolio; test tương phản đồ họa ≥ 3:1 và `test:dist` cho SVG nội tuyến
 - [ ] Chờ dữ liệu thật: số phòng TryHackMe, số write-up, số báo cáo bug bounty, chứng chỉ, URL GitHub/YouTube/HackerOne, link CV, fingerprint PGP, URL dự án video và cộng đồng
 - [ ] Duyệt bản tiếng Anh của `content/portfolio/en.yaml`
 

@@ -7,6 +7,8 @@ import {
   type Locale,
 } from '@mintshell/shared';
 
+import { tokens } from '@mintshell/tokens';
+
 import Footer from '../components/Footer.astro';
 import Header from '../components/Header.astro';
 import '../styles/global.css';
@@ -28,6 +30,8 @@ const absolute = (target: Locale) => new URL(localizePath(path, target), site).h
 const fullTitle = title ? `${title} — mintshell` : 'mintshell';
 const metaDescription = description ?? t('site.description');
 const ogLocale: Record<Locale, string> = { vi: 'vi_VN', en: 'en_US' };
+// Màu thanh trình duyệt: nền theme tối (theme mặc định), lấy từ token, không ghi cứng.
+const themeColor = tokens.theme.dark.color.bg;
 ---
 
 <!doctype html>
@@ -38,6 +42,10 @@ const ogLocale: Record<Locale, string> = { vi: 'vi_VN', en: 'en_US' };
     {/* File tĩnh trong public/, chặn render để đặt data-theme trước khi vẽ; is:inline chỉ để Astro không bundle, không phải script nội tuyến. */}
     <script is:inline src="/theme-init.js"></script>
     <title>{fullTitle}</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="icon" href="/favicon-32.png" sizes="32x32" type="image/png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="theme-color" content={themeColor} />
     <meta name="description" content={metaDescription} />
     {noindex ? (
       <meta name="robots" content="noindex" />
