@@ -69,12 +69,18 @@ Theme tối giữ màu tươi; theme sáng dùng tông đậm để chữ đạt
 
 ### Cỡ chữ
 
-| Token            | Giá trị    | Dùng cho               |
-| ---------------- | ---------- | ---------------------- |
-| `font.size.sm`   | `0.875rem` | menu, footer, nhãn nút |
-| `font.size.base` | `1rem`     | chữ thường             |
-| `font.size.lg`   | `1.25rem`  | handle `mintshell_`    |
-| `font.size.xl`   | `1.75rem`  | tiêu đề trang          |
+| Token            | Giá trị    | Dùng cho                                       |
+| ---------------- | ---------- | ---------------------------------------------- |
+| `font.size.sm`   | `0.875rem` | menu, footer, nhãn nút                         |
+| `font.size.base` | `1rem`     | chữ thường                                     |
+| `font.size.lg`   | `1.25rem`  | handle `mintshell_`                            |
+| `font.size.xl`   | `1.75rem`  | tiêu đề trang                                  |
+| `font.size.2xl`  | `2rem`     | số liệu, đoạn "cách làm việc", email (di động) |
+| `font.size.3xl`  | `2.75rem`  | tiêu đề hero/liên hệ (di động), email          |
+| `font.size.4xl`  | `3.5rem`   | tiêu đề hero                                   |
+| `font.size.5xl`  | `4.5rem`   | tiêu đề liên hệ "Nói chuyện nhé."              |
+
+Chiều cao dòng (`$type: number`): `font.lineHeight.tight` 1.1 (tiêu đề lớn), `snug` 1.35 (đoạn cỡ lớn), `normal` 1.6 (chữ thường).
 
 ## Spacing, kích thước và bo góc
 
@@ -82,6 +88,7 @@ Theme tối giữ màu tươi; theme sáng dùng tông đậm để chữ đạt
 - Kích thước: `size.control` = 44px (nút vuông, đủ vùng chạm), `size.content` = 64rem (độ rộng tối đa của nội dung).
 - Viền: `border.width.thin` = 1px (viền, gạch chân link), `border.width.focus` = 2px (vòng focus).
 - Bo góc: `radius.sm` = 4px, `radius.md` = 8px.
+- **Breakpoint** `48rem`: ngoại lệ có chủ đích, ghi thẳng trong `@media (min-width: 48rem)` vì CSS variable không dùng được trong media query. Dưới mức này là bố cục một cột (di động).
 
 ## Tương tác và truy cập
 
@@ -92,10 +99,20 @@ Theme tối giữ màu tươi; theme sáng dùng tông đậm để chữ đạt
 
 ## Chuyển động
 
-| Token                  | Giá trị | Dùng cho               |
-| ---------------------- | ------- | ---------------------- |
-| `motion.duration.fast` | 150ms   | hover, focus           |
-| `motion.duration.base` | 250ms   | mở/đóng thành phần nhỏ |
-| `motion.duration.slow` | 400ms   | chuyển cảnh lớn        |
+| Token                  | Giá trị                         | Dùng cho                       |
+| ---------------------- | ------------------------------- | ------------------------------ |
+| `motion.duration.fast` | 150ms                           | hover, focus                   |
+| `motion.duration.base` | 250ms                           | mở/đóng thành phần nhỏ         |
+| `motion.duration.slow` | 400ms                           | chuyển cảnh lớn                |
+| `motion.duration.type` | 1200ms                          | gõ một lệnh trong terminal giả |
+| `motion.easing.out`    | `cubic-bezier(0.16, 1, 0.3, 1)` | trượt lên, nhích khi hover     |
 
 Tôn trọng `prefers-reduced-motion: reduce`: `tokens.css` đưa mọi `--motion-duration-*` về `0ms`. Vì vậy chuyển động phải dùng các biến này, không ghi cứng thời lượng.
+
+### Hiệu ứng chỉ bằng CSS ([ADR 0008](adr/0008-portfolio-data-css-motion.md))
+
+- **Trạng thái gốc là trạng thái cuối.** Animation chỉ khai báo trong `@media (prefers-reduced-motion: no-preference)`, dùng `fill-mode: both`. Khi giảm chuyển động hoặc animation không chạy, nội dung vẫn hiện đủ (terminal hiện đủ chữ).
+- `.rise` + `.rise-2..5`: trượt lên so le khi tải trang, trễ theo bội số `motion.duration.fast`.
+- `.reveal`: hiện dần khi cuộn tới bằng `animation-timeline: view()`, bọc trong `@supports`; trình duyệt chưa hỗ trợ thì hiện bình thường.
+- Terminal giả: gõ chữ bằng `steps(var(--type-chars))` trên `max-width` theo `ch`, `--type-chars` khớp giới hạn độ dài lệnh trong schema; độ trễ từng dòng đặt trong class `.cmd-N`/`.out-N` của stylesheet, không dùng `style=`.
+- Hover chỉ dành cho phần tử bấm được: nút nhích lên `space.1`, mũi tên trượt; hàng dự án có link đổi nền `color.surface`, tên đổi `color.accent`, ↗ nhích lên chéo. Hàng không có link không có hover.

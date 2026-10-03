@@ -1,0 +1,203 @@
+---
+import type { Portfolio } from '../../schemas/portfolio';
+import Terminal from './Terminal.astro';
+
+interface Props {
+  hero: Portfolio['hero'];
+  terminal: Portfolio['terminal'];
+}
+
+const { hero, terminal } = Astro.props;
+const [line1, line2] = hero.title.lines;
+// Tách dòng hai quanh cụm accent (schema bảo đảm cụm này có trong dòng hai).
+const at = line2.indexOf(hero.title.accent);
+const before = line2.slice(0, at);
+const after = line2.slice(at + hero.title.accent.length);
+---
+
+<section class="hero">
+  <div class="intro">
+    <p class="status rise">
+      <span class="dot" aria-hidden="true"></span>
+      {hero.status}
+    </p>
+    <h1 class="title rise rise-2">
+      <span>{line1}</span>
+      <span>
+        {before}
+        <em class="accent">{hero.title.accent}</em>
+        {after}
+      </span>
+    </h1>
+    <p class="lead rise rise-3">{hero.intro}</p>
+    <p class="actions rise rise-4">
+      <a class="btn btn-primary" href="#lien-he">
+        {hero.ctaContact}
+        <span class="arrow" aria-hidden="true">
+          {' '}
+          →
+        </span>
+      </a>
+      {hero.cvUrl && (
+        <a class="btn btn-secondary" href={hero.cvUrl} rel="noopener noreferrer">
+          {hero.ctaCv}
+        </a>
+      )}
+    </p>
+  </div>
+  <Terminal terminal={terminal} />
+</section>
+
+<style>
+  .hero {
+    display: grid;
+    align-items: center;
+    gap: var(--space-12);
+    padding-block: var(--space-12) var(--space-16);
+  }
+
+  @media (min-width: 48rem) {
+    .hero {
+      grid-template-columns: minmax(0, 6fr) minmax(0, 5fr);
+      padding-block: var(--space-16);
+    }
+  }
+
+  .intro {
+    min-width: 0;
+  }
+
+  .status {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-3);
+    margin: 0;
+    color: var(--color-muted);
+    font-family: var(--font-mono);
+    font-size: var(--font-size-sm);
+  }
+
+  .dot {
+    position: relative;
+    flex: none;
+    width: var(--space-2);
+    height: var(--space-2);
+    border-radius: 50%;
+    background-color: var(--color-accent);
+  }
+
+  /* Vòng lan tỏa; đứng yên (trùng chấm) khi giảm chuyển động. */
+  .dot::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border: var(--border-width-thin) solid var(--color-accent);
+    border-radius: inherit;
+  }
+
+  .title {
+    margin-block: var(--space-6);
+    font-size: var(--font-size-3xl);
+    font-weight: var(--font-weight-semibold);
+    line-height: var(--font-line-height-tight);
+  }
+
+  @media (min-width: 48rem) {
+    .title {
+      font-size: var(--font-size-4xl);
+    }
+  }
+
+  .title span {
+    display: block;
+  }
+
+  .accent {
+    color: var(--color-accent);
+    font-style: normal;
+  }
+
+  .lead {
+    margin: 0;
+    color: var(--color-muted);
+    font-size: var(--font-size-lg);
+    line-height: var(--font-line-height-normal);
+  }
+
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+    margin-block: var(--space-8) 0;
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    box-sizing: border-box;
+    min-height: var(--size-control);
+    padding-inline: var(--space-5);
+    border: var(--border-width-thin) solid var(--color-border-strong);
+    border-radius: var(--radius-sm);
+    font-family: var(--font-mono);
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-medium);
+    text-decoration: none;
+    transition:
+      transform var(--motion-duration-fast) var(--motion-easing-out),
+      border-color var(--motion-duration-fast);
+  }
+
+  .btn-primary {
+    border-color: var(--color-accent);
+    background-color: var(--color-accent);
+    color: var(--color-on-accent);
+  }
+
+  .btn-secondary {
+    color: var(--color-text);
+  }
+
+  .btn-secondary:hover {
+    border-color: var(--color-accent);
+  }
+
+  .arrow {
+    display: inline-block;
+    white-space: pre;
+    transition: transform var(--motion-duration-fast) var(--motion-easing-out);
+  }
+
+  .btn:hover {
+    transform: translateY(calc(-1 * var(--space-1)));
+  }
+
+  .btn:hover .arrow {
+    transform: translateX(var(--space-1));
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .dot::after {
+      animation: ms-ping calc(var(--motion-duration-slow) * 5) var(--motion-easing-out) infinite;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .btn,
+    .arrow {
+      transition: none;
+    }
+
+    .btn:hover,
+    .btn:hover .arrow {
+      transform: none;
+    }
+  }
+
+  @keyframes ms-ping {
+    to {
+      opacity: 0;
+      transform: scale(3);
+    }
+  }
+</style>

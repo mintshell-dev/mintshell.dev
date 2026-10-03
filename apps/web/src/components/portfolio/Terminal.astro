@@ -1,0 +1,173 @@
+---
+import type { Portfolio } from '../../schemas/portfolio';
+
+interface Props {
+  terminal: Portfolio['terminal'];
+}
+
+const { terminal } = Astro.props;
+---
+
+{/* Trang trí: nội dung tương ứng đã có ở phần giới thiệu và kỹ năng, nên ẩn với trình đọc màn hình. */}
+<div class="terminal rise rise-5" aria-hidden="true">
+  <div class="bar">
+    <span class="dots">
+      <span></span>
+      <span></span>
+      <span></span>
+    </span>
+    <span class="name">{terminal.title}</span>
+  </div>
+  <div class="screen">
+    {terminal.lines.map((line, i) => (
+      <>
+        <p class="row">
+          <span class="ps">$</span> <span class={`cmd cmd-${i + 1}`}>{line.cmd}</span>
+        </p>
+        <p class={`row out out-${i + 1}`}>{line.out}</p>
+      </>
+    ))}
+    <p class="row prompt">
+      <span class="ps">$</span> <span class="caret"></span>
+    </p>
+  </div>
+</div>
+
+<style>
+  .terminal {
+    /*
+     * Gõ chữ bằng steps(): mỗi bước lộ 1ch. --type-chars khớp TERMINAL_CMD_MAX
+     * (schemas/portfolio.ts) nên tốc độ gõ đều cho mọi lệnh; lệnh ngắn gõ xong thì chờ.
+     */
+    --type-chars: 24;
+    --t-start: calc(var(--motion-duration-slow) * 2);
+    --t-type: var(--motion-duration-type);
+    --t-gap: var(--motion-duration-base);
+
+    min-width: 0;
+    border: var(--border-width-thin) solid var(--color-border);
+    border-radius: var(--radius-md);
+    background-color: var(--color-surface);
+    font-family: var(--font-mono);
+    font-size: var(--font-size-sm);
+    line-height: var(--font-line-height-normal);
+  }
+
+  .bar {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+    padding: var(--space-3) var(--space-4);
+    border-bottom: var(--border-width-thin) solid var(--color-border);
+    color: var(--color-muted);
+  }
+
+  .dots {
+    display: flex;
+    gap: var(--space-2);
+  }
+
+  .dots span {
+    width: var(--space-3);
+    height: var(--space-3);
+    box-sizing: border-box;
+    border: var(--border-width-thin) solid var(--color-border-strong);
+    border-radius: 50%;
+  }
+
+  .screen {
+    padding: var(--space-5) var(--space-4);
+  }
+
+  .row {
+    margin: 0;
+    white-space: nowrap;
+  }
+
+  .out {
+    margin-block-end: var(--space-3);
+    color: var(--color-muted);
+    white-space: normal;
+  }
+
+  .ps {
+    color: var(--color-accent);
+  }
+
+  .cmd {
+    display: inline-block;
+    max-width: calc(var(--type-chars) * 1ch);
+    overflow: hidden;
+    vertical-align: bottom;
+    white-space: nowrap;
+  }
+
+  .caret {
+    display: inline-block;
+    width: var(--space-2);
+    height: var(--font-size-base);
+    vertical-align: text-bottom;
+    background-color: var(--color-accent);
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .cmd {
+      animation: ms-type var(--t-type) steps(var(--type-chars), end) both;
+    }
+
+    .out,
+    .prompt {
+      animation: ms-show var(--motion-duration-fast) both;
+    }
+
+    .cmd-1 {
+      animation-delay: var(--t-start);
+    }
+
+    .out-1 {
+      animation-delay: calc(var(--t-start) + var(--t-type));
+    }
+
+    .cmd-2 {
+      animation-delay: calc(var(--t-start) + var(--t-type) + var(--t-gap));
+    }
+
+    .out-2 {
+      animation-delay: calc(var(--t-start) + var(--t-type) * 2 + var(--t-gap));
+    }
+
+    .cmd-3 {
+      animation-delay: calc(var(--t-start) + var(--t-type) * 2 + var(--t-gap) * 2);
+    }
+
+    .out-3 {
+      animation-delay: calc(var(--t-start) + var(--t-type) * 3 + var(--t-gap) * 2);
+    }
+
+    .prompt {
+      animation-delay: calc(var(--t-start) + var(--t-type) * 3 + var(--t-gap) * 3);
+    }
+
+    .caret {
+      animation: ms-blink calc(var(--motion-duration-slow) * 2) steps(1) infinite;
+    }
+  }
+
+  @keyframes ms-type {
+    from {
+      max-width: 0;
+    }
+  }
+
+  @keyframes ms-show {
+    from {
+      opacity: 0;
+    }
+  }
+
+  @keyframes ms-blink {
+    50% {
+      opacity: 0;
+    }
+  }
+</style>

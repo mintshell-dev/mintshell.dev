@@ -1,0 +1,97 @@
+# Dữ liệu trang /portfolio (tiếng Việt). Schema: apps/web/src/schemas/portfolio.ts.
+# Chỗ giữ chỗ dạng [..] chờ điền số liệu thật. Không đưa tên thật hay thông tin định danh.
+meta:
+  title: portfolio
+  description: Portfolio của mintshell — kiểm thử xâm nhập ứng dụng web, bug bounty và CTF.
+
+hero:
+  status: Đang nhận dự án kiểm thử và đào tạo
+  title:
+    lines: [Tôi phá web, để web bền hơn.]
+    accent: bền hơn
+  intro: >-
+    Tôi là mintshell, pentester ứng dụng web và từng là lập trình viên, nên tôi hiểu những chỗ
+    dev hay quên kiểm tra. Tôi tìm lỗ hổng trước kẻ xấu và cùng đội phát triển xử lý tận gốc
+    nguyên nhân.
+  ctaContact: Trao đổi công việc
+  ctaCv: Tải CV
+  # cvUrl: https://… (chỉ hiện nút "Tải CV" khi có link)
+
+terminal:
+  title: ~/mintshell
+  lines:
+    - cmd: whoami
+      out: mintshell · web pentester
+    - cmd: cat focus.txt
+      out: web app · bug bounty · CTF
+    - cmd: uptime
+      out: 6 năm, vẫn chưa reboot
+
+stats:
+  - label: Điểm TryHackMe
+    value: 100k+
+  - label: Phòng TryHackMe đã hoàn thành
+    value: '[Số phòng]'
+  - label: Write-up đã xuất bản
+    value: '[Số write-up]'
+  - label: Báo cáo bug bounty
+    value: '[Số báo cáo]'
+    highlight: true
+
+# Câu chuyện nghề nghiệp chỉ kể ở đây. Không thêm tuổi, ngành cũ, nơi làm việc.
+journey:
+  label: hành trình
+  body: >-
+    Tôi đến với lập trình muộn, sau nhiều năm làm việc trong một ngành chẳng liên quan gì tới
+    máy tính. Bốn năm viết web dạy tôi cách lập trình viên suy nghĩ. Hai năm gần đây, tôi dùng
+    chính hiểu biết đó để tìm những chỗ họ quên kiểm tra.
+
+approach:
+  label: cách tôi làm việc
+  body: >-
+    Tôi bắt đầu bằng việc hiểu ứng dụng như người dùng thật, rồi mới nghĩ như kẻ tấn công.
+    Mỗi phát hiện đều kèm bước tái hiện, mức độ ảnh hưởng và cách sửa cụ thể, để đội phát
+    triển hành động được ngay chứ không chỉ nhận một danh sách cảnh báo.
+
+skills:
+  label: kỹ năng
+  items:
+    - name: Ứng dụng web
+      description: >-
+        Lỗi xác thực và phân quyền, injection, SSRF, lỗi logic nghiệp vụ, kiểm thử API.
+    - name: Công cụ
+      description: Burp Suite, công cụ dòng lệnh và script tự viết khi công cụ có sẵn chưa đủ.
+    - name: Tự động hóa
+      description: Viết script để lặp lại bài kiểm thử và đưa kiểm tra bảo mật vào CI.
+
+projects:
+  label: việc đã làm
+  items:
+    - name: Dây chuyền video đa agent
+      description: Hệ thống nhiều agent AI phối hợp để nghiên cứu, viết kịch bản và dựng video trọn vẹn từ đầu tới cuối.
+    - name: mintshell.dev
+      description: >-
+        Chính website này, xây dựng theo tư duy DevSecOps: quét secret, hàng rào chuỗi cung
+        ứng và kiểm tra bản build tự động.
+      url: https://gitlab.com/mintshell/mintshell.dev
+    - name: Cộng đồng bảo mật tiếng Việt
+      description: Cộng đồng học bảo mật web bằng tiếng Việt, với write-up, cheatsheet và thảo luận.
+
+recognition:
+  label: ghi nhận
+  items:
+    - name: '[Chứng chỉ 1]'
+      year: '[Năm]'
+    - name: '[Chứng chỉ 2]'
+      year: '[Năm]'
+
+contact:
+  label: liên hệ
+  title: Nói chuyện nhé.
+  email: hi@mintshell.dev
+  # Thêm url (https) để hiện link; link không có url sẽ bị ẩn.
+  links:
+    - label: GitHub
+    - label: YouTube
+    - label: HackerOne
+  # pgp: 'XXXX XXXX XXXX XXXX XXXX XXXX XXXX XXXX XXXX XXXX'

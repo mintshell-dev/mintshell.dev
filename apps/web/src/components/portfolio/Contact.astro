@@ -1,0 +1,92 @@
+---
+import { useTranslations, type Locale } from '@mintshell/shared';
+
+import type { Portfolio } from '../../schemas/portfolio';
+
+interface Props {
+  locale: Locale;
+  contact: Portfolio['contact'];
+}
+
+const { locale, contact } = Astro.props;
+const t = useTranslations(locale);
+// Link chưa có url thì ẩn (chưa điền tài khoản thật).
+const links = contact.links.flatMap((link) => (link.url ? [{ ...link, url: link.url }] : []));
+---
+
+<p class="title">{contact.title}</p>
+<p class="email">
+  <a href={`mailto:${contact.email}`}>{contact.email}</a>
+</p>
+{links.length > 0 && (
+  <ul class="links">
+    {links.map((link) => (
+      <li>
+        <a class="link-underline" href={link.url} rel="me noopener noreferrer">
+          {link.label}
+        </a>
+      </li>
+    ))}
+  </ul>
+)}
+{contact.pgp && (
+  <p class="pgp">
+    {t('contact.pgp')} <code>{contact.pgp}</code>
+  </p>
+)}
+
+<style>
+  .title {
+    margin: 0;
+    font-size: var(--font-size-3xl);
+    font-weight: var(--font-weight-semibold);
+    line-height: var(--font-line-height-tight);
+  }
+
+  @media (min-width: 48rem) {
+    .title {
+      font-size: var(--font-size-5xl);
+    }
+  }
+
+  .email {
+    margin-block: var(--space-6) 0;
+    font-family: var(--font-mono);
+    font-size: var(--font-size-2xl);
+    overflow-wrap: anywhere;
+  }
+
+  @media (min-width: 48rem) {
+    .email {
+      font-size: var(--font-size-3xl);
+    }
+  }
+
+  .email a {
+    color: var(--color-accent);
+    text-underline-offset: var(--space-2);
+  }
+
+  .links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2) var(--space-6);
+    margin: var(--space-8) 0 0;
+    padding: 0;
+    list-style: none;
+    font-family: var(--font-mono);
+    font-size: var(--font-size-sm);
+  }
+
+  .links a {
+    color: var(--color-text);
+  }
+
+  .pgp {
+    margin-block: var(--space-6) 0;
+    color: var(--color-muted);
+    font-family: var(--font-mono);
+    font-size: var(--font-size-sm);
+    overflow-wrap: anywhere;
+  }
+</style>

@@ -8,3 +8,10 @@ dist/
 *.log
 .DS_Store
 .claude/settings.local.json
+
+# File tạm của trình soạn thảo
+*.save
+*.swp
+*.swo
+*~
+.*.un~

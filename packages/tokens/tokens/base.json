@@ -43,7 +43,17 @@
       "sm": { "$value": "0.875rem" },
       "base": { "$value": "1rem" },
       "lg": { "$value": "1.25rem" },
-      "xl": { "$value": "1.75rem" }
+      "xl": { "$value": "1.75rem" },
+      "2xl": { "$value": "2rem" },
+      "3xl": { "$value": "2.75rem" },
+      "4xl": { "$value": "3.5rem" },
+      "5xl": { "$value": "4.5rem" }
+    },
+    "lineHeight": {
+      "$type": "number",
+      "tight": { "$value": 1.1 },
+      "snug": { "$value": 1.35 },
+      "normal": { "$value": 1.6 }
     },
     "weight": {
       "$type": "fontWeight",
@@ -57,7 +67,12 @@
       "$type": "duration",
       "fast": { "$value": "150ms" },
       "base": { "$value": "250ms" },
-      "slow": { "$value": "400ms" }
+      "slow": { "$value": "400ms" },
+      "type": { "$value": "1200ms" }
+    },
+    "easing": {
+      "$type": "cubicBezier",
+      "out": { "$value": [0.16, 1, 0.3, 1] }
     }
   }
 }

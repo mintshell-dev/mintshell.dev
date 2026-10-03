@@ -59,6 +59,23 @@ export function formatValue(path: string[], type: string | undefined, value: unk
         return value.map((name: string) => (name.includes(' ') ? `"${name}"` : name)).join(', ');
       }
       throw invalid(path, value);
+    case 'number':
+      // Số không âm, hữu hạn (line-height…).
+      if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
+        return String(value);
+      }
+      throw invalid(path, value);
+    case 'cubicBezier':
+      // [x1, y1, x2, y2], x nằm trong [0, 1] theo đặc tả CSS.
+      if (
+        Array.isArray(value) &&
+        value.length === 4 &&
+        value.every((n) => typeof n === 'number' && Number.isFinite(n)) &&
+        [value[0], value[2]].every((x: number) => x >= 0 && x <= 1)
+      ) {
+        return `cubic-bezier(${value.join(', ')})`;
+      }
+      throw invalid(path, value);
     default:
       throw new Error(`Token ${path.join('.')} có $type không được hỗ trợ: ${String(type)}`);
   }

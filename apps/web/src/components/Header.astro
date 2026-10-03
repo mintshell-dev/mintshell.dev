@@ -41,24 +41,40 @@ const isActive = (base: string) => current === base || current.startsWith(`${bas
         </li>
       ))}
     </ul>
-    <div class="controls">
-      <LangSwitch locale={locale} path={path} />
-      <ThemeToggle locale={locale} />
-    </div>
   </nav>
+  <div class="controls">
+    <LangSwitch locale={locale} path={path} />
+    <ThemeToggle locale={locale} />
+  </div>
 </header>
 
 <style>
+  /*
+   * Di động: handle và hai nút cùng hàng đầu, menu xuống hàng hai.
+   * Từ 48rem: một hàng handle | menu | nút. Thứ tự DOM (Tab) luôn là handle → menu → nút.
+   * Breakpoint ghi trực tiếp vì CSS variable không dùng được trong @media.
+   */
   .header {
-    display: flex;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-areas:
+      'handle controls'
+      'nav nav';
+    grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;
-    justify-content: space-between;
-    gap: var(--space-4);
+    gap: var(--space-4) var(--space-6);
     padding-block: var(--space-6);
   }
 
+  @media (min-width: 48rem) {
+    .header {
+      grid-template-areas: 'handle nav controls';
+      grid-template-columns: minmax(0, 1fr) auto auto;
+    }
+  }
+
   .handle {
+    grid-area: handle;
+    justify-self: start;
     color: var(--color-text);
     font-family: var(--font-mono);
     font-size: var(--font-size-lg);
@@ -71,10 +87,7 @@ const isActive = (base: string) => current === base || current.startsWith(`${bas
   }
 
   .nav {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: var(--space-4) var(--space-6);
+    grid-area: nav;
   }
 
   .links {
@@ -98,6 +111,7 @@ const isActive = (base: string) => current === base || current.startsWith(`${bas
   }
 
   .controls {
+    grid-area: controls;
     display: flex;
     gap: var(--space-2);
   }

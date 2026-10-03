@@ -59,6 +59,13 @@ describe('kiểm tra giá trị theo allowlist', () => {
     ['fontFamily', ['x; @import url(https://evil.example/x.css)']],
     ['fontFamily', []],
     ['fontFamily', 'Be Vietnam Pro'],
+    ['number', '1.5'],
+    ['number', -1],
+    ['number', Number.POSITIVE_INFINITY],
+    ['cubicBezier', [0.1, 0.2, 0.3]],
+    ['cubicBezier', [1.5, 0, 0.5, 1]],
+    ['cubicBezier', [0, 0, 0.5, '1); } body { color: red']],
+    ['cubicBezier', 'ease-out'],
   ])('%s từ chối %j', (type, value) => {
     expect(() => flatten(tree(type, value))).toThrow(/không hợp lệ/);
   });
@@ -77,6 +84,10 @@ describe('kiểm tra giá trị theo allowlist', () => {
   it('chấp nhận giá trị hợp lệ', () => {
     expect(flatten(tree('dimension', '1.5rem'))[0]?.value).toBe('1.5rem');
     expect(flatten(tree('fontWeight', 600))[0]?.value).toBe('600');
+    expect(flatten(tree('number', 1.35))[0]?.value).toBe('1.35');
+    expect(flatten(tree('cubicBezier', [0.16, 1, 0.3, 1]))[0]?.value).toBe(
+      'cubic-bezier(0.16, 1, 0.3, 1)',
+    );
   });
 });
 
@@ -117,7 +128,7 @@ describe('generateCss', () => {
   it('prefers-reduced-motion đưa mọi thời lượng về 0', () => {
     const reduced = css.slice(css.indexOf('@media (prefers-reduced-motion: reduce)'));
     const durations = flatten(sources.base).filter((t) => t.type === 'duration');
-    expect(durations).toHaveLength(3);
+    expect(durations).toHaveLength(4);
     for (const t of durations) {
       expect(reduced).toContain(`${cssVarName(t.path)}: 0ms;`);
     }
