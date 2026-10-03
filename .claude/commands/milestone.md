@@ -1,4 +1,5 @@
 Thực hiện mốc $ARGUMENTS theo docs/requirements.md và docs/progress.md.
+
 1. Đọc CLAUDE.md và các tài liệu liên quan trong docs/.
 2. Lập kế hoạch: việc cần làm, việc CHƯA làm, từng dependency mới kèm lý do.
    Chờ tôi duyệt trước khi sửa code.

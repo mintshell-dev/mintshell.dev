@@ -1,0 +1,26 @@
+/*
+ * Font tự host qua @fontsource (ADR 0002, ADR 0006). File theo weight có unicode-range,
+ * trình duyệt chỉ tải subset chứa ký tự cần hiển thị (thực tế: latin + vietnamese).
+ * Không import file theo subset (latin-400.css…) vì chúng thiếu unicode-range.
+ */
+@import '@fontsource/be-vietnam-pro/400.css';
+@import '@fontsource/be-vietnam-pro/500.css';
+@import '@fontsource/be-vietnam-pro/600.css';
+@import '@fontsource/jetbrains-mono/400.css';
+@import '@fontsource/jetbrains-mono/500.css';
+@import '@mintshell/tokens/tokens.css';
+
+body {
+  margin: 0;
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-weight: var(--font-weight-regular);
+}
+
+code,
+kbd,
+pre,
+samp {
+  font-family: var(--font-mono);
+}

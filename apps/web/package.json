@@ -7,6 +7,11 @@
     "build": "ASTRO_TELEMETRY_DISABLED=1 astro build",
     "typecheck": "ASTRO_TELEMETRY_DISABLED=1 astro check"
   },
+  "dependencies": {
+    "@fontsource/be-vietnam-pro": "catalog:",
+    "@fontsource/jetbrains-mono": "catalog:",
+    "@mintshell/tokens": "workspace:*"
+  },
   "devDependencies": {
     "@astrojs/check": "catalog:",
     "astro": "catalog:",
