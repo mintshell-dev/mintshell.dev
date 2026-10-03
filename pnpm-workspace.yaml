@@ -20,6 +20,9 @@ allowBuilds:
 catalog:
   '@astrojs/check': 0.9.10
   '@eslint/js': 10.0.1
+  '@fontsource/be-vietnam-pro': 5.3.0
+  '@fontsource/jetbrains-mono': 5.3.0
+  '@types/node': 24.19.1
   astro: 7.3.5
   eslint: 10.11.0
   eslint-plugin-astro: 3.2.1

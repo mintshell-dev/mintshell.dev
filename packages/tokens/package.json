@@ -3,12 +3,15 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./dist/tokens.ts",
+    "./tokens.css": "./dist/tokens.css"
   },
   "scripts": {
+    "build": "node src/build.ts",
     "typecheck": "tsc"
   },
   "devDependencies": {
+    "@types/node": "catalog:",
     "typescript": "catalog:"
   }
 }

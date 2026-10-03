@@ -1,0 +1,21 @@
+{
+  "color": {
+    "$type": "color",
+    "bg": { "$value": "#0B0F14" },
+    "surface": { "$value": "#121821" },
+    "border": { "$value": "#1F2A37" },
+    "text": { "$value": "#E6EDF3" },
+    "muted": { "$value": "#8B98A5" },
+    "accent": { "$value": "#3DDC97" },
+    "onAccent": { "$value": "#0B0F14" },
+    "highlight": { "$value": "#F5B841" }
+  },
+  "severity": {
+    "$type": "color",
+    "critical": { "$value": "#E5484D" },
+    "high": { "$value": "#F76B15" },
+    "medium": { "$value": "#F5B841" },
+    "low": { "$value": "#3B82F6" },
+    "info": { "$value": "#8B98A5" }
+  }
+}
