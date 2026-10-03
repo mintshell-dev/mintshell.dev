@@ -25,8 +25,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   nano \
   vim \
   pre-commit \
+  locales \
   && apt-get clean && rm -rf /var/lib/apt/lists/*
 
+RUN sed -i '/en_US.UTF-8/s/^# //' /etc/locale.gen && locale-gen
+ENV LANG=en_US.UTF-8
 RUN mkdir -p /usr/local/share/npm-global && \
   chown -R node:node /usr/local/share
 
