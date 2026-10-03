@@ -42,6 +42,6 @@ Chính sách cài gói (pnpm 12, trong `pnpm-workspace.yaml`):
 
 - Có 11 devDependency trực tiếp. Khi nâng cấp, sửa một chỗ duy nhất là `catalog`.
 - Nâng cấp lên bản vừa phát hành phải chờ đủ 1 ngày, hoặc thêm `minimumReleaseAgeExclude` có ghi lý do.
+- Chỉ dùng cho bản vá bảo mật khẩn cấp, ghi rõ lý do và gỡ khỏi danh sách loại trừ sau khi bản đó đủ 1 ngày tuổi.
 - Gói mới có install script sẽ bị chặn cho tới khi được xem xét và thêm vào `allowBuilds` kèm lý do.
 - Khi `typescript-eslint` và `@astrojs/check` hỗ trợ TS 7, cân nhắc nâng cấp.
-- Chỉ dùng cho bản vá bảo mật khẩn cấp, ghi rõ lý do và gỡ khỏi danh sách loại trừ sau khi bản đó đủ 1 ngày tuổi.
