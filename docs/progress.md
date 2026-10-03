@@ -13,7 +13,7 @@ Quỹ thời gian: 5–10 giờ/tuần, mỗi mốc khoảng 1 tuần.
 | M0  | Khung monorepo                                            | Xong       |
 | M1  | Design token                                              | Xong       |
 | M2a | Layout chung, menu, chuyển theme và ngôn ngữ              | Xong       |
-| M2b | Portfolio và hiệu ứng                                     | Chưa làm   |
+| M2b | Portfolio và hiệu ứng                                     | Xong       |
 | M3  | Nội dung, Pagefind, RSS                                   | Chưa làm   |
 | M4  | Đồng bộ Notion                                            | Chưa làm   |
 | M5  | CI/CD, security headers, security.txt                     | Chưa làm   |
@@ -56,6 +56,23 @@ Quỹ thời gian: 5–10 giờ/tuần, mỗi mốc khoảng 1 tuần.
 - [x] Không thêm dependency bên ngoài (chỉ liên kết nội bộ `@mintshell/shared`)
 - [x] Sửa sau kiểm tra thủ công: dev server nghe `127.0.0.1`, khoảng trắng trong footer, bỏ `tabindex` trên `<main>`, dịch "mã nguồn"
 - [x] Bộ kiểm tra bản build `pnpm test:dist` (turbo chạy `build` trước, Vitest config riêng `apps/web/vitest.dist.config.ts`, file `test-dist/*.check.ts`): không script/style/`style=` nội tuyến, không `data:` URI, CSS chỉ tham chiếu tài nguyên cùng origin, canonical/hreflang tuyệt đối không đuôi `.html`, footer đúng khoảng trắng, skip link, 404 song ngữ
+
+## M2b — Portfolio và hiệu ứng
+
+- [x] `/portfolio`, `/en/portfolio` bố cục kiểu tạp chí: hero hai cột + terminal giả, dải số liệu, cách làm việc, kỹ năng, việc đã làm, ghi nhận, liên hệ (`id="lien-he"`)
+- [x] Dữ liệu trong `content/portfolio/{vi,en}.yaml`, content collection + schema Zod; sai schema thì build lỗi; URL chỉ `https://`; có unit test schema ([ADR 0008](adr/0008-portfolio-data-css-motion.md))
+- [x] Phần "// hành trình" (sau dải số liệu, trước "cách tôi làm việc"): câu chuyện nghề nghiệp chỉ kể ở đây, hero intro chỉ giữ vai trò và giá trị; không có chi tiết định danh (tuổi, ngành cũ, nơi làm việc)
+- [x] Nút "Tải CV", link mạng xã hội, dòng PGP chỉ hiện khi có dữ liệu; hàng dự án chỉ là link (có hover, ↗) khi có URL
+- [x] Hiệu ứng chỉ CSS: hero trượt lên so le, terminal gõ chữ bằng `steps()`, hiện dần khi cuộn (`animation-timeline: view()` trong `@supports`), hover nút/hàng dự án; `prefers-reduced-motion` hiện ngay trạng thái cuối
+- [x] Không `style=`, không JS cho hiệu ứng; terminal giả `aria-hidden`
+- [x] Token mới: `font.size.2xl–5xl`, `font.lineHeight.*` (`$type: number`), `motion.easing.out` (`$type: cubicBezier`), `motion.duration.type`; generator kiểm tra allowlist cho hai `$type` mới
+- [x] Header di động: handle và hai nút cùng hàng, menu xuống hàng hai
+- [x] `test:dist` cho portfolio: email, `id="lien-he"`, không `style=`, chỉ 2 script, terminal ẩn, link ngoài https, hàng tĩnh không phải link, vi/en cùng số hàng
+- [x] Xóa `BaseLayout.astro.save` bị commit nhầm; `.gitignore` thêm mẫu file tạm của trình soạn thảo
+- [x] Đính chính dữ liệu cho trung thực: kinh nghiệm 6 năm (4 năm lập trình web, 2 năm bảo mật), TryHackMe 100k+ điểm, bỏ HackTheBox và Hall of Fame; danh sách ghi nhận được phép rỗng (rỗng thì ẩn phần "// ghi nhận")
+- [x] Sửa cache turbo: `apps/web/turbo.json` thêm `content/**` vào đầu vào của `build` (trước đó sửa YAML vẫn `cache hit`, build và `test:dist` chạy trên dữ liệu cũ)
+- [ ] Chờ dữ liệu thật: số phòng TryHackMe, số write-up, số báo cáo bug bounty, chứng chỉ, URL GitHub/YouTube/HackerOne, link CV, fingerprint PGP, URL dự án video và cộng đồng
+- [ ] Duyệt bản tiếng Anh của `content/portfolio/en.yaml`
 
 ## M5 — CI/CD, security headers, security.txt
 

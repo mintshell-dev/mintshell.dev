@@ -1,0 +1,51 @@
+---
+interface Props {
+  /** id của section, cũng là đích neo (ví dụ `lien-he`). */
+  id: string;
+  label: string;
+}
+
+const { id, label } = Astro.props;
+---
+
+<section class="section reveal" id={id} aria-labelledby={`${id}-title`}>
+  <h2 class="label" id={`${id}-title`}>
+    <span aria-hidden="true">// </span>
+    {label}
+  </h2>
+  <div class="body">
+    <slot />
+  </div>
+</section>
+
+<style>
+  .section {
+    display: grid;
+    gap: var(--space-6);
+    padding-block: var(--space-16);
+    border-top: var(--border-width-thin) solid var(--color-border);
+  }
+
+  @media (min-width: 48rem) {
+    .section {
+      grid-template-columns: minmax(0, 1fr) minmax(0, 3fr);
+      gap: var(--space-12);
+    }
+  }
+
+  .label {
+    margin: 0;
+    color: var(--color-muted);
+    font-family: var(--font-mono);
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-regular);
+  }
+
+  .label span {
+    color: var(--color-accent);
+  }
+
+  .body {
+    min-width: 0;
+  }
+</style>

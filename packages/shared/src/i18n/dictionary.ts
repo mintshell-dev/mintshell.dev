@@ -23,6 +23,8 @@ const vi = {
   'notFound.title': 'Không tìm thấy trang',
   'notFound.body': 'Trang bạn tìm không tồn tại hoặc đã bị chuyển đi.',
   'notFound.home': 'Về trang chủ',
+  'a11y.externalLink': '(liên kết ngoài)',
+  'contact.pgp': 'PGP',
 } as const;
 
 export type UiKey = keyof typeof vi;
@@ -49,6 +51,8 @@ const en: Record<UiKey, string> = {
   'notFound.title': 'Page not found',
   'notFound.body': 'The page you are looking for does not exist or has moved.',
   'notFound.home': 'Back to home',
+  'a11y.externalLink': '(external link)',
+  'contact.pgp': 'PGP',
 };
 
 export const ui: Record<Locale, Record<UiKey, string>> = { vi, en };

@@ -1,0 +1,133 @@
+---
+import { useTranslations, type Locale } from '@mintshell/shared';
+
+import type { Portfolio } from '../../schemas/portfolio';
+
+interface Props {
+  locale: Locale;
+  items: Portfolio['projects']['items'];
+}
+
+const { locale, items } = Astro.props;
+const t = useTranslations(locale);
+// Chỉ hàng có url mới là link và có hover, focus, mũi tên ↗; hàng tĩnh không có hiệu ứng nào.
+---
+
+<ul class="projects">
+  {items.map((item) => (
+    <li>
+      {item.url ? (
+        <a class="project project-link" href={item.url} rel="noopener noreferrer">
+          <span class="name">{item.name}</span>
+          <span class="desc">{item.description}</span>
+          <span class="arrow" aria-hidden="true">
+            ↗
+          </span>
+          <span class="sr-only">{t('a11y.externalLink')}</span>
+        </a>
+      ) : (
+        <div class="project">
+          <span class="name">{item.name}</span>
+          <span class="desc">{item.description}</span>
+        </div>
+      )}
+    </li>
+  ))}
+</ul>
+
+<style>
+  .projects {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  li + li {
+    border-top: var(--border-width-thin) solid var(--color-border);
+  }
+
+  /* Di động: tên | ↗ trên một hàng, mô tả bên dưới. Từ 48rem: tên | mô tả | ↗. */
+  .project {
+    display: grid;
+    grid-template-areas:
+      'name arrow'
+      'desc desc';
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: var(--space-2) var(--space-8);
+    padding: var(--space-6) var(--space-4);
+    border-radius: var(--radius-sm);
+    color: var(--color-text);
+    text-decoration: none;
+  }
+
+  @media (min-width: 48rem) {
+    .project {
+      grid-template-areas: 'name desc arrow';
+      grid-template-columns: minmax(0, 2fr) minmax(0, 3fr) auto;
+      align-items: baseline;
+    }
+  }
+
+  .name {
+    grid-area: name;
+    font-size: var(--font-size-lg);
+    font-weight: var(--font-weight-medium);
+  }
+
+  .desc {
+    grid-area: desc;
+    color: var(--color-muted);
+    line-height: var(--font-line-height-normal);
+  }
+
+  .arrow {
+    grid-area: arrow;
+    color: var(--color-muted);
+    font-family: var(--font-mono);
+  }
+
+  .project-link {
+    transition: background-color var(--motion-duration-fast);
+  }
+
+  .project-link .name,
+  .project-link .arrow {
+    transition:
+      color var(--motion-duration-fast),
+      transform var(--motion-duration-fast) var(--motion-easing-out);
+  }
+
+  .project-link:hover,
+  .project-link:focus-visible {
+    background-color: var(--color-surface);
+  }
+
+  .project-link:hover .name,
+  .project-link:focus-visible .name,
+  .project-link:hover .arrow,
+  .project-link:focus-visible .arrow {
+    color: var(--color-accent);
+  }
+
+  .project-link:hover .arrow,
+  .project-link:focus-visible .arrow {
+    transform: translate(var(--space-1), calc(-1 * var(--space-1)));
+  }
+
+  .arrow {
+    display: inline-block;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .project-link,
+    .project-link .name,
+    .project-link .arrow {
+      transition: none;
+    }
+
+    .project-link:hover .arrow,
+    .project-link:focus-visible .arrow {
+      transform: none;
+    }
+  }
+</style>

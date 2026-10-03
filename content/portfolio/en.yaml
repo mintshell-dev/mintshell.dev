@@ -1,0 +1,98 @@
+# Data for /en/portfolio (English). Schema: apps/web/src/schemas/portfolio.ts.
+# [..] placeholders await real figures. Never add a real name or identifying details.
+meta:
+  title: portfolio
+  description: mintshell's portfolio — web application penetration testing, bug bounty and CTF.
+
+hero:
+  status: Available for testing and training engagements
+  title:
+    lines: [I break the web, to make it stronger.]
+    accent: stronger
+  intro: >-
+    I'm mintshell, a web application pentester and former developer, so I know the places
+    developers tend to forget to check. I find vulnerabilities before the bad guys do and work
+    with developers to fix the root cause.
+  ctaContact: Let's work together
+  ctaCv: Download CV
+  # cvUrl: https://… (the "Download CV" button only shows when a link is set)
+
+terminal:
+  title: ~/mintshell
+  lines:
+    - cmd: whoami
+      out: mintshell · web pentester
+    - cmd: cat focus.txt
+      out: web app · bug bounty · CTF
+    - cmd: uptime
+      out: 6 years, still no reboot
+
+stats:
+  - label: TryHackMe points
+    value: 100k+
+  - label: TryHackMe rooms completed
+    value: '[Rooms]'
+  - label: Write-ups published
+    value: '[Write-ups]'
+  - label: Bug bounty reports
+    value: '[Reports]'
+    highlight: true
+
+# The career story is told only here. No age, former field or employers.
+journey:
+  label: journey
+  body: >-
+    I came to programming late, after years in a field that had nothing to do with computers.
+    Four years of building for the web taught me how developers think. For the past two years,
+    I've used that same understanding to find what they forget to check.
+
+approach:
+  label: how I work
+  body: >-
+    I start by understanding the application the way a real user does, and only then think
+    like an attacker. Every finding comes with reproduction steps, impact and a concrete fix,
+    so developers can act on it right away instead of a list of warnings.
+
+skills:
+  label: skills
+  items:
+    - name: Web applications
+      description: >-
+        Authentication and authorization flaws, injection, SSRF, business logic bugs, API
+        testing.
+    - name: Tooling
+      description: Burp Suite, command-line tools, and my own scripts when off-the-shelf tools fall short.
+    - name: Automation
+      description: Scripts that make tests repeatable and bring security checks into CI.
+
+projects:
+  label: selected work
+  items:
+    - name: Multi-agent video pipeline
+      description: A system of cooperating AI agents that researches, scripts and produces videos end to end.
+    - name: mintshell.dev
+      description: >-
+        This very website, built with a DevSecOps mindset: secret scanning, supply-chain
+        safeguards and automated build checks.
+      url: https://gitlab.com/mintshell/mintshell.dev
+    - name: Vietnamese security community
+      description: A Vietnamese-language community for learning web security, with write-ups, cheatsheets and discussion.
+
+recognition:
+  label: recognition
+  items:
+    - name: '[Certification 1]'
+      year: '[Year]'
+    - name: '[Certification 2]'
+      year: '[Year]'
+
+contact:
+  label: contact
+  title: Let's talk.
+  email: hi@mintshell.dev
+  # Add an https url to show a link; links without a url are hidden.
+  links:
+    - label: GitHub
+    - label: YouTube
+    - label: HackerOne
+  # pgp: 'XXXX XXXX XXXX XXXX XXXX XXXX XXXX XXXX XXXX XXXX'

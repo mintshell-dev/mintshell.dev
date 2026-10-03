@@ -54,10 +54,18 @@ Quy tắc slug:
 - Giai đoạn 1: chỉ apex và `www`.
 - Dự kiến giai đoạn 2: có thể thêm subdomain riêng cho bình luận/API — sẽ quyết bằng ADR khi tới.
 
+## Dữ liệu trang portfolio
+
+- `content/portfolio/vi.yaml` và `en.yaml`, nạp bằng content collection `portfolio` (`apps/web/src/content.config.ts`, `glob` loader), id entry = locale.
+- Schema Zod (`astro/zod`) ở `apps/web/src/schemas/portfolio.ts`, không đặt trong `packages/shared` để `shared` không phải thêm dependency zod. Sai schema hoặc thiếu file thì build lỗi.
+- Mọi URL trong dữ liệu phải là `https://` (`cvUrl` được phép thêm path nội bộ `/…`). Link chưa có URL thì không hiển thị.
+- Xem [ADR 0008](adr/0008-portfolio-data-css-motion.md).
+
 ## Môi trường dev
 
 - Mọi lệnh chạy trong Dev Container.
 - `astro dev` nghe `127.0.0.1` (`server.host` trong `apps/web/astro.config.ts`): mặc định Astro chỉ nghe `[::1]` (IPv6), còn kênh chuyển tiếp cổng của VS Code kết nối qua IPv4. Chỉ nghe loopback, nên dev server không mở ra mạng ngoài.
+- `apps/web/turbo.json` khai báo `content/**` là đầu vào của task `build`: `content/` nằm ngoài gói `web`, nếu thiếu khai báo thì turbo dùng lại cache cũ khi chỉ sửa nội dung.
 - Kiểm tra bản build: `pnpm test:dist` (turbo chạy `build` trước) đọc `apps/web/dist` để bắt script/style nội tuyến, `data:` URI, tài nguyên ngoài origin, canonical/hreflang sai.
 
 ## Cấu trúc monorepo
@@ -70,7 +78,7 @@ Quy tắc slug:
 │   ├── tokens/       # design token (W3C) → CSS variables qua Style Dictionary
 │   ├── ui/           # component dùng chung, chỉ dùng token
 │   └── shared/       # kiểu, schema frontmatter, tiện ích, i18n (ngôn ngữ, path, từ điển)
-├── content/          # nội dung MDX (CC BY 4.0)
+├── content/          # nội dung MDX, dữ liệu trang (portfolio/*.yaml) (CC BY 4.0)
 ├── scripts/          # script tiện ích (vd. đồng bộ Notion)
 ├── infra/            # cấu hình hạ tầng (headers, redirects, security.txt…)
 └── docs/             # tài liệu, ADR, tiến độ

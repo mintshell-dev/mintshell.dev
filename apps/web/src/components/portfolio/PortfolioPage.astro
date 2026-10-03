@@ -1,0 +1,62 @@
+---
+import type { Locale } from '@mintshell/shared';
+import { getEntry } from 'astro:content';
+
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Contact from './Contact.astro';
+import Hero from './Hero.astro';
+import ProjectList from './ProjectList.astro';
+import Recognition from './Recognition.astro';
+import Section from './Section.astro';
+import SkillList from './SkillList.astro';
+import Stats from './Stats.astro';
+
+interface Props {
+  locale: Locale;
+}
+
+const { locale } = Astro.props;
+// Nội dung nằm trong content/portfolio/<locale>.yaml; sai schema hay thiếu file thì build lỗi.
+const entry = await getEntry('portfolio', locale);
+if (!entry) throw new Error(`Thiếu content/portfolio/${locale}.yaml`);
+const data = entry.data;
+---
+
+<BaseLayout title={data.meta.title} description={data.meta.description}>
+  <Hero hero={data.hero} terminal={data.terminal} />
+  <Stats stats={data.stats} />
+  <Section id="hanh-trinh" label={data.journey.label}>
+    <p class="prose">{data.journey.body}</p>
+  </Section>
+  <Section id="cach-lam-viec" label={data.approach.label}>
+    <p class="prose">{data.approach.body}</p>
+  </Section>
+  <Section id="ky-nang" label={data.skills.label}>
+    <SkillList items={data.skills.items} />
+  </Section>
+  <Section id="viec-da-lam" label={data.projects.label}>
+    <ProjectList locale={locale} items={data.projects.items} />
+  </Section>
+  {data.recognition.items.length > 0 && (
+    <Section id="ghi-nhan" label={data.recognition.label}>
+      <Recognition items={data.recognition.items} />
+    </Section>
+  )}
+  <Section id="lien-he" label={data.contact.label}>
+    <Contact locale={locale} contact={data.contact} />
+  </Section>
+</BaseLayout>
+
+<style>
+  .prose {
+    margin: 0;
+    font-size: var(--font-size-xl);
+    line-height: var(--font-line-height-snug);
+  }
+
+  @media (min-width: 48rem) {
+    .prose {
+      font-size: var(--font-size-2xl);
+    }
+  }
+</style>

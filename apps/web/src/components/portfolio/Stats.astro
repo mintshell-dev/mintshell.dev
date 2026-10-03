@@ -1,0 +1,81 @@
+---
+import type { Portfolio } from '../../schemas/portfolio';
+
+interface Props {
+  stats: Portfolio['stats'];
+}
+
+const { stats } = Astro.props;
+---
+
+<dl class="stats reveal">
+  {stats.map((stat) => (
+    <div class:list={['stat', { highlight: stat.highlight }]}>
+      <dt>{stat.label}</dt>
+      <dd>{stat.value}</dd>
+    </div>
+  ))}
+</dl>
+
+<style>
+  /* Dải ngang chia bằng đường kẻ dọc, không đóng hộp. Di động: 2 cột. */
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    row-gap: var(--space-8);
+    margin: 0;
+    padding-block: var(--space-8) var(--space-12);
+  }
+
+  @media (min-width: 48rem) {
+    .stats {
+      grid-auto-columns: minmax(0, 1fr);
+      grid-auto-flow: column;
+      grid-template-columns: none;
+    }
+  }
+
+  .stat {
+    display: flex;
+    flex-direction: column-reverse;
+    justify-content: flex-end;
+    gap: var(--space-2);
+    padding-inline: var(--space-6);
+    border-inline-start: var(--border-width-thin) solid var(--color-border);
+  }
+
+  .stat:nth-child(odd) {
+    padding-inline-start: 0;
+    border-inline-start: none;
+  }
+
+  @media (min-width: 48rem) {
+    .stat:nth-child(odd) {
+      padding-inline-start: var(--space-6);
+      border-inline-start: var(--border-width-thin) solid var(--color-border);
+    }
+
+    .stat:first-child {
+      padding-inline-start: 0;
+      border-inline-start: none;
+    }
+  }
+
+  dt {
+    color: var(--color-muted);
+    font-family: var(--font-mono);
+    font-size: var(--font-size-sm);
+  }
+
+  dd {
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: var(--font-size-2xl);
+    font-weight: var(--font-weight-medium);
+    line-height: var(--font-line-height-tight);
+  }
+
+  .highlight dd {
+    color: var(--color-highlight);
+  }
+</style>
