@@ -14,7 +14,13 @@ export default tseslint.config(
     files: ['apps/web/public/**/*.js'],
     languageOptions: {
       sourceType: 'script',
-      globals: { document: 'readonly', localStorage: 'readonly', matchMedia: 'readonly' },
+      globals: {
+        document: 'readonly',
+        localStorage: 'readonly',
+        matchMedia: 'readonly',
+        navigator: 'readonly',
+        window: 'readonly',
+      },
     },
   },
 );

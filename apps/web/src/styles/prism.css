@@ -1,0 +1,111 @@
+/*
+ * Tô màu cú pháp cho khối code do Prism sinh (markdown.syntaxHighlight: 'prism').
+ * Prism chỉ gắn class .token.* (KHÔNG style= nội tuyến như Shiki), nên ánh xạ ở đây
+ * chỉ tham chiếu biến token màu của dự án (packages/tokens), không ghi cứng màu.
+ * Màu cú pháp đã kiểm tương phản ≥ 4.5:1 trên --color-surface ở cả hai theme.
+ */
+
+pre[class*='language-'],
+code[class*='language-'] {
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  line-height: var(--font-line-height-normal);
+  tab-size: 2;
+}
+
+pre[class*='language-'] {
+  margin: 0;
+  padding: var(--space-4);
+  overflow-x: auto;
+  background-color: var(--color-surface);
+  border: var(--border-width-thin) solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+/* Code nội dòng (không phải khối) giữ nền surface nhẹ. */
+:not(pre) > code[class*='language-'] {
+  padding: 0.1em 0.3em;
+  border-radius: var(--radius-sm);
+  background-color: var(--color-surface);
+}
+
+.token.comment,
+.token.prolog,
+.token.doctype,
+.token.cdata {
+  color: var(--color-syntax-comment);
+  font-style: italic;
+}
+
+.token.punctuation {
+  color: var(--color-syntax-punctuation);
+}
+
+.token.keyword,
+.token.atrule,
+.token.rule,
+.token.important {
+  color: var(--color-syntax-keyword);
+}
+
+.token.string,
+.token.char,
+.token.attr-value,
+.token.inserted {
+  color: var(--color-syntax-string);
+}
+
+.token.number,
+.token.boolean,
+.token.constant,
+.token.symbol {
+  color: var(--color-syntax-number);
+}
+
+.token.function,
+.token.class-name {
+  color: var(--color-syntax-function);
+}
+
+.token.operator,
+.token.entity,
+.token.url {
+  color: var(--color-syntax-operator);
+}
+
+.token.variable,
+.token.tag,
+.token.selector,
+.token.property,
+.token.attr-name,
+.token.regex,
+.token.builtin,
+.token.deleted {
+  color: var(--color-syntax-variable);
+}
+
+/* Khối code bọc bởi copy-code.js: định vị nút sao chép. */
+.code-block {
+  position: relative;
+}
+
+.copy-button {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  color: var(--color-muted);
+  background-color: var(--color-bg);
+  border: var(--border-width-thin) solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.copy-button:hover,
+.copy-button:focus-visible {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+}

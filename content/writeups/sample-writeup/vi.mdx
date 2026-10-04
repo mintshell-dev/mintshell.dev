@@ -1,0 +1,38 @@
+---
+title: Bài mẫu kiểm thử khung
+description: Bài write-up giả chỉ dùng để kiểm thử khung hiển thị, không phải nội dung thật.
+date: 2026-01-01
+platform: tryhackme
+room: Sample Room
+roomUrl: https://tryhackme.com/room/sample
+difficulty: easy
+tags:
+  - sample
+  - test
+vulnClasses:
+  - path traversal
+translation: done
+draft: false
+fixture: true
+---
+
+Đây là một write-up giả chỉ để kiểm thử khung hiển thị: tiêu đề, metadata, mục lục,
+khối code và điều hướng. Bài này không bao giờ xuất hiện ở trang danh sách công khai.
+
+## Bước đầu tiên
+
+Một đoạn văn mẫu dưới tiêu đề cấp hai để mục lục có mục để liệt kê.
+
+```bash
+# Khối code mẫu để kiểm tra tô màu cú pháp và nút sao chép.
+curl -s "https://example.com/health" | grep -i ok
+echo "flag đã che: THM{<redacted>}"
+```
+
+### Mục con
+
+Một tiêu đề cấp ba để kiểm tra mục lục hai cấp.
+
+## Kết luận
+
+Hết bài mẫu.

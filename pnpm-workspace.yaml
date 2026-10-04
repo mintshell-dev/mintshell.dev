@@ -19,6 +19,7 @@ allowBuilds:
 # Phiên bản ghim chính xác, dùng chung cho mọi package qua `catalog:`.
 catalog:
   '@astrojs/check': 0.9.10
+  '@astrojs/mdx': 8.0.2
   '@eslint/js': 10.0.1
   '@fontsource/be-vietnam-pro': 5.3.0
   '@fontsource/jetbrains-mono': 5.3.0

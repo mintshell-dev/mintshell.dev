@@ -1,0 +1,156 @@
+---
+import { useTranslations, type Locale } from '@mintshell/shared';
+
+import {
+  difficultyLabel,
+  isoDate,
+  platformLabel,
+  slugOf,
+  type WriteupEntry,
+} from '../../lib/writeups';
+
+interface Props {
+  locale: Locale;
+  entries: WriteupEntry[];
+}
+
+const { locale, entries } = Astro.props;
+const t = useTranslations(locale);
+const base = locale === 'vi' ? '/writeups' : '/en/writeups';
+---
+
+{
+  entries.length === 0 ? (
+    <p class="empty">{t('writeups.empty')}</p>
+  ) : (
+    <ul class="writeups">
+      {entries.map((entry) => (
+        <li>
+          <a class="row" href={`${base}/${slugOf(entry.id)}`}>
+            <span class="title">{entry.data.title}</span>
+            <span class="meta">
+              <span class="platform">{platformLabel(entry.data.platform, t)}</span>
+              <span class="difficulty" data-difficulty={entry.data.difficulty}>
+                {difficultyLabel(entry.data.difficulty, t)}
+              </span>
+              <time datetime={isoDate(entry.data.date)}>{isoDate(entry.data.date)}</time>
+            </span>
+            <span class="tags">
+              {entry.data.tags.map((tag) => (
+                <span class="tag">#{tag}</span>
+              ))}
+            </span>
+          </a>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+<style>
+  .empty {
+    color: var(--color-muted);
+    font-family: var(--font-mono);
+  }
+
+  .writeups {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  li + li {
+    border-top: var(--border-width-thin) solid var(--color-border);
+  }
+
+  .row {
+    display: grid;
+    gap: var(--space-2) var(--space-6);
+    grid-template-areas:
+      'title title'
+      'meta meta'
+      'tags tags';
+    padding: var(--space-6) var(--space-4);
+    border-radius: var(--radius-sm);
+    color: var(--color-text);
+    text-decoration: none;
+    transition: background-color var(--motion-duration-fast);
+  }
+
+  @media (min-width: 48rem) {
+    .row {
+      grid-template-areas:
+        'title meta'
+        'tags meta';
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: start;
+    }
+  }
+
+  .row:hover,
+  .row:focus-visible {
+    background-color: var(--color-surface);
+  }
+
+  .title {
+    grid-area: title;
+    font-size: var(--font-size-lg);
+    font-weight: var(--font-weight-medium);
+    transition: color var(--motion-duration-fast);
+  }
+
+  .row:hover .title,
+  .row:focus-visible .title {
+    color: var(--color-accent);
+  }
+
+  .meta {
+    grid-area: meta;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+    align-items: center;
+    font-family: var(--font-mono);
+    font-size: var(--font-size-sm);
+    color: var(--color-muted);
+  }
+
+  @media (min-width: 48rem) {
+    .meta {
+      justify-content: flex-end;
+    }
+  }
+
+  .difficulty[data-difficulty='easy'] {
+    color: var(--severity-low);
+  }
+
+  .difficulty[data-difficulty='medium'] {
+    color: var(--severity-medium);
+  }
+
+  .difficulty[data-difficulty='hard'] {
+    color: var(--severity-high);
+  }
+
+  .difficulty[data-difficulty='insane'] {
+    color: var(--severity-critical);
+  }
+
+  .tags {
+    grid-area: tags;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+    font-family: var(--font-mono);
+    font-size: var(--font-size-sm);
+    color: var(--color-muted);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .row,
+    .title {
+      transition: none;
+    }
+  }
+</style>

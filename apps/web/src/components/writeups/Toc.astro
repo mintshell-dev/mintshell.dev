@@ -1,0 +1,73 @@
+---
+import { useTranslations, type Locale } from '@mintshell/shared';
+
+import type { MarkdownHeading } from 'astro';
+
+interface Props {
+  locale: Locale;
+  headings: MarkdownHeading[];
+}
+
+const { locale, headings } = Astro.props;
+const t = useTranslations(locale);
+// Chỉ h2/h3; h1 là tiêu đề bài, các cấp sâu hơn không vào mục lục.
+const items = headings.filter((h) => h.depth === 2 || h.depth === 3);
+---
+
+{
+  items.length > 0 && (
+    <nav class="toc" aria-label={t('writeups.toc')}>
+      <p class="toc-title">{t('writeups.toc')}</p>
+      <ul>
+        {items.map((h) => (
+          <li data-depth={h.depth}>
+            <a href={`#${h.slug}`}>{h.text}</a>
+          </li>
+        ))}
+      </ul>
+    </nav>
+  )
+}
+
+<style>
+  .toc {
+    border: var(--border-width-thin) solid var(--color-border);
+    border-radius: var(--radius-md);
+    padding: var(--space-4) var(--space-6);
+  }
+
+  .toc-title {
+    margin: 0 0 var(--space-3);
+    font-family: var(--font-mono);
+    font-size: var(--font-size-sm);
+    color: var(--color-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  ul {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  li {
+    padding-block: var(--space-1);
+  }
+
+  li[data-depth='3'] {
+    padding-inline-start: var(--space-4);
+  }
+
+  a {
+    color: var(--color-text);
+    text-decoration: none;
+    font-size: var(--font-size-sm);
+  }
+
+  a:hover,
+  a:focus-visible {
+    color: var(--color-accent);
+    text-decoration: underline;
+  }
+</style>

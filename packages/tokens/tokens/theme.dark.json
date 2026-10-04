@@ -9,7 +9,17 @@
     "muted": { "$value": "#8B98A5" },
     "accent": { "$value": "#3DDC97" },
     "onAccent": { "$value": "#0B0F14" },
-    "highlight": { "$value": "#F5B841" }
+    "highlight": { "$value": "#F5B841" },
+    "syntax": {
+      "keyword": { "$value": "#C792EA" },
+      "string": { "$value": "#9ECE6A" },
+      "comment": { "$value": "#8B98A5" },
+      "number": { "$value": "#F5B841" },
+      "function": { "$value": "#82AAFF" },
+      "punctuation": { "$value": "#E6EDF3" },
+      "operator": { "$value": "#89DDFF" },
+      "variable": { "$value": "#F7768E" }
+    }
   },
   "severity": {
     "$type": "color",

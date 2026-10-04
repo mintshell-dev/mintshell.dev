@@ -11,6 +11,17 @@ const themes = { dark: sources.dark, light: sources.light } as const;
 const textColors = ['text', 'muted', 'accent', 'highlight'] as const;
 const severities = ['critical', 'high', 'medium', 'low', 'info'] as const;
 const backgrounds = ['bg', 'surface'] as const;
+// Màu tô cú pháp (Prism) hiển thị trên nền khối code (color.surface): chữ nên ≥ 4.5:1.
+const syntaxColors = [
+  'keyword',
+  'string',
+  'comment',
+  'number',
+  'function',
+  'punctuation',
+  'operator',
+  'variable',
+] as const;
 
 const keys = (tree: TokenNode) => flatten(tree).map((t) => t.path.join('.'));
 
@@ -50,6 +61,12 @@ describe('theme', () => {
       expect(contrastRatio(theme.color[fg].$value, theme.color[bg].$value)).toBeGreaterThanOrEqual(
         NON_TEXT,
       );
+    });
+
+    it.each(syntaxColors)('color.syntax.%s trên color.surface ≥ 4.5:1', (name) => {
+      expect(
+        contrastRatio(theme.color.syntax[name].$value, theme.color.surface.$value),
+      ).toBeGreaterThanOrEqual(AA_TEXT);
     });
 
     it('color.onAccent trên color.accent ≥ 4.5:1', () => {

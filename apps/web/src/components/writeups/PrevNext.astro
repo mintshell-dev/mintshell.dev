@@ -1,0 +1,92 @@
+---
+import { useTranslations, type Locale } from '@mintshell/shared';
+
+import { slugOf, type WriteupEntry } from '../../lib/writeups';
+
+interface Props {
+  locale: Locale;
+  prev: WriteupEntry | undefined;
+  next: WriteupEntry | undefined;
+}
+
+const { locale, prev, next } = Astro.props;
+const t = useTranslations(locale);
+const base = locale === 'vi' ? '/writeups' : '/en/writeups';
+---
+
+{
+  (prev || next) && (
+    <nav class="prevnext" aria-label={t('writeups.toc')}>
+      {prev ? (
+        <a class="link prev" href={`${base}/${slugOf(prev.id)}`}>
+          <span class="dir">← {t('writeups.prev')}</span>
+          <span class="name">{prev.data.title}</span>
+        </a>
+      ) : (
+        <span />
+      )}
+      {next ? (
+        <a class="link next" href={`${base}/${slugOf(next.id)}`}>
+          <span class="dir">{t('writeups.next')} →</span>
+          <span class="name">{next.data.title}</span>
+        </a>
+      ) : (
+        <span />
+      )}
+    </nav>
+  )
+}
+
+<style>
+  .prevnext {
+    display: grid;
+    gap: var(--space-4);
+    margin-top: var(--space-10);
+    padding-top: var(--space-6);
+    border-top: var(--border-width-thin) solid var(--color-border);
+  }
+
+  @media (min-width: 48rem) {
+    .prevnext {
+      grid-template-columns: 1fr 1fr;
+    }
+  }
+
+  .link {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    padding: var(--space-4);
+    border: var(--border-width-thin) solid var(--color-border);
+    border-radius: var(--radius-md);
+    color: var(--color-text);
+    text-decoration: none;
+    transition: border-color var(--motion-duration-fast);
+  }
+
+  .next {
+    text-align: right;
+  }
+
+  .link:hover,
+  .link:focus-visible {
+    border-color: var(--color-border-strong);
+  }
+
+  .dir {
+    font-family: var(--font-mono);
+    font-size: var(--font-size-sm);
+    color: var(--color-muted);
+  }
+
+  .link:hover .name,
+  .link:focus-visible .name {
+    color: var(--color-accent);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .link {
+      transition: none;
+    }
+  }
+</style>
