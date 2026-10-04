@@ -19,7 +19,7 @@ Triển khai:
 ## Luồng động (không có backend riêng)
 
 - **Chuyển theme tối/sáng**: script nhỏ trong component Astro + `public/theme-init.js` chống nháy, không dùng React ([ADR 0007](adr/0007-layout-theme-url.md)).
-- **React islands** phía client: ô tìm kiếm Pagefind (khi cần).
+- **Tìm kiếm**: Pagefind index sau build (`search:index`); trang `/search` là script Astro nhỏ gọi Pagefind JS API cùng origin, không React ([ADR 0010](adr/0010-search-feed.md)).
 - **Newsletter**: form gửi thẳng tới Brevo; Brevo gửi email xác nhận (double opt-in).
 - **Analytics**: beacon Cloudflare Web Analytics.
 - **Đồng bộ Notion (M4)**: script trong `scripts/` lấy trang từ Notion → sinh MDX vào `content/` → đưa vào Git qua Merge Request. Site không gọi Notion lúc chạy.
@@ -38,6 +38,7 @@ Triển khai:
 | Write-up   | `/writeups/<slug>`    | `/en/writeups/<slug>`    |
 | Cheatsheet | `/cheatsheets/<slug>` | `/en/cheatsheets/<slug>` |
 | Portfolio  | `/portfolio`          | `/en/portfolio`          |
+| Tìm kiếm   | `/search`             | `/en/search`             |
 | RSS        | `/rss.xml`            | `/en/rss.xml`            |
 
 Quy tắc slug:

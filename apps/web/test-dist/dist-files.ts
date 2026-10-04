@@ -46,3 +46,23 @@ export function textOf(html: string, tag: string): string {
 }
 
 export const isNotFound = (path: string): boolean => /(^|\/)404\.html$/.test(path);
+
+const CONTENT = new URL('../../../content/writeups/', import.meta.url);
+
+/**
+ * Slug write-up công khai của một ngôn ngữ, tính độc lập từ frontmatter nguồn (không dùng lại
+ * code của site): bỏ `draft: true`, `fixture: true`, và với en bỏ `translation: pending`.
+ */
+export function publicSlugs(locale: 'vi' | 'en'): string[] {
+  return readdirSync(CONTENT, { withFileTypes: true })
+    .filter((d) => d.isDirectory())
+    .filter((d) => {
+      const source = readFileSync(new URL(`${d.name}/${locale}.mdx`, CONTENT), 'utf8');
+      const front = /^---\n([\s\S]*?)\n---/.exec(source)?.[1] ?? '';
+      const flag = (line: string) => new RegExp(`^${line}\\s*$`, 'm').test(front);
+      if (flag('draft: true') || flag('fixture: true')) return false;
+      return !(locale === 'en' && flag('translation: pending'));
+    })
+    .map((d) => d.name)
+    .sort();
+}

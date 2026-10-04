@@ -32,6 +32,8 @@ const metaDescription = description ?? t('site.description');
 const ogLocale: Record<Locale, string> = { vi: 'vi_VN', en: 'en_US' };
 // Màu thanh trình duyệt: nền theme tối (theme mặc định), lấy từ token, không ghi cứng.
 const themeColor = tokens.theme.dark.color.bg;
+// Feed RSS cùng ngôn ngữ với trang (ADR 0010); không có hreflang nên tách khỏi cặp alternate SEO.
+const feedHref = new URL(localizePath('/rss.xml', locale), site).href;
 ---
 
 <!doctype html>
@@ -46,6 +48,7 @@ const themeColor = tokens.theme.dark.color.bg;
     <link rel="icon" href="/favicon-32.png" sizes="32x32" type="image/png" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <meta name="theme-color" content={themeColor} />
+    <link rel="alternate" type="application/rss+xml" title={t('feed.title')} href={feedHref} />
     <meta name="description" content={metaDescription} />
     {noindex ? (
       <meta name="robots" content="noindex" />

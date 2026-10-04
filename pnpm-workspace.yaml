@@ -20,6 +20,7 @@ allowBuilds:
 catalog:
   '@astrojs/check': 0.9.10
   '@astrojs/mdx': 8.0.2
+  '@astrojs/rss': 4.0.19
   '@eslint/js': 10.0.1
   '@fontsource/be-vietnam-pro': 5.3.0
   '@fontsource/jetbrains-mono': 5.3.0
@@ -27,6 +28,8 @@ catalog:
   astro: 7.3.5
   eslint: 10.11.0
   eslint-plugin-astro: 3.2.1
+  fast-xml-parser: 5.11.2
+  pagefind: 1.5.2
   prettier: 3.9.9
   prettier-plugin-astro: 1.1.0
   turbo: 2.11.6

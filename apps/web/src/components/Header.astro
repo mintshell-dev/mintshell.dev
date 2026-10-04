@@ -17,6 +17,7 @@ const items = [
   { base: '/writeups', label: t('nav.writeups') },
   { base: '/cheatsheets', label: t('nav.cheatsheets') },
   { base: '/portfolio', label: t('nav.portfolio') },
+  { base: '/search', label: t('nav.search') },
 ] as const;
 const isActive = (base: string) => current === base || current.startsWith(`${base}/`);
 ---

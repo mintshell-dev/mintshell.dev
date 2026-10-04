@@ -2,6 +2,7 @@ import { type Locale, locales, type UiKey } from '@mintshell/shared';
 import { type CollectionEntry, getCollection } from 'astro:content';
 
 import type { Difficulty, Platform } from '../schemas/writeup';
+import type { FeedSource } from './feed';
 
 export type WriteupEntry = CollectionEntry<'writeups'>;
 
@@ -78,6 +79,23 @@ export async function listWriteups(locale: Locale): Promise<WriteupEntry[]> {
     .filter((e) => localeOf(e.id) === locale && !e.data.fixture)
     .filter((e) => import.meta.env.DEV || !e.data.draft)
     .sort(byDateDesc);
+}
+
+/**
+ * Bài đưa vào feed RSS của một ngôn ngữ: như danh sách công khai nhưng bỏ bản en chưa dịch
+ * (`translation: pending`), vì trang đó chỉ là thông báo noindex chứ không phải nội dung.
+ */
+export async function feedWriteups(locale: Locale): Promise<FeedSource[]> {
+  const list = await listWriteups(locale);
+  return list
+    .filter((e) => !(locale === 'en' && e.data.translation === 'pending'))
+    .map((e) => ({
+      slug: slugOf(e.id),
+      title: e.data.title,
+      description: e.data.description,
+      date: e.data.date,
+      tags: e.data.tags,
+    }));
 }
 
 /**

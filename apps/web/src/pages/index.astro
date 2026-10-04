@@ -1,11 +1,5 @@
 ---
-import { useTranslations } from '@mintshell/shared';
-
-import BaseLayout from '../layouts/BaseLayout.astro';
-
-const t = useTranslations('vi');
+import HomePage from '../components/home/HomePage.astro';
 ---
 
-<BaseLayout>
-  <h1>{t('home.title')}</h1>
-</BaseLayout>
+<HomePage locale="vi" />
