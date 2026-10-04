@@ -66,7 +66,7 @@ truyền qua `mdx({ rehypePlugins })` — **không chạy** nếu thiếu `@astr
 nội dung Notion sẽ cân nhắc `@astrojs/markdown-remark` + `rehype-sanitize` một thể, và plugin tự
 gắn `rel`/`target` cho link ngoài đi kèm lúc đó.
 
-- **Khoảng trống:** link ngoài trong *thân* MDX chưa tự gắn `rel="noopener noreferrer"` (link
+- **Khoảng trống:** link ngoài trong _thân_ MDX chưa tự gắn `rel="noopener noreferrer"` (link
   `roomUrl` ở metadata thì đã có `rel` đúng, vì không đi qua MDX).
 - **Rủi ro hiện tại:** thấp — chỉ reverse tabnabbing; nội dung trong Git là tin cậy (qua MR).
 - **Phòng tuyến tạm:** CSP ở M5. Xử lý dứt điểm ở M4 cùng `rehype-sanitize`.
@@ -91,7 +91,7 @@ Prism sinh `.token.*`, fixture ẩn khỏi danh sách, và nhánh en pending noi
 - Trang vi của một bài có bản en pending vẫn khai báo `hreflang=en` trỏ tới trang en noindex
   (hreflang một chiều, công cụ tìm kiếm bỏ qua). Không khắc phục ở M3a để không sửa `BaseLayout`
   dùng chung; cân nhắc khi làm SEO ở M5.
-- Link ngoài trong *thân* MDX chưa tự gắn `rel`/`target` (xem ghi chú về rehype ở trên) — chờ
+- Link ngoài trong _thân_ MDX chưa tự gắn `rel`/`target` (xem ghi chú về rehype ở trên) — chờ
   quyết định dependency.
 
 ## Thay thế đã cân nhắc

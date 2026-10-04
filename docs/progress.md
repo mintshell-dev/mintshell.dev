@@ -4,7 +4,7 @@ Quỹ thời gian: 5–10 giờ/tuần, mỗi mốc khoảng 1 tuần.
 
 ## Định nghĩa hoàn thành
 
-1. `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build`, `pnpm test:dist` đều qua.
+1. `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build`, `pnpm test:dist`, `pnpm format:check` đều qua.
 2. Cập nhật `docs/progress.md`.
 3. Thêm ADR trong `docs/adr/` khi có quyết định kiến trúc.
 
@@ -29,6 +29,10 @@ Quỹ thời gian: 5–10 giờ/tuần, mỗi mốc khoảng 1 tuần.
 - [x] Lệnh lint, typecheck, test, build chạy được; dev server phục vụ `/` (vi) và `/en`
 - [x] Công cụ lint/format/test và chính sách cài gói ([ADR 0005](adr/0005-lint-format-test.md)):
       `minimumReleaseAge` 1 ngày (strict), `allowBuilds` không cho phép gói nào, lockfile được commit
+- [x] Vá hàng rào format (`chore/format-gate`): `format:check` vào "Định nghĩa hoàn thành"
+      (CLAUDE.md + bảng trên) và thêm hook `prettier --check` trong `.pre-commit-config.yaml`
+      (chặn commit file lệch định dạng, không thêm dependency); format lại 6 file M3a lỡ lọt
+      (M3a merge khi DoD chưa có `format:check`)
 
 ## M1 — Design token
 
@@ -89,8 +93,8 @@ Quỹ thời gian: 5–10 giờ/tuần, mỗi mốc khoảng 1 tuần.
       bài draft và bài thiếu ngôn ngữ; trang chi tiết `/writeups/<slug>` + `/en/...`: metadata
       (nền tảng, phòng + link, độ khó, loại lỗi, ngày, thời gian đọc), mục lục h2/h3, điều hướng
       trước/sau
-- [x] Bản en `translation: pending`: `noindex`, thông báo + link bản vi, không `<link alternate
-      hreflang>` cho cặp đó
+- [x] Bản en `translation: pending`: `noindex`, thông báo + link bản vi, không khai báo
+      `<link alternate hreflang>` cho cặp đó
 - [x] Tô màu cú pháp bằng **Prism built-in** (0 dependency thêm cho tô màu): chỉ sinh class
       `.token.*`, không `style=`; token màu `color.syntax.*` trong `packages/tokens` (tách theo
       theme), test tương phản ≥ 4.5:1 trên `color.surface` ở cả hai theme; CSS ánh xạ
@@ -106,14 +110,10 @@ Quỹ thời gian: 5–10 giờ/tuần, mỗi mốc khoảng 1 tuần.
       output MDX; chuỗi escaped trong khối code không dính); CSP M5 là phòng tuyến hai
 - [x] Ép slug ASCII (`^[a-z0-9]+(-[a-z0-9]+)*$`) khi nạp collection: tên thư mục sai làm build lỗi
 - [x] Fixture `content/writeups/sample-writeup` (bản thường) và `sample-pending` (thử nhánh pending)
-- [ ] **Hoãn sang M4** (đã chốt): tự gắn `rel`/`target` cho link ngoài trong *thân* MDX. Astro 7
+- [ ] **Hoãn sang M4** (đã chốt): tự gắn `rel`/`target` cho link ngoài trong _thân_ MDX. Astro 7
       dùng Sätteri nên rehype/remark plugin cần cài `@astrojs/markdown-remark` (không "0 dep"); sẽ
-      cân nhắc cùng `rehype-sanitize` khi thêm pipeline nội dung Notion ở M4.
-      - Khoảng trống: link ngoài trong thân MDX chưa tự có `rel="noopener noreferrer"` (metadata
-        `roomUrl` thì đã có).
-      - Rủi ro hiện tại: thấp (chỉ reverse tabnabbing; nội dung trong Git là tin cậy).
-      - Phòng tuyến tạm: CSP ở M5; xử lý dứt điểm ở M4 cùng `rehype-sanitize`.
-      - Viết bài thủ công: nếu muốn chắc, tự thêm `rel` vào thẻ `<a>` cho link ngoài.
+      cân nhắc cùng `rehype-sanitize` khi thêm pipeline nội dung Notion ở M4. - Khoảng trống: link ngoài trong thân MDX chưa tự có `rel="noopener noreferrer"` (metadata
+      `roomUrl` thì đã có). - Rủi ro hiện tại: thấp (chỉ reverse tabnabbing; nội dung trong Git là tin cậy). - Phòng tuyến tạm: CSP ở M5; xử lý dứt điểm ở M4 cùng `rehype-sanitize`. - Viết bài thủ công: nếu muốn chắc, tự thêm `rel` vào thẻ `<a>` cho link ngoài.
 - [ ] Chưa làm: Pagefind, RSS, trang chủ, trang theo tag, bình luận, nội dung bài thật
 
 ## M5 — CI/CD, security headers, security.txt

@@ -19,33 +19,31 @@ const t = useTranslations(locale);
 const base = locale === 'vi' ? '/writeups' : '/en/writeups';
 ---
 
-{
-  entries.length === 0 ? (
-    <p class="empty">{t('writeups.empty')}</p>
-  ) : (
-    <ul class="writeups">
-      {entries.map((entry) => (
-        <li>
-          <a class="row" href={`${base}/${slugOf(entry.id)}`}>
-            <span class="title">{entry.data.title}</span>
-            <span class="meta">
-              <span class="platform">{platformLabel(entry.data.platform, t)}</span>
-              <span class="difficulty" data-difficulty={entry.data.difficulty}>
-                {difficultyLabel(entry.data.difficulty, t)}
-              </span>
-              <time datetime={isoDate(entry.data.date)}>{isoDate(entry.data.date)}</time>
+{entries.length === 0 ? (
+  <p class="empty">{t('writeups.empty')}</p>
+) : (
+  <ul class="writeups">
+    {entries.map((entry) => (
+      <li>
+        <a class="row" href={`${base}/${slugOf(entry.id)}`}>
+          <span class="title">{entry.data.title}</span>
+          <span class="meta">
+            <span class="platform">{platformLabel(entry.data.platform, t)}</span>
+            <span class="difficulty" data-difficulty={entry.data.difficulty}>
+              {difficultyLabel(entry.data.difficulty, t)}
             </span>
-            <span class="tags">
-              {entry.data.tags.map((tag) => (
-                <span class="tag">#{tag}</span>
-              ))}
-            </span>
-          </a>
-        </li>
-      ))}
-    </ul>
-  )
-}
+            <time datetime={isoDate(entry.data.date)}>{isoDate(entry.data.date)}</time>
+          </span>
+          <span class="tags">
+            {entry.data.tags.map((tag) => (
+              <span class="tag">#{tag}</span>
+            ))}
+          </span>
+        </a>
+      </li>
+    ))}
+  </ul>
+)}
 
 <style>
   .empty {

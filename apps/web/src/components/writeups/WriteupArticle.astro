@@ -35,75 +35,78 @@ const minutes = readingTime(entry);
 ---
 
 <BaseLayout title={d.title} description={d.description} noindex={pending}>
-  {
-    pending ? (
-      <section class="pending">
+  {pending ? (
+    <section class="pending">
+      <h1>{d.title}</h1>
+      <p class="notice">{t('writeups.pendingTitle')}</p>
+      <p>{t('writeups.pendingBody')}</p>
+      <p>
+        <a href={viHref}>{t('writeups.pendingLink')} →</a>
+      </p>
+    </section>
+  ) : (
+    <article class="writeup">
+      <header class="head">
         <h1>{d.title}</h1>
-        <p class="notice">{t('writeups.pendingTitle')}</p>
-        <p>{t('writeups.pendingBody')}</p>
-        <p>
-          <a href={viHref}>{t('writeups.pendingLink')} →</a>
-        </p>
-      </section>
-    ) : (
-      <article class="writeup">
-        <header class="head">
-          <h1>{d.title}</h1>
-          <p class="description">{d.description}</p>
-          <dl class="meta">
+        <p class="description">{d.description}</p>
+        <dl class="meta">
+          <div>
+            <dt>{t('writeups.platform')}</dt>
+            <dd>{platformLabel(d.platform, t)}</dd>
+          </div>
+          <div>
+            <dt>{t('writeups.room')}</dt>
+            <dd>
+              <a href={d.roomUrl} rel="noopener noreferrer">
+                {d.room}
+                <span class="arrow" aria-hidden="true">
+                  ↗
+                </span>
+                <span class="sr-only">{t('a11y.externalLink')}</span>
+              </a>
+            </dd>
+          </div>
+          <div>
+            <dt>{t('writeups.difficulty')}</dt>
+            <dd data-difficulty={d.difficulty}>{difficultyLabel(d.difficulty, t)}</dd>
+          </div>
+          <div>
+            <dt>{t('writeups.vulnClasses')}</dt>
+            <dd>{d.vulnClasses.join(', ')}</dd>
+          </div>
+          <div>
+            <dt>
+              <time datetime={isoDate(d.date)}>{isoDate(d.date)}</time>
+            </dt>
+            <dd>
+              {minutes} {t('writeups.readingTime')}
+            </dd>
+          </div>
+          {d.updated && (
             <div>
-              <dt>{t('writeups.platform')}</dt>
-              <dd>{platformLabel(d.platform, t)}</dd>
-            </div>
-            <div>
-              <dt>{t('writeups.room')}</dt>
+              <dt>{t('writeups.updated')}</dt>
               <dd>
-                <a href={d.roomUrl} rel="noopener noreferrer">
-                  {d.room}
-                  <span class="arrow" aria-hidden="true">
-                    ↗
-                  </span>
-                  <span class="sr-only">{t('a11y.externalLink')}</span>
-                </a>
+                <time datetime={isoDate(d.updated)}>{isoDate(d.updated)}</time>
               </dd>
             </div>
-            <div>
-              <dt>{t('writeups.difficulty')}</dt>
-              <dd data-difficulty={d.difficulty}>{difficultyLabel(d.difficulty, t)}</dd>
-            </div>
-            <div>
-              <dt>{t('writeups.vulnClasses')}</dt>
-              <dd>{d.vulnClasses.join(', ')}</dd>
-            </div>
-            <div>
-              <dt>
-                <time datetime={isoDate(d.date)}>{isoDate(d.date)}</time>
-              </dt>
-              <dd>
-                {minutes} {t('writeups.readingTime')}
-              </dd>
-            </div>
-            {d.updated && (
-              <div>
-                <dt>{t('writeups.updated')}</dt>
-                <dd>
-                  <time datetime={isoDate(d.updated)}>{isoDate(d.updated)}</time>
-                </dd>
-              </div>
-            )}
-          </dl>
-        </header>
+          )}
+        </dl>
+      </header>
 
-        <Toc locale={locale} headings={headings} />
+      <Toc locale={locale} headings={headings} />
 
-        <div class="prose" data-copy-code data-label-copy={t('code.copy')} data-label-copied={t('code.copied')}>
-          <slot />
-        </div>
+      <div
+        class="prose"
+        data-copy-code
+        data-label-copy={t('code.copy')}
+        data-label-copied={t('code.copied')}
+      >
+        <slot />
+      </div>
 
-        <PrevNext locale={locale} prev={prev} next={next} />
-      </article>
-    )
-  }
+      <PrevNext locale={locale} prev={prev} next={next} />
+    </article>
+  )}
   {/* File tĩnh trong public/; is:inline chỉ để Astro không bundle, vẫn là script NGOÀI có src (CSP 'self'). */}
   {!pending && <script is:inline src="/copy-code.js"></script>}
 </BaseLayout>

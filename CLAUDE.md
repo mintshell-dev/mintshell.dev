@@ -48,7 +48,7 @@ pnpm --filter web <lệnh>  # chạy lệnh cho một gói
 
 ## Định nghĩa hoàn thành
 
-1. `lint`, `typecheck`, `test`, `build`, `test:dist` đều qua.
+1. `lint`, `typecheck`, `test`, `build`, `test:dist`, `format:check` đều qua.
 2. Cập nhật `docs/progress.md`.
 3. Thêm ADR trong `docs/adr/` khi có quyết định kiến trúc.
 
