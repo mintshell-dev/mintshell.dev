@@ -1,4 +1,25 @@
-# TryHackMe: ValenFind — One Path-Traversal Bug to Root File Read, a Leaked Key, and Full Account Takeover
+---
+title: 'ValenFind: One Path-Traversal Bug to Root File Read, a Leaked Key, and Full Account Takeover'
+description: A walkthrough of TryHackMe's ValenFind — an unauthenticated path-traversal flaw gives arbitrary file read as root, leaks a hardcoded admin key, exports a plaintext-password database, and ends in full admin account takeover.
+date: 2026-10-04
+platform: tryhackme
+room: ValenFind
+roomUrl: https://tryhackme.com/room/lafb2026e10
+difficulty: medium
+tags:
+  - web
+  - flask
+  - path-traversal
+  - lfi
+  - account-takeover
+vulnClasses:
+  - path traversal / LFI
+  - hardcoded secret
+  - plaintext password storage
+  - broken access control
+translation: done
+draft: true
+---
 
 _A walkthrough of the "ValenFind" web challenge from TryHackMe's Love at First
 Breach 2026 event. A single unauthenticated path-traversal flaw lets us read any
@@ -10,8 +31,6 @@ plaintext — and log in as the administrator. No account required at any step._
 > is an authorized training challenge on TryHackMe; everything here was performed
 > against a legal practice target. Values shown as `<redacted>` are real on the box
 > but withheld here.
-
----
 
 ## TL;DR — the whole chain
 
