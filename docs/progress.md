@@ -15,7 +15,8 @@ Quỹ thời gian: 5–10 giờ/tuần, mỗi mốc khoảng 1 tuần.
 | M2a | Layout chung, menu, chuyển theme và ngôn ngữ              | Xong       |
 | M2b | Portfolio và hiệu ứng                                     | Xong       |
 | M3a | Khung write-up (collection, trang, tô màu cú pháp)        | Xong       |
-| M3  | Nội dung, Pagefind, RSS                                   | Đang làm   |
+| M3b | Pagefind, RSS, trang chủ                                  | Xong       |
+| M3  | Nội dung (bài thật)                                       | Đang làm   |
 | M4  | Đồng bộ Notion                                            | Chưa làm   |
 | M5  | CI/CD, security headers, security.txt                     | Chưa làm   |
 | M6  | Email Brevo, chính sách quyền riêng tư, analytics, ra mắt | Chưa làm   |
@@ -114,7 +115,46 @@ Quỹ thời gian: 5–10 giờ/tuần, mỗi mốc khoảng 1 tuần.
       dùng Sätteri nên rehype/remark plugin cần cài `@astrojs/markdown-remark` (không "0 dep"); sẽ
       cân nhắc cùng `rehype-sanitize` khi thêm pipeline nội dung Notion ở M4. - Khoảng trống: link ngoài trong thân MDX chưa tự có `rel="noopener noreferrer"` (metadata
       `roomUrl` thì đã có). - Rủi ro hiện tại: thấp (chỉ reverse tabnabbing; nội dung trong Git là tin cậy). - Phòng tuyến tạm: CSP ở M5; xử lý dứt điểm ở M4 cùng `rehype-sanitize`. - Viết bài thủ công: nếu muốn chắc, tự thêm `rel` vào thẻ `<a>` cho link ngoài.
-- [ ] Chưa làm: Pagefind, RSS, trang chủ, trang theo tag, bình luận, nội dung bài thật
+- [x] Pagefind, RSS, trang chủ: xem M3b
+- [ ] Chưa làm: trang theo tag, bình luận
+
+## M3b — Pagefind, RSS và trang chủ
+
+- [x] Tìm kiếm Pagefind tĩnh ([ADR 0010](adr/0010-search-feed.md)): `apps/web/scripts/search-index.ts`
+      (Node API), turbo task `search:index` (`dependsOn: build`), `test:dist` chạy sau index, `pnpm build`
+      ở gốc gồm cả index; `pagefind` không có install script, `allowBuilds` không đổi
+- [x] Chỉ index write-up thật: `data-pagefind-body` trên `<article>` không fixture; pending/draft tự loại;
+      mục lục, meta, PrevNext `data-pagefind-ignore`; index tách vi/en theo `<html lang>`
+- [x] Trang `/search`, `/en/search`: UI tự dựng trên Pagefind API (không UI mặc định, xóa bundle UI khỏi
+      dist), không `innerHTML`, excerpt chỉ giữ `<mark>`, URL kết quả chỉ cùng origin; không `<form>`;
+      `<noscript>`; thông báo khi chạy `astro dev` (chưa có index); token-only
+- [x] Header thêm mục `search` / `tìm kiếm`
+- [x] RSS `/rss.xml`, `/en/rss.xml` (`@astrojs/rss`): công khai, không draft/fixture, en bỏ pending, mới nhất
+      trước, link tuyệt đối; `lib/feed.ts` hàm thuần; `<link rel="alternate" type="application/rss+xml">`
+      trong `BaseLayout` theo ngôn ngữ
+- [x] Unit test escape XML: dữ liệu `& < > "`/thẻ giả/`]]>` qua `toFeedItems` + `getRssString` →
+      `XMLValidator` hợp lệ, có entity, parse lại đúng chuỗi gốc; unit test `resultHref`/`excerptParts`
+- [x] Trang chủ thật (`components/home/HomePage.astro`): hero + 2 CTA (write-ups, portfolio), 5 write-up
+      mới nhất (tái dùng `WriteupList`), link RSS và tìm kiếm; hiệu ứng `.rise`/`.reveal` sẵn có; chuỗi
+      trong từ điển vi/en (`home.*`, `search.*`, `feed.*`, `nav.search`)
+- [x] Fixture `sample-draft` (`draft: true`, không `fixture`) chứng minh bộ lọc draft; thử đột biến
+      (đổi sang `draft: false`) làm `home`, `rss`, `writeups` check fail
+- [x] `test:dist`: `search.check` (index chỉ chứa write-up công khai, đủ vi/en, không bundle UI, script
+      cùng origin), `rss.check` (XML hợp lệ, đúng tập bài, link tuyệt đối, thứ tự, feed link mọi trang),
+      `home.check`, draft không build ra trang; tập bài công khai tính độc lập từ frontmatter nguồn
+- [x] Dependency mới: `pagefind`, `@astrojs/rss`, `fast-xml-parser` (dev), ghim trong `catalog:`
+- [x] Sửa theo review bảo mật: L1 `search-index.ts` chỉ quét write-up, dừng khi không có
+      `data-pagefind-body`, đối chiếu số trang (thử đột biến: bỏ thuộc tính → build fail); L2 allowlist
+      file lõi `dist/pagefind` (bỏ `pagefind-highlight.js`); L3 CSP Pagefind chỉ cho trang search (M5);
+      L4 feed lọc ký tự điều khiển C0 (thử đột biến: bỏ lọc → unit test fail); I3 đếm kết quả hiển thị
+      thật, bắt lỗi tìm kiếm (`search.error`)
+- [x] Sửa nhãn `<nav>` bài trước/sau (trước đây trùng "Mục lục"): khóa `writeups.prevNext` vi/en;
+      `test:dist` kiểm tra mọi trang write-up không có `<nav>` trùng nhãn (PrevNext chỉ render khi có
+      ≥ 2 bài công khai; đã thử đột biến với 2 bài: nhãn cũ → 4 trang fail)
+- [x] Tiêu đề trang chủ: "bền hơn" → "an toàn hơn" (en: "so it is safer next time")
+- [ ] Kiểm tra thủ công trên trình duyệt (`pnpm build && pnpm --filter web preview`): gõ tìm, bàn phím,
+      reduced-motion, theme sáng
+- [ ] Chưa làm (đã chốt): trang theo tag, bình luận, sitemap (M5)
 
 ## M5 — CI/CD, security headers, security.txt
 
@@ -132,3 +172,8 @@ Security headers (`_headers`), CSP ngoài `default-src`/`script-src`/`style-src`
 - [ ] `base-uri 'none'`
 - [ ] `object-src 'none'`
 - [ ] `form-action 'self'` (M6: thêm domain Brevo cho form newsletter)
+- [ ] Pagefind (ADR 0010): luật `_headers` riêng cho `/search`, `/en/search`, `/pagefind/*` với `script-src 'self' 'wasm-unsafe-eval'`, `worker-src 'self'`, `connect-src 'self'`; trang khác KHÔNG có `wasm-unsafe-eval`; thử trên preview với CSP thật, xem console worker có chạy
+- [ ] `X-Content-Type-Options: nosniff` (cả `rss.xml`); chạy `pnpm audit` trước khi merge
+- [ ] Sitemap (hoãn từ M3b)
+- [ ] Cache turbo không dọn `dist` khi cache hit: file thừa từ lần build trước (vd. trang draft) có
+      thể còn lại trên máy local. CI phải build từ checkout sạch; local khi nghi ngờ thì `rm -rf apps/web/dist`

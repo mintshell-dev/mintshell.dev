@@ -1,0 +1,139 @@
+---
+import { localizePath, useTranslations, type Locale } from '@mintshell/shared';
+
+import BaseLayout from '../../layouts/BaseLayout.astro';
+
+interface Props {
+  locale: Locale;
+}
+
+const { locale } = Astro.props;
+const t = useTranslations(locale);
+---
+
+<BaseLayout title={t('search.title')}>
+  <h1>{t('search.title')}</h1>
+  {/* Không dùng <form>: không có gì để gửi đi, và inline.check chặn <form> trong bản build. */}
+  <div
+    class="search"
+    role="search"
+    data-search
+    data-label-results={t('search.results')}
+    data-label-empty={t('search.noResults')}
+    data-label-unavailable={t('search.unavailable')}
+    data-label-error={t('search.error')}
+  >
+    <label for="search-input">{t('search.label')}</label>
+    <input
+      id="search-input"
+      type="search"
+      autocomplete="off"
+      spellcheck="false"
+      placeholder={t('search.placeholder')}
+      disabled
+    />
+    <p class="status" aria-live="polite" data-search-status></p>
+    <ol class="results" data-search-results></ol>
+  </div>
+  <noscript>
+    <p class="status">
+      {t('search.noJs')}
+      <a href={localizePath('/writeups', locale)}>{t('nav.writeups')}</a>
+    </p>
+  </noscript>
+</BaseLayout>
+
+<script>
+  import { initSearch } from '../../scripts/search';
+
+  initSearch();
+</script>
+
+<style>
+  h1 {
+    font-family: var(--font-mono);
+    font-size: var(--font-size-xl);
+    font-weight: var(--font-weight-medium);
+    margin-bottom: var(--space-8);
+  }
+
+  .search {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  label {
+    color: var(--color-muted);
+    font-family: var(--font-mono);
+    font-size: var(--font-size-sm);
+  }
+
+  input {
+    box-sizing: border-box;
+    width: 100%;
+    min-height: var(--size-control);
+    padding-inline: var(--space-4);
+    border: var(--border-width-thin) solid var(--color-border-strong);
+    border-radius: var(--radius-sm);
+    background-color: var(--color-surface);
+    color: var(--color-text);
+    font-family: var(--font-mono);
+    font-size: var(--font-size-base);
+  }
+
+  input::placeholder {
+    color: var(--color-muted);
+  }
+
+  /* Viền focus chung ở global.css; thêm đổi màu viền ô nhập. */
+  input:focus-visible {
+    border-color: var(--color-accent);
+  }
+
+  input:disabled {
+    cursor: wait;
+  }
+
+  .status {
+    min-height: 1lh;
+    margin: 0;
+    color: var(--color-muted);
+    font-family: var(--font-mono);
+    font-size: var(--font-size-sm);
+  }
+
+  .results {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  /* Phần tử kết quả do script tạo: cần :global vì không mang thuộc tính scope của Astro. */
+  .results :global(li) {
+    padding-block: var(--space-5);
+    border-bottom: var(--border-width-thin) solid var(--color-border);
+  }
+
+  .results :global(a) {
+    color: var(--color-text);
+    font-size: var(--font-size-lg);
+    font-weight: var(--font-weight-semibold);
+    text-decoration: none;
+  }
+
+  .results :global(a:hover) {
+    color: var(--color-accent);
+  }
+
+  .results :global(p) {
+    margin: var(--space-2) 0 0;
+    color: var(--color-muted);
+  }
+
+  .results :global(mark) {
+    background-color: transparent;
+    color: var(--color-accent);
+    font-weight: var(--font-weight-semibold);
+  }
+</style>

@@ -8,7 +8,7 @@
   },
   "scripts": {
     "dev": "TURBO_TELEMETRY_DISABLED=1 turbo run dev",
-    "build": "TURBO_TELEMETRY_DISABLED=1 turbo run build",
+    "build": "TURBO_TELEMETRY_DISABLED=1 turbo run build search:index",
     "typecheck": "TURBO_TELEMETRY_DISABLED=1 turbo run typecheck",
     "lint": "eslint .",
     "test": "vitest run",

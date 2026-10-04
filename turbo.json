@@ -6,8 +6,12 @@
       "dependsOn": ["^build"],
       "outputs": ["dist/**"]
     },
-    "test:dist": {
+    "search:index": {
       "dependsOn": ["build"],
+      "outputs": ["dist/pagefind/**"]
+    },
+    "test:dist": {
+      "dependsOn": ["search:index"],
       "cache": false
     },
     "typecheck": {

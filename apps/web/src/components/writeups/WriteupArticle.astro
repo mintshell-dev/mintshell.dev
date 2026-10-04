@@ -32,6 +32,9 @@ const d = entry.data;
 const pending = locale === 'en' && d.translation === 'pending';
 const viHref = `/writeups/${slugOf(entry.id)}`;
 const minutes = readingTime(entry);
+// Pagefind chỉ index trang có data-pagefind-body: write-up thật, không fixture (ADR 0010).
+// Bản en pending không render <article> nên tự bị loại; draft không build ở production.
+const searchable = !d.fixture;
 ---
 
 <BaseLayout title={d.title} description={d.description} noindex={pending}>
@@ -45,11 +48,11 @@ const minutes = readingTime(entry);
       </p>
     </section>
   ) : (
-    <article class="writeup">
+    <article class="writeup" data-pagefind-body={searchable ? '' : undefined}>
       <header class="head">
         <h1>{d.title}</h1>
         <p class="description">{d.description}</p>
-        <dl class="meta">
+        <dl class="meta" data-pagefind-ignore>
           <div>
             <dt>{t('writeups.platform')}</dt>
             <dd>{platformLabel(d.platform, t)}</dd>
@@ -93,7 +96,9 @@ const minutes = readingTime(entry);
         </dl>
       </header>
 
-      <Toc locale={locale} headings={headings} />
+      <div data-pagefind-ignore>
+        <Toc locale={locale} headings={headings} />
+      </div>
 
       <div
         class="prose"
@@ -104,7 +109,9 @@ const minutes = readingTime(entry);
         <slot />
       </div>
 
-      <PrevNext locale={locale} prev={prev} next={next} />
+      <div data-pagefind-ignore>
+        <PrevNext locale={locale} prev={prev} next={next} />
+      </div>
     </article>
   )}
   {/* File tĩnh trong public/; is:inline chỉ để Astro không bundle, vẫn là script NGOÀI có src (CSP 'self'). */}

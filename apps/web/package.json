@@ -5,11 +5,14 @@
   "scripts": {
     "dev": "ASTRO_TELEMETRY_DISABLED=1 astro dev",
     "build": "ASTRO_TELEMETRY_DISABLED=1 astro build",
+    "search:index": "node scripts/search-index.ts",
+    "preview": "ASTRO_TELEMETRY_DISABLED=1 astro preview",
     "typecheck": "ASTRO_TELEMETRY_DISABLED=1 astro check",
     "test:dist": "vitest run --config vitest.dist.config.ts"
   },
   "dependencies": {
     "@astrojs/mdx": "catalog:",
+    "@astrojs/rss": "catalog:",
     "@fontsource/be-vietnam-pro": "catalog:",
     "@fontsource/jetbrains-mono": "catalog:",
     "@mintshell/shared": "workspace:*",
@@ -18,6 +21,8 @@
   "devDependencies": {
     "@astrojs/check": "catalog:",
     "astro": "catalog:",
+    "fast-xml-parser": "catalog:",
+    "pagefind": "catalog:",
     "typescript": "catalog:"
   }
 }

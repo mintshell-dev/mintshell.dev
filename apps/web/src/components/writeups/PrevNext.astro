@@ -15,7 +15,7 @@ const base = locale === 'vi' ? '/writeups' : '/en/writeups';
 ---
 
 {(prev || next) && (
-  <nav class="prevnext" aria-label={t('writeups.toc')}>
+  <nav class="prevnext" aria-label={t('writeups.prevNext')}>
     {prev ? (
       <a class="link prev" href={`${base}/${slugOf(prev.id)}`}>
         <span class="dir">← {t('writeups.prev')}</span>

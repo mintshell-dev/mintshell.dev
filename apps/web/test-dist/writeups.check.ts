@@ -35,6 +35,11 @@ describe('khung write-up', () => {
     expect(() => readDist('en/writeups/sample-writeup.html')).not.toThrow();
   });
 
+  it('draft KHÔNG build ra trang chi tiết', () => {
+    expect(() => readDist('writeups/sample-draft.html')).toThrow();
+    expect(() => readDist('en/writeups/sample-draft.html')).toThrow();
+  });
+
   it('fixture KHÔNG hiện ở trang danh sách', () => {
     expect(readDist('writeups.html')).not.toMatch(/sample-writeup/);
     expect(readDist('en/writeups.html')).not.toMatch(/sample-writeup/);
@@ -51,6 +56,22 @@ describe('khung write-up', () => {
     expect(toc, 'thiếu <nav> mục lục').toBeTruthy();
     expect(page).toMatch(/href="#bước-đầu-tiên"/);
   });
+
+  // PrevNext chỉ render khi có ≥ 2 bài công khai: kiểm tra mọi trang write-up, áp dụng khi có.
+  it.each(html.filter((f) => /^(?:en\/)?writeups\/.+\.html$/.test(f.path)))(
+    '$path: các <nav> không trùng nhãn, nav bài trước/sau có nhãn đúng',
+    ({ path, content }) => {
+      const navs = tags(content, 'nav');
+      const labels = navs.map((n) => attr(n, 'aria-label'));
+      expect(new Set(labels).size, labels.join(' | ')).toBe(labels.length);
+      const expected = path.startsWith('en/')
+        ? 'Previous and next write-ups'
+        : 'Bài trước và bài sau';
+      for (const nav of navs.filter((n) => /class="prevnext/.test(n))) {
+        expect(attr(nav, 'aria-label')).toBe(expected);
+      }
+    },
+  );
 
   it('nút sao chép dùng script ngoài /copy-code.js', () => {
     expect(readDist('writeups/sample-writeup.html')).toMatch(/src="\/copy-code\.js"/);
