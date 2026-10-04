@@ -14,7 +14,8 @@ Quỹ thời gian: 5–10 giờ/tuần, mỗi mốc khoảng 1 tuần.
 | M1  | Design token                                              | Xong       |
 | M2a | Layout chung, menu, chuyển theme và ngôn ngữ              | Xong       |
 | M2b | Portfolio và hiệu ứng                                     | Xong       |
-| M3  | Nội dung, Pagefind, RSS                                   | Chưa làm   |
+| M3a | Khung write-up (collection, trang, tô màu cú pháp)        | Xong       |
+| M3  | Nội dung, Pagefind, RSS                                   | Đang làm   |
 | M4  | Đồng bộ Notion                                            | Chưa làm   |
 | M5  | CI/CD, security headers, security.txt                     | Chưa làm   |
 | M6  | Email Brevo, chính sách quyền riêng tư, analytics, ra mắt | Chưa làm   |
@@ -76,6 +77,44 @@ Quỹ thời gian: 5–10 giờ/tuần, mỗi mốc khoảng 1 tuần.
 - [x] `BrandMark.astro` (SVG nội tuyến, màu theo token, biến thể `mark`/`avatar`): header mọi trang và phần liên hệ portfolio; test tương phản đồ họa ≥ 3:1 và `test:dist` cho SVG nội tuyến
 - [ ] Chờ dữ liệu thật: số phòng TryHackMe, số write-up, số báo cáo bug bounty, chứng chỉ, URL GitHub/YouTube/HackerOne, link CV, fingerprint PGP, URL dự án video và cộng đồng
 - [ ] Duyệt bản tiếng Anh của `content/portfolio/en.yaml`
+
+## M3a — Khung hệ thống write-up
+
+- [x] Content collection `writeups` (glob `**/{vi,en}.mdx`, id `<slug>/<locale>`), schema Zod
+      strict `apps/web/src/schemas/writeup.ts`: platform/difficulty/tags/vulnClasses/translation/
+      draft…; `platform: hackthebox` bắt buộc `retired: true`; `draft` ẩn khỏi bản build công khai
+      ([ADR 0009](adr/0009-writeup-content-model.md))
+- [x] Trường `fixture`: build ra trang chi tiết để `test:dist` soi nhưng không hiện ở danh sách
+- [x] Trang `/writeups`, `/en/writeups`: danh sách hàng lớn (nền tảng, độ khó, tag, ngày), loại
+      bài draft và bài thiếu ngôn ngữ; trang chi tiết `/writeups/<slug>` + `/en/...`: metadata
+      (nền tảng, phòng + link, độ khó, loại lỗi, ngày, thời gian đọc), mục lục h2/h3, điều hướng
+      trước/sau
+- [x] Bản en `translation: pending`: `noindex`, thông báo + link bản vi, không `<link alternate
+      hreflang>` cho cặp đó
+- [x] Tô màu cú pháp bằng **Prism built-in** (0 dependency thêm cho tô màu): chỉ sinh class
+      `.token.*`, không `style=`; token màu `color.syntax.*` trong `packages/tokens` (tách theo
+      theme), test tương phản ≥ 4.5:1 trên `color.surface` ở cả hai theme; CSS ánh xạ
+      `apps/web/src/styles/prism.css` chỉ tham chiếu biến
+- [x] Nút sao chép qua script ngoài `public/copy-code.js` (không nội tuyến, progressive
+      enhancement); ảnh qua `astro:assets`, `alt` bắt buộc
+- [x] Dependency mới: `@astrojs/mdx` (render `.mdx`), ghim `catalog:` trong `pnpm-workspace.yaml`
+- [x] `test:dist` (`writeups.check.ts`): bắt flag `THM{…}`/`HTB{…}` chưa che (kể cả HTML-escaped),
+      xác nhận `.token.*`, fixture ẩn khỏi danh sách, nhánh en pending noindex + không hreflang;
+      `seo.check` tổng quát hoá "noindex → không canonical/hreflang" (dùng cho cả 404 lẫn pending)
+- [x] Phòng thủ nội dung MDX nhiều tầng: `inline.check` (phòng tuyến trước) làm build FAIL nếu
+      HTML có handler `on*=` trong thẻ thật hoặc thẻ nguy hiểm `iframe/object/embed/form` (phủ cả
+      output MDX; chuỗi escaped trong khối code không dính); CSP M5 là phòng tuyến hai
+- [x] Ép slug ASCII (`^[a-z0-9]+(-[a-z0-9]+)*$`) khi nạp collection: tên thư mục sai làm build lỗi
+- [x] Fixture `content/writeups/sample-writeup` (bản thường) và `sample-pending` (thử nhánh pending)
+- [ ] **Hoãn sang M4** (đã chốt): tự gắn `rel`/`target` cho link ngoài trong *thân* MDX. Astro 7
+      dùng Sätteri nên rehype/remark plugin cần cài `@astrojs/markdown-remark` (không "0 dep"); sẽ
+      cân nhắc cùng `rehype-sanitize` khi thêm pipeline nội dung Notion ở M4.
+      - Khoảng trống: link ngoài trong thân MDX chưa tự có `rel="noopener noreferrer"` (metadata
+        `roomUrl` thì đã có).
+      - Rủi ro hiện tại: thấp (chỉ reverse tabnabbing; nội dung trong Git là tin cậy).
+      - Phòng tuyến tạm: CSP ở M5; xử lý dứt điểm ở M4 cùng `rehype-sanitize`.
+      - Viết bài thủ công: nếu muốn chắc, tự thêm `rel` vào thẻ `<a>` cho link ngoài.
+- [ ] Chưa làm: Pagefind, RSS, trang chủ, trang theo tag, bình luận, nội dung bài thật
 
 ## M5 — CI/CD, security headers, security.txt
 

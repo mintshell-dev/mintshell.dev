@@ -1,0 +1,58 @@
+/*
+ * Kiểu chữ cho nội dung MDX của write-up. Nội dung slot không được Astro scope,
+ * nên đặt ở stylesheet global (chỉ nạp trên trang write-up qua WriteupArticle).
+ * Chỉ dùng biến token, không ghi cứng giá trị.
+ */
+
+.prose {
+  line-height: var(--font-line-height-normal);
+}
+
+.prose > * {
+  margin-block: var(--space-4);
+}
+
+.prose h2,
+.prose h3 {
+  font-family: var(--font-mono);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--font-line-height-snug);
+  /* Chừa chỗ cho header dính khi nhảy tới neo mục lục. */
+  scroll-margin-top: var(--space-6);
+}
+
+.prose h2 {
+  margin-top: var(--space-10);
+  font-size: var(--font-size-xl);
+}
+
+.prose h3 {
+  margin-top: var(--space-8);
+  font-size: var(--font-size-lg);
+}
+
+.prose a {
+  color: var(--color-accent);
+}
+
+.prose ul,
+.prose ol {
+  padding-inline-start: var(--space-6);
+}
+
+.prose li {
+  margin-block: var(--space-2);
+}
+
+.prose blockquote {
+  margin-inline: 0;
+  padding-inline-start: var(--space-4);
+  border-inline-start: var(--border-width-focus) solid var(--color-border-strong);
+  color: var(--color-muted);
+}
+
+.prose img {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius-sm);
+}

@@ -1,9 +1,24 @@
 ---
 import { useTranslations } from '@mintshell/shared';
 
-import UnderConstruction from '../components/UnderConstruction.astro';
+import WriteupList from '../components/writeups/WriteupList.astro';
+import BaseLayout from '../layouts/BaseLayout.astro';
+import { listWriteups } from '../lib/writeups';
 
 const t = useTranslations('vi');
+const entries = await listWriteups('vi');
 ---
 
-<UnderConstruction locale="vi" title={t('nav.writeups')} />
+<BaseLayout title={t('nav.writeups')}>
+  <h1>{t('nav.writeups')}</h1>
+  <WriteupList locale="vi" entries={entries} />
+</BaseLayout>
+
+<style>
+  h1 {
+    font-family: var(--font-mono);
+    font-size: var(--font-size-xl);
+    font-weight: var(--font-weight-medium);
+    margin-bottom: var(--space-8);
+  }
+</style>

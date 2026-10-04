@@ -10,7 +10,7 @@ const text = z.string().trim().min(1);
  * `//` (trình duyệt hiểu `https:host` là path tương đối) và cấm userinfo
  * (`https://gitlab.com@evil.example` trông như GitLab nhưng trỏ sang host khác).
  */
-const httpsUrl = z
+export const httpsUrl = z
   .url({ protocol: /^https$/, hostname: z.regexes.domain })
   .refine((u) => u.startsWith('https://'), { message: 'URL phải bắt đầu bằng https://' })
   .refine(

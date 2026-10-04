@@ -1,0 +1,19 @@
+---
+import { render } from 'astro:content';
+
+import WriteupArticle from '../../../components/writeups/WriteupArticle.astro';
+import { allBuildable, prevNext, slugOf } from '../../../lib/writeups';
+
+export async function getStaticPaths() {
+  const entries = await allBuildable('en');
+  return entries.map((entry) => ({ params: { slug: slugOf(entry.id) }, props: { entry } }));
+}
+
+const { entry } = Astro.props;
+const { Content, headings } = await render(entry);
+const { prev, next } = await prevNext('en', slugOf(entry.id));
+---
+
+<WriteupArticle locale="en" entry={entry} headings={headings} prev={prev} next={next}>
+  <Content />
+</WriteupArticle>

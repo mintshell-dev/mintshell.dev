@@ -1,0 +1,86 @@
+import { describe, expect, it } from 'vitest';
+
+import { attr, distFiles, readDist, tags } from './dist-files';
+
+const html = distFiles('.html');
+
+/**
+ * Giá trị flag đã che hợp lệ (sau khi giải mã HTML entity): `<redacted>`, `redacted`,
+ * `REDACTED`, `<REDACTED>`. Mọi flag THM{…}/HTB{…} khác đều là flag lộ → fail.
+ */
+const REDACTED = /^<?redacted>?$/i;
+
+function decode(s: string): string {
+  return s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+}
+
+describe('không lộ flag chưa che', () => {
+  it.each(html)('$path', ({ content }) => {
+    const matches = [...content.matchAll(/(THM|HTB)\{([^}]*)\}/g)];
+    for (const m of matches) {
+      const inner = decode(m[2] ?? '').trim();
+      expect(REDACTED.test(inner), `flag chưa che: ${m[0]}`).toBe(true);
+    }
+  });
+});
+
+describe('khung write-up', () => {
+  it('trang danh sách build ra ở cả hai ngôn ngữ', () => {
+    expect(() => readDist('writeups.html')).not.toThrow();
+    expect(() => readDist('en/writeups.html')).not.toThrow();
+  });
+
+  it('fixture build ra trang chi tiết', () => {
+    expect(() => readDist('writeups/sample-writeup.html')).not.toThrow();
+    expect(() => readDist('en/writeups/sample-writeup.html')).not.toThrow();
+  });
+
+  it('fixture KHÔNG hiện ở trang danh sách', () => {
+    expect(readDist('writeups.html')).not.toMatch(/sample-writeup/);
+    expect(readDist('en/writeups.html')).not.toMatch(/sample-writeup/);
+  });
+
+  it('khối code được Prism tô màu (class .token.*), không chỉ vắng style=', () => {
+    const page = readDist('writeups/sample-writeup.html');
+    expect(page).toMatch(/class="token /);
+  });
+
+  it('trang chi tiết có mục lục từ h2/h3', () => {
+    const page = readDist('writeups/sample-writeup.html');
+    const toc = tags(page, 'nav').find((n) => attr(n, 'aria-label') === 'Mục lục');
+    expect(toc, 'thiếu <nav> mục lục').toBeTruthy();
+    expect(page).toMatch(/href="#bước-đầu-tiên"/);
+  });
+
+  it('nút sao chép dùng script ngoài /copy-code.js', () => {
+    expect(readDist('writeups/sample-writeup.html')).toMatch(/src="\/copy-code\.js"/);
+  });
+});
+
+describe('bản tiếng Anh pending', () => {
+  const page = readDist('en/writeups/sample-pending.html');
+
+  it('noindex', () => {
+    const robots = tags(page, 'meta').find((m) => attr(m, 'name') === 'robots');
+    expect(robots && attr(robots, 'content')).toBe('noindex');
+  });
+
+  it('không khai báo <link alternate hreflang> cho cặp này', () => {
+    const alternates = tags(page, 'link').filter(
+      (l) => attr(l, 'rel') === 'alternate' && attr(l, 'hreflang'),
+    );
+    expect(alternates).toHaveLength(0);
+  });
+
+  it('có liên kết sang bản tiếng Việt', () => {
+    const links = tags(page, 'a').map((a) => attr(a, 'href'));
+    expect(links).toContain('/writeups/sample-pending');
+  });
+
+  it('bản tiếng Việt của bài đó vẫn index bình thường', () => {
+    const vi = readDist('writeups/sample-pending.html');
+    expect(vi).not.toMatch(/<meta name="robots"/);
+    const canonical = tags(vi, 'link').filter((l) => attr(l, 'rel') === 'canonical');
+    expect(canonical).toHaveLength(1);
+  });
+});
