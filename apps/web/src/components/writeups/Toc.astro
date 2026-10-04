@@ -14,20 +14,18 @@ const t = useTranslations(locale);
 const items = headings.filter((h) => h.depth === 2 || h.depth === 3);
 ---
 
-{
-  items.length > 0 && (
-    <nav class="toc" aria-label={t('writeups.toc')}>
-      <p class="toc-title">{t('writeups.toc')}</p>
-      <ul>
-        {items.map((h) => (
-          <li data-depth={h.depth}>
-            <a href={`#${h.slug}`}>{h.text}</a>
-          </li>
-        ))}
-      </ul>
-    </nav>
-  )
-}
+{items.length > 0 && (
+  <nav class="toc" aria-label={t('writeups.toc')}>
+    <p class="toc-title">{t('writeups.toc')}</p>
+    <ul>
+      {items.map((h) => (
+        <li data-depth={h.depth}>
+          <a href={`#${h.slug}`}>{h.text}</a>
+        </li>
+      ))}
+    </ul>
+  </nav>
+)}
 
 <style>
   .toc {

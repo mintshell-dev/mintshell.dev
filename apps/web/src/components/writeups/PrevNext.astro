@@ -14,28 +14,26 @@ const t = useTranslations(locale);
 const base = locale === 'vi' ? '/writeups' : '/en/writeups';
 ---
 
-{
-  (prev || next) && (
-    <nav class="prevnext" aria-label={t('writeups.toc')}>
-      {prev ? (
-        <a class="link prev" href={`${base}/${slugOf(prev.id)}`}>
-          <span class="dir">← {t('writeups.prev')}</span>
-          <span class="name">{prev.data.title}</span>
-        </a>
-      ) : (
-        <span />
-      )}
-      {next ? (
-        <a class="link next" href={`${base}/${slugOf(next.id)}`}>
-          <span class="dir">{t('writeups.next')} →</span>
-          <span class="name">{next.data.title}</span>
-        </a>
-      ) : (
-        <span />
-      )}
-    </nav>
-  )
-}
+{(prev || next) && (
+  <nav class="prevnext" aria-label={t('writeups.toc')}>
+    {prev ? (
+      <a class="link prev" href={`${base}/${slugOf(prev.id)}`}>
+        <span class="dir">← {t('writeups.prev')}</span>
+        <span class="name">{prev.data.title}</span>
+      </a>
+    ) : (
+      <span />
+    )}
+    {next ? (
+      <a class="link next" href={`${base}/${slugOf(next.id)}`}>
+        <span class="dir">{t('writeups.next')} →</span>
+        <span class="name">{next.data.title}</span>
+      </a>
+    ) : (
+      <span />
+    )}
+  </nav>
+)}
 
 <style>
   .prevnext {

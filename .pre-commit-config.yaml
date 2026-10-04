@@ -6,3 +6,10 @@ repos:
         entry: gitleaks git --pre-commit --redact --staged --verbose
         language: system
         pass_filenames: false
+      - id: prettier
+        name: prettier (kiểm định dạng)
+        # Chặn commit file lệch định dạng; dùng prettier có sẵn, không thêm dependency.
+        # --ignore-unknown bỏ qua phần mở rộng prettier không hỗ trợ.
+        entry: pnpm exec prettier --check --ignore-unknown
+        language: system
+        pass_filenames: true
