@@ -1,0 +1,173 @@
+---
+/**
+ * Sơ đồ chuỗi tấn công (ADR 0012): `<AttackChain label="…" steps={[{ label, description,
+ * critical? }]} />`. SVG nội tuyến, ô xếp dọc nối bằng mũi tên vẽ bằng path (không `<marker>`:
+ * `url(#…)` bị cấm trong SVG nội tuyến). Màu chỉ qua class + token; bước critical dùng
+ * `severity.critical`, bước thường dùng `color.accent`. Toạ độ là đơn vị viewBox, không phải
+ * spacing giao diện.
+ */
+import { localeFromPath, useTranslations } from '@mintshell/shared';
+
+import { attackChainSchema, criticalSteps, wrapText, type AttackChainProps } from '../../lib/mdx';
+
+type Props = AttackChainProps;
+
+const parsed = attackChainSchema.safeParse(Astro.props);
+if (!parsed.success) {
+  throw new Error(`AttackChain: props không hợp lệ — ${parsed.error.message}`);
+}
+const { label, steps } = parsed.data;
+const t = useTranslations(localeFromPath(Astro.url.pathname));
+const critical = criticalSteps(steps);
+
+// viewBox rộng 400: ở màn 320px vẫn ~0.8 lần (chữ ≥ 11px), trên desktop giới hạn bởi size.figure.
+const WIDTH = 400;
+const STROKE = 2;
+const PAD = 14;
+const LABEL_SIZE = 16;
+const LABEL_LINE = 21;
+const DESC_SIZE = 14;
+const DESC_LINE = 19;
+const GAP_LABEL_DESC = 6;
+const ARROW = 34;
+// Chữ mono rộng ~0.6em: số ký tự tối đa mỗi dòng trong ô.
+const inner = WIDTH - STROKE * 2 - PAD * 2;
+const PREFIX = 4; // "01  "
+const labelChars = Math.floor(inner / (LABEL_SIZE * 0.6)) - PREFIX;
+const descChars = Math.floor(inner / (DESC_SIZE * 0.6));
+
+let y = STROKE;
+const boxes = steps.map((step, i) => {
+  const labelLines = wrapText(step.label, labelChars);
+  const descLines = wrapText(step.description, descChars);
+  const height =
+    PAD * 2 + labelLines.length * LABEL_LINE + GAP_LABEL_DESC + descLines.length * DESC_LINE;
+  const box = {
+    top: y,
+    height,
+    num: String(i + 1).padStart(2, '0'),
+    labelLines,
+    descLines,
+    critical: critical.has(i),
+  };
+  y += height + (i < steps.length - 1 ? ARROW : 0);
+  return box;
+});
+const height = y + STROKE;
+const mid = WIDTH / 2;
+---
+
+<figure class="attack-chain">
+  <svg
+    class="chain"
+    viewBox={`0 0 ${WIDTH} ${height}`}
+    role="img"
+    aria-label={label}
+    focusable="false"
+  >
+    {boxes.map((b, i) => (
+      <g class:list={['step', { 'step--critical': b.critical }]}>
+        <rect
+          class="box"
+          x={STROKE}
+          y={b.top}
+          width={WIDTH - STROKE * 2}
+          height={b.height}
+          rx="4"
+          stroke-width={STROKE}
+        />
+        {b.labelLines.map((line, j) => (
+          <text
+            class="label"
+            font-size={LABEL_SIZE}
+            x={STROKE + PAD}
+            y={b.top + PAD + LABEL_SIZE - 2 + j * LABEL_LINE}
+          >
+            {j === 0 && <tspan class="num">{b.num}</tspan>}
+            <tspan x={STROKE + PAD + PREFIX * LABEL_SIZE * 0.6}>{line}</tspan>
+          </text>
+        ))}
+        {b.descLines.map((line, j) => (
+          <text
+            class="desc"
+            font-size={DESC_SIZE}
+            x={STROKE + PAD}
+            y={
+              b.top +
+              PAD +
+              b.labelLines.length * LABEL_LINE +
+              GAP_LABEL_DESC +
+              DESC_SIZE -
+              2 +
+              j * DESC_LINE
+            }
+          >
+            {line}
+          </text>
+        ))}
+        {i < boxes.length - 1 && (
+          <path
+            class="arrow"
+            d={`M${mid} ${b.top + b.height + 4} V${b.top + b.height + ARROW - 6} M${mid - 6} ${b.top + b.height + ARROW - 12} L${mid} ${b.top + b.height + ARROW - 6} L${mid + 6} ${b.top + b.height + ARROW - 12}`}
+            fill="none"
+            stroke-width={STROKE}
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
+        )}
+      </g>
+    ))}
+  </svg>
+  <figcaption>{t('attackChain.caption')}</figcaption>
+</figure>
+
+<style>
+  .attack-chain {
+    margin: var(--space-8) 0;
+  }
+
+  .chain {
+    display: block;
+    width: 100%;
+    max-width: var(--size-figure);
+    height: auto;
+    font-family: var(--font-mono);
+  }
+
+  .step {
+    --step-color: var(--color-accent);
+  }
+
+  .step--critical {
+    --step-color: var(--severity-critical);
+  }
+
+  .box {
+    fill: var(--color-surface);
+    stroke: var(--step-color);
+  }
+
+  .label {
+    fill: var(--color-text);
+    font-weight: var(--font-weight-medium);
+  }
+
+  .num {
+    fill: var(--step-color);
+  }
+
+  .desc {
+    fill: var(--color-muted);
+  }
+
+  .arrow {
+    stroke: var(--color-border-strong);
+  }
+
+  figcaption {
+    margin-top: var(--space-2);
+    color: var(--color-muted);
+    font-family: var(--font-mono);
+    font-size: var(--font-size-sm);
+  }
+</style>

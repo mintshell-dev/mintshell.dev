@@ -4,6 +4,13 @@ import { httpsUrl } from './portfolio';
 
 const text = z.string().trim().min(1);
 
+/**
+ * Độ dài tối đa của tiêu đề (ký tự): vừa 3 dòng tiêu đề trên ảnh OG 1200×630 mà không bị cắt
+ * (đo bằng renderer thật: tiếng Việt ≤ 135, tiếng Anh ≤ 124 ở cỡ 46px — ADR 0012). Đổi cỡ chữ
+ * hay bố cục ảnh thì đo lại và cập nhật số này.
+ */
+export const TITLE_MAX = 120;
+
 export const platforms = ['tryhackme', 'hackthebox', 'other'] as const;
 export const difficulties = ['easy', 'medium', 'hard', 'insane'] as const;
 
@@ -16,7 +23,10 @@ export type Difficulty = (typeof difficulties)[number];
  */
 export const writeupSchema = z
   .strictObject({
-    title: text,
+    title: text.max(
+      TITLE_MAX,
+      `title tối đa ${TITLE_MAX} ký tự để vừa 3 dòng tiêu đề ảnh OG (ADR 0012)`,
+    ),
     description: text,
     date: z.coerce.date(),
     updated: z.coerce.date().optional(),

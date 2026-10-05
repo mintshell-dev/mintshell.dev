@@ -34,6 +34,8 @@ plaintext — and log in as the administrator. No account required at any step._
 
 ## TL;DR — the whole chain
 
+<Callout type="tldr">
+
 `GET /api/fetch_layout?layout=…` joins a user-controlled filename to a base
 directory **without any traversal or absolute-path validation** → read `/etc/passwd`
 to prove arbitrary file read **as root** → read `/opt/Valenfind/app.py` to recover a
@@ -42,6 +44,27 @@ the whole **SQLite database (still unauthenticated)** → passwords are stored i
 **plaintext** → log in as the admin `cupid` → **total compromise**.
 
 Anonymous → admin, in under a minute, fully scriptable.
+
+</Callout>
+
+<AttackChain
+  label="Attack chain: anonymous request → root-level file read → leaked key → full DB → admin login."
+  steps={[
+    {
+      label: 'GET /api/fetch_layout',
+      description:
+        'Joins a user-controlled filename to a base directory without any traversal or absolute-path validation.',
+    },
+    { label: 'Read /etc/passwd', description: 'Proves arbitrary file read as root.' },
+    { label: 'Read /opt/Valenfind/app.py', description: 'Recovers a hardcoded ADMIN_API_KEY.' },
+    {
+      label: 'GET /api/admin/export_db',
+      description:
+        'The leaked key downloads the whole SQLite database; passwords are stored in plaintext.',
+    },
+    { label: 'Log in as the admin cupid', description: 'Total compromise.' },
+  ]}
+/>
 
 ## The target
 
@@ -71,12 +94,16 @@ with open(file_path, 'r') as f:
     return f.read()
 ```
 
+<Callout type="insight">
+
 Two Python details make this fatal:
 
 - **`os.path.join(base, "/etc/passwd")` returns `/etc/passwd`.** An absolute path in
   the second argument throws the base directory away entirely.
 - **`../` is never removed**, so a relative payload climbs out of the intended
   folder just as easily.
+
+</Callout>
 
 The only "protection" is a substring blocklist for `.db` / `seeder.py` — trivially
 sidestepped, and irrelevant to reading source or system files. Crucially, the
@@ -154,6 +181,8 @@ rung was unauthenticated or authenticated only by a secret the app leaked itself
 
 ## Impact
 
+<Callout type="critical">
+
 **Critical — CVSS 3.1 9.8** (`AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H`). The entire chain
 is remote, unauthenticated, deterministic, and scriptable in seconds:
 
@@ -163,7 +192,11 @@ is remote, unauthenticated, deterministic, and scriptable in seconds:
   obligations).
 - **Account takeover of every user, including the admin**, verified by login.
 
+</Callout>
+
 ## Recommended fix — break every rung
+
+<Callout type="fix">
 
 1. **Confine the path in `fetch_layout`.** Resolve with `os.path.realpath` and reject
    anything whose resolved path isn't inside the components directory, or better,
@@ -175,6 +208,8 @@ is remote, unauthenticated, deterministic, and scriptable in seconds:
 3. **Hash passwords** with bcrypt/argon2 (e.g.
    `werkzeug.security.generate_password_hash`). Plaintext storage turned a read bug
    into a full credential breach.
+
+</Callout>
 
 ## Takeaways
 

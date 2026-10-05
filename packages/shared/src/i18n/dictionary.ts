@@ -68,6 +68,13 @@ const vi = {
   'writeups.pendingLink': 'Đọc bản tiếng Việt',
   'code.copy': 'Sao chép',
   'code.copied': 'Đã chép',
+  'callout.tldr': 'TL;DR',
+  'callout.critical': 'Nghiêm trọng',
+  'callout.insight': 'Điểm mấu chốt',
+  'callout.note': 'Ghi chú',
+  'callout.fix': 'Khắc phục',
+  'attackChain.caption': 'Chuỗi tấn công',
+  'og.defaultAlt': 'mintshell — write-up CTF và pentest ứng dụng web',
 } as const;
 
 export type UiKey = keyof typeof vi;
@@ -139,6 +146,13 @@ const en: Record<UiKey, string> = {
   'writeups.pendingLink': 'Read the Vietnamese version',
   'code.copy': 'Copy',
   'code.copied': 'Copied',
+  'callout.tldr': 'TL;DR',
+  'callout.critical': 'Critical',
+  'callout.insight': 'Insight',
+  'callout.note': 'Note',
+  'callout.fix': 'Fix',
+  'attackChain.caption': 'Attack chain',
+  'og.defaultAlt': 'mintshell — CTF write-ups and web application pentesting',
 };
 
 export const ui: Record<Locale, Record<UiKey, string>> = { vi, en };

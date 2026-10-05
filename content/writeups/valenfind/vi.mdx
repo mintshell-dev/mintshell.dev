@@ -34,6 +34,8 @@ rồi đăng nhập với tư cách admin. Không cần tài khoản ở bất k
 
 ## TL;DR — toàn bộ chuỗi tấn công
 
+<Callout type="tldr">
+
 `GET /api/fetch_layout?layout=…` ghép một tên file do người dùng kiểm soát vào một thư
 mục gốc **mà không hề kiểm tra traversal hay đường dẫn tuyệt đối** → đọc `/etc/passwd`
 để chứng minh có thể đọc file tùy ý **bằng quyền root** → đọc `/opt/Valenfind/app.py`
@@ -42,6 +44,30 @@ tải về toàn bộ **cơ sở dữ liệu SQLite (vẫn không cần xác th�
 dạng **plaintext** → đăng nhập bằng admin `cupid` → **chiếm toàn bộ hệ thống**.
 
 Từ ẩn danh tới admin, trong chưa đầy một phút, hoàn toàn có thể viết script tự động.
+
+</Callout>
+
+<AttackChain
+  label="Chuỗi tấn công: request ẩn danh → đọc file bằng quyền root → khóa bị lộ → toàn bộ DB → đăng nhập admin."
+  steps={[
+    {
+      label: 'GET /api/fetch_layout',
+      description:
+        'Ghép một tên file do người dùng kiểm soát vào một thư mục gốc mà không hề kiểm tra traversal hay đường dẫn tuyệt đối.',
+    },
+    {
+      label: 'Đọc /etc/passwd',
+      description: 'Chứng minh có thể đọc file tùy ý bằng quyền root.',
+    },
+    { label: 'Đọc /opt/Valenfind/app.py', description: 'Lấy ra một ADMIN_API_KEY hardcode.' },
+    {
+      label: 'GET /api/admin/export_db',
+      description:
+        'Gửi khóa bị lộ và tải về toàn bộ cơ sở dữ liệu SQLite; mật khẩu được lưu dạng plaintext.',
+    },
+    { label: 'Đăng nhập bằng admin cupid', description: 'Chiếm toàn bộ hệ thống.' },
+  ]}
+/>
 
 ## Mục tiêu
 
@@ -71,12 +97,16 @@ with open(file_path, 'r') as f:
     return f.read()
 ```
 
+<Callout type="insight">
+
 Hai chi tiết của Python khiến lỗi này trở nên chí mạng:
 
 - **`os.path.join(base, "/etc/passwd")` trả về `/etc/passwd`.** Một đường dẫn tuyệt
   đối ở tham số thứ hai vứt bỏ hoàn toàn thư mục gốc.
 - **`../` không bao giờ bị loại bỏ**, nên một payload tương đối cũng leo ra khỏi thư
   mục dự kiến dễ dàng không kém.
+
+</Callout>
 
 "Biện pháp bảo vệ" duy nhất là một blocklist chuỗi con cho `.db` / `seeder.py` — né
 tránh cực kỳ dễ, và chẳng liên quan gì đến việc đọc source hay file hệ thống. Quan
@@ -156,6 +186,8 @@ chính ứng dụng tự làm lộ.
 
 ## Tác động
 
+<Callout type="critical">
+
 **Nghiêm trọng — CVSS 3.1 9.8** (`AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H`). Toàn bộ chuỗi
 tấn công đều từ xa, không cần xác thực, tất định và viết script được trong vài giây:
 
@@ -164,7 +196,11 @@ tấn công đều từ xa, không cần xác thực, tất định và viết s
   thoại và địa chỉ của cả 11 người dùng (PII kèm nghĩa vụ công bố vi phạm theo GDPR/CCPA).
 - **Chiếm quyền tài khoản của mọi người dùng, kể cả admin**, đã được xác nhận bằng đăng nhập.
 
+</Callout>
+
 ## Khuyến nghị khắc phục — chặn mọi nấc thang
+
+<Callout type="fix">
 
 1. **Giới hạn đường dẫn trong `fetch_layout`.** Phân giải bằng `os.path.realpath` và từ
    chối mọi đường dẫn đã phân giải mà không nằm trong thư mục components, hoặc tốt hơn,
@@ -176,6 +212,8 @@ tấn công đều từ xa, không cần xác thực, tất định và viết s
 3. **Hash mật khẩu** bằng bcrypt/argon2 (ví dụ
    `werkzeug.security.generate_password_hash`). Lưu plaintext đã biến một lỗi đọc file
    thành một vụ lộ credential toàn diện.
+
+</Callout>
 
 ## Bài học rút ra
 

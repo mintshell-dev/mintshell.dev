@@ -11,6 +11,8 @@ import { tokens } from '@mintshell/tokens';
 
 import Footer from '../components/Footer.astro';
 import Header from '../components/Header.astro';
+import { OG_HEIGHT, OG_WIDTH } from '../lib/og/cache';
+import { DEFAULT_OG_IMAGE } from '../lib/writeups';
 import '../styles/global.css';
 
 interface Props {
@@ -19,9 +21,13 @@ interface Props {
   description?: string;
   /** Trang không được index (404). */
   noindex?: boolean;
+  /** Ảnh Open Graph (đường dẫn cùng origin); mặc định ảnh chung của site (ADR 0012). */
+  ogImage?: string | undefined;
+  /** Mô tả ảnh OG; mặc định theo từ điển. */
+  ogImageAlt?: string | undefined;
 }
 
-const { title, description, noindex = false } = Astro.props;
+const { title, description, noindex = false, ogImage = DEFAULT_OG_IMAGE, ogImageAlt } = Astro.props;
 const path = Astro.url.pathname;
 const locale: Locale = localeFromPath(path);
 const t = useTranslations(locale);
@@ -32,6 +38,11 @@ const metaDescription = description ?? t('site.description');
 const ogLocale: Record<Locale, string> = { vi: 'vi_VN', en: 'en_US' };
 // Màu thanh trình duyệt: nền theme tối (theme mặc định), lấy từ token, không ghi cứng.
 const themeColor = tokens.theme.dark.color.bg;
+// og:image phải là URL tuyệt đối; luôn cùng origin với site, không nhận URL ngoài.
+const ogImageUrl = new URL(ogImage, site);
+if (ogImageUrl.origin !== new URL(site).origin)
+  throw new Error(`ogImage phải cùng origin: ${ogImage}`);
+const imageAlt = ogImageAlt ?? t('og.defaultAlt');
 // Feed RSS cùng ngôn ngữ với trang (ADR 0010); không có hreflang nên tách khỏi cặp alternate SEO.
 const feedHref = new URL(localizePath('/rss.xml', locale), site).href;
 ---
@@ -67,6 +78,14 @@ const feedHref = new URL(localizePath('/rss.xml', locale), site).href;
     <meta property="og:title" content={fullTitle} />
     <meta property="og:description" content={metaDescription} />
     <meta property="og:locale" content={ogLocale[locale]} />
+    <meta property="og:image" content={ogImageUrl.href} />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content={String(OG_WIDTH)} />
+    <meta property="og:image:height" content={String(OG_HEIGHT)} />
+    <meta property="og:image:alt" content={imageAlt} />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:image" content={ogImageUrl.href} />
+    <meta name="twitter:image:alt" content={imageAlt} />
   </head>
   <body>
     <a class="skip-link" href="#main">

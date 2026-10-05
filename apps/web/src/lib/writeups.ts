@@ -120,3 +120,15 @@ export async function prevNext(
   if (i === -1) return { prev: undefined, next: undefined };
   return { prev: list[i - 1], next: list[i + 1] };
 }
+
+/** Ảnh mặc định của site, dùng cho trang không có cover riêng (ADR 0012). */
+export const DEFAULT_OG_IMAGE = '/og/default.png';
+
+/** Đường dẫn ảnh cover của một write-up; vi và en có ảnh riêng vì tiêu đề khác nhau. */
+export function ogImagePath(locale: Locale, slug: string): string {
+  return locale === 'vi' ? `/og/writeups/${slug}.png` : `/og/en/writeups/${slug}.png`;
+}
+
+/** Trang write-up có cover riêng: mọi bài được build, trừ bản en chưa dịch (dùng ảnh mặc định). */
+export const hasCover = (locale: Locale, entry: WriteupEntry): boolean =>
+  !(locale === 'en' && entry.data.translation === 'pending');

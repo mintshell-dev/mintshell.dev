@@ -30,6 +30,35 @@ curl -s "https://example.com/health" | grep -i ok
 echo "redacted flag: THM{<redacted>}"
 ```
 
+## Content components
+
+<Callout type="tldr">Sample TL;DR block.</Callout>
+
+<Callout type="critical">Sample critical block.</Callout>
+
+<Callout type="insight">Sample insight block.</Callout>
+
+<Callout type="note" title="Custom note">
+
+Sample note block with an overridden label and inline `code`.
+
+</Callout>
+
+<Callout type="fix">Sample fix block.</Callout>
+
+<AttackChain
+  label="Sample chain: step one → critical step two → step three."
+  steps={[
+    { label: 'Step one', description: 'Short description of step one.' },
+    {
+      label: 'Step two',
+      description: 'The middle step is marked critical; the last one is not.',
+      critical: true,
+    },
+    { label: 'Step three', description: 'Short description of step three.' },
+  ]}
+/>
+
 ### A subsection
 
 A level-three heading to check the two-level table of contents.
