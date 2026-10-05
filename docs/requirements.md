@@ -11,7 +11,7 @@ Website cá nhân `mintshell.dev` chia sẻ kiến thức pentest ứng dụng w
 - **Tìm kiếm**: Pagefind (tĩnh, chạy phía client).
 - **RSS**: feed cho mỗi ngôn ngữ.
 - **Giao diện**: phong cách "Terminal tinh tế", mặc định tối, có chế độ sáng (xem [design-system.md](design-system.md)).
-- **Đồng bộ Notion** (M4): soạn nháp trong Notion, đồng bộ về MDX trong Git.
+- **Đồng bộ Notion** (M4): soạn nháp trong Notion; script chạy thủ công (token chỉ-đọc, không CI) kéo bài "Ready" về `_import/`, tác giả tự xử lý thành MDX trong Git.
 - **Bảo mật**: security headers, CSP chặt, `/.well-known/security.txt`.
 - **Newsletter**: Brevo, double opt-in.
 - **Analytics**: Cloudflare Web Analytics (không cookie).

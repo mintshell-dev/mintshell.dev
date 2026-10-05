@@ -1,220 +1,83 @@
 # Tiến độ
 
-Quỹ thời gian: 5–10 giờ/tuần, mỗi mốc khoảng 1 tuần.
+Quỹ thời gian: 5–10 giờ/tuần, mỗi mốc khoảng 1 tuần. Định nghĩa hoàn thành: [workflow.md](workflow.md).
 
-## Định nghĩa hoàn thành
+**Tiếp theo: M4 — đồng bộ Notion thủ công.**
 
-1. `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build`, `pnpm test:dist`, `pnpm format:check` đều qua.
-2. Cập nhật `docs/progress.md`.
-3. Thêm ADR trong `docs/adr/` khi có quyết định kiến trúc.
+| Mốc | Mục tiêu                                                  | Trạng thái | ADR                                                                          |
+| --- | --------------------------------------------------------- | ---------- | ---------------------------------------------------------------------------- |
+| M0  | Khung monorepo                                            | Xong       | [0001](adr/0001-typescript-monorepo.md)–[0005](adr/0005-lint-format-test.md) |
+| M1  | Design token                                              | Xong       | [0006](adr/0006-design-token-pipeline.md)                                    |
+| M2a | Layout chung, menu, chuyển theme và ngôn ngữ              | Xong       | [0007](adr/0007-layout-theme-url.md)                                         |
+| M2b | Portfolio và hiệu ứng                                     | Xong       | [0008](adr/0008-portfolio-data-css-motion.md)                                |
+| M3a | Khung write-up (collection, trang, tô màu cú pháp)        | Xong       | [0009](adr/0009-writeup-content-model.md)                                    |
+| M3b | Pagefind, RSS, trang chủ                                  | Xong       | [0010](adr/0010-search-feed.md)                                              |
+| M3c | Callout, sơ đồ chuỗi tấn công, ảnh cover OG               | Xong       | [0012](adr/0012-mdx-components-og-image.md)                                  |
+| M3  | Nội dung (bài thật)                                       | Đang làm   | —                                                                            |
+| M4  | Đồng bộ Notion (thủ công)                                 | Tiếp theo  | —                                                                            |
+| M5  | CI/CD, security headers, security.txt                     | Chưa làm   | —                                                                            |
+| M6  | Email Brevo, chính sách quyền riêng tư, analytics, ra mắt | Chưa làm   | —                                                                            |
 
-| Mốc | Mục tiêu                                                  | Trạng thái |
-| --- | --------------------------------------------------------- | ---------- |
-| M0  | Khung monorepo                                            | Xong       |
-| M1  | Design token                                              | Xong       |
-| M2a | Layout chung, menu, chuyển theme và ngôn ngữ              | Xong       |
-| M2b | Portfolio và hiệu ứng                                     | Xong       |
-| M3a | Khung write-up (collection, trang, tô màu cú pháp)        | Xong       |
-| M3b | Pagefind, RSS, trang chủ                                  | Xong       |
-| M3c | Callout, sơ đồ chuỗi tấn công, ảnh cover OG               | Xong       |
-| M3  | Nội dung (bài thật)                                       | Đang làm   |
-| M4  | Đồng bộ Notion                                            | Chưa làm   |
-| M5  | CI/CD, security headers, security.txt                     | Chưa làm   |
-| M6  | Email Brevo, chính sách quyền riêng tư, analytics, ra mắt | Chưa làm   |
+## Mốc đã xong (tóm tắt)
 
-## M0 — Khung monorepo
+Chi tiết nguyên văn từng mốc: [history/m0-m3.md](history/m0-m3.md).
 
-- [x] Dev Container có tường lửa
-- [x] Pre-commit gitleaks
-- [x] Tài liệu nền (CLAUDE.md, docs/, ADR 0001–0004)
-- [x] Khung pnpm + Turborepo (`apps/web`, `packages/*`)
-- [x] Lệnh lint, typecheck, test, build chạy được; dev server phục vụ `/` (vi) và `/en`
-- [x] Công cụ lint/format/test và chính sách cài gói ([ADR 0005](adr/0005-lint-format-test.md)):
-      `minimumReleaseAge` 1 ngày (strict), `allowBuilds` không cho phép gói nào, lockfile được commit
-- [x] Vá hàng rào format (`chore/format-gate`): `format:check` vào "Định nghĩa hoàn thành"
-      (CLAUDE.md + bảng trên) và thêm hook `prettier --check` trong `.pre-commit-config.yaml`
-      (chặn commit file lệch định dạng, không thêm dependency); format lại 6 file M3a lỡ lọt
-      (M3a merge khi DoD chưa có `format:check`)
+- **M0**: Dev Container có tường lửa, gitleaks + `prettier --check` ở pre-commit, pnpm + Turborepo, lint/format/test, `minimumReleaseAge` + `allowBuilds`.
+- **M1**: token W3C → `tokens.css`/`tokens.ts` bằng script tự viết, theme tối/sáng, test tương phản WCAG AA, font tự host.
+- **M2a**: `BaseLayout` (canonical, hreflang), header/footer, đổi theme chống nháy, đổi ngôn ngữ, URL không `/` cuối, i18n trong `packages/shared`, bộ kiểm tra `test:dist`.
+- **M2b**: portfolio dữ liệu YAML + Zod, hiệu ứng chỉ CSS, bộ nhận diện (favicon, `BrandMark`).
+- **M3a**: collection `writeups` + schema strict, trang danh sách/chi tiết, en `pending`, Prism không `style=`, chặn flag chưa che và HTML nguy hiểm trong `test:dist`.
+- **M3b**: Pagefind tĩnh, RSS vi/en, trang chủ thật, fixture draft.
+- **M3c**: `Callout`, `AttackChain`, ảnh OG sinh lúc build (sharp, cache theo nội dung), `TITLE_MAX = 120`.
 
-## M1 — Design token
+## M4 — Đồng bộ Notion (thủ công)
 
-- [x] Token W3C Design Tokens trong `packages/tokens/tokens/` (base, theme tối, theme sáng), thêm `color.onAccent`
-- [x] Script TS tự viết sinh `dist/tokens.css` và `dist/tokens.ts` ([ADR 0006](adr/0006-design-token-pipeline.md))
-- [x] `:root` là theme tối, `[data-theme="light"]` là theme sáng, `prefers-reduced-motion` đưa thời lượng chuyển động về 0
-- [x] Severity tách theo theme (theme sáng dùng tông đậm)
-- [x] Test Vitest: tương phản WCAG AA (chữ, severity, onAccent) ở cả hai theme; CSS sinh ra đủ biến
-- [x] Font tự host bằng `@fontsource` (Be Vietnam Pro 400/500/600, JetBrains Mono 400/500), không có `data:` URI trong CSS
-- [x] `apps/web`: `global.css` nạp token và font; nền, chữ, font dùng token
-- [x] Review bảo mật: generator kiểm tra giá trị token theo allowlist (L1), `inlineStylesheets: 'never'` (L2)
+Chạy bằng tay trên máy, không CI. Checklist chi tiết sẽ chốt khi lập kế hoạch M4.
 
-## M2a — Layout chung, menu, chuyển theme và ngôn ngữ
+- [ ] `scripts/notion-pull.ts`: kéo các bài trạng thái "Ready" bằng token Notion chỉ-đọc, lưu vào
+      `content/writeups/_import/` (collection bỏ qua thư mục `_`, ADR 0009); site không gọi Notion lúc chạy
+- [ ] Token chỉ nằm trên máy (biến môi trường), không CI, không commit; gitleaks phải qua
+- [ ] `_import/` vào `.gitignore`: nháp có thể còn flag/IP chưa che
+- [ ] Script quét và cảnh báo flag (`THM{…}`, `HTB{…}`…) và địa chỉ IP trong file vừa kéo về
+- [ ] Xử lý thủ công như bài ValenFind: chuyển sang `content/writeups/<slug>/{vi,en}.mdx`, frontmatter theo
+      `apps/web/src/schemas/writeup.ts` (sai schema → build lỗi), slug ASCII vĩnh viễn
+- [ ] Nội dung Notion là dữ liệu không tin cậy: `inline.check` chặn `on*=`/thẻ nguy hiểm; cân nhắc `rehype-sanitize`
+- [ ] Tự gắn `rel="noopener noreferrer"` cho link ngoài trong thân MDX (hoãn từ M3a, review M3c L3)
+- [ ] Ảnh từ Notion tải về cùng bài (URL Notion có hạn), dùng `astro:assets`, `alt` bắt buộc, bỏ metadata
+- [ ] Client Notion: `fetch` thẳng API (0 dependency) hay `@notionhq/client` (phải hỏi trước, ghim `catalog:`)
+- [ ] Unit test chuyển đổi Notion → MDX và bộ quét flag/IP; `test:dist` vẫn qua
+- [ ] ADR cho quy trình đồng bộ Notion
+- [ ] Review bảo mật (security-reviewer)
 
-- [x] `BaseLayout.astro`: `<html lang>` theo ngôn ngữ, `data-theme`, meta cơ bản + Open Graph, `canonical` và `hreflang` (vi, en, x-default → vi); trang 404 `noindex`
-- [x] Header: handle mono `mintshell_` (dấu `_` màu accent), menu write-ups/cheatsheets/portfolio có `aria-current`, gạch chân chạy từ trái sang; trên di động menu tự xuống dòng
-- [x] Nút đổi ngôn ngữ và nút đổi theme: vuông 44px (`size.control`), viền `color.borderStrong`, icon SVG nội tuyến, `aria-label` song ngữ
-- [x] Footer: `© 2026 mintshell`, giấy phép MIT (code) và CC BY 4.0 (nội dung), chữ nhỏ, muted, mono
-- [x] Trang tạm `/writeups`, `/cheatsheets`, `/portfolio` và bản `/en`; trang 404 vi (`404.html`) và en (`en/404.html`)
-- [x] Chống nháy theme: `public/theme-init.js` chặn render trong `<head>` (đã lưu → hệ điều hành → tối), localStorage bọc try/catch; gắn `data-js` để chỉ hiện nút theme khi có JavaScript; test bằng `node:vm`
-- [x] Không script/style nội tuyến trong HTML build (CSP M5 chỉ cần `'self'`); nút theme dùng script Astro, chưa thêm React ([ADR 0007](adr/0007-layout-theme-url.md))
-- [x] i18n chuyển sang `packages/shared`: hàm thuần `localizePath` (`/x` ↔ `/en/x`, chặn `//host`) có test; từ điển chuỗi giao diện, test vi/en cùng tập khóa
-- [x] URL không có `/` cuối: `trailingSlash: 'never'`, `build.format: 'file'` (ADR 0007)
-- [x] Token mới: `color.borderStrong` (≥ 3:1 trên bg/surface ở cả hai theme, có test), `size.*`, `border.width.*`, `font.size.*`
-- [x] Truy cập: link "Bỏ qua tới nội dung", `:focus-visible` dùng accent, điều hướng bàn phím, chuyển động tôn trọng `prefers-reduced-motion`
-- [x] Không thêm dependency bên ngoài (chỉ liên kết nội bộ `@mintshell/shared`)
-- [x] Sửa sau kiểm tra thủ công: dev server nghe `127.0.0.1`, khoảng trắng trong footer, bỏ `tabindex` trên `<main>`, dịch "mã nguồn"
-- [x] Bộ kiểm tra bản build `pnpm test:dist` (turbo chạy `build` trước, Vitest config riêng `apps/web/vitest.dist.config.ts`, file `test-dist/*.check.ts`): không script/style/`style=` nội tuyến, không `data:` URI, CSS chỉ tham chiếu tài nguyên cùng origin, canonical/hreflang tuyệt đối không đuôi `.html`, footer đúng khoảng trắng, skip link, 404 song ngữ
+## Việc còn mở từ các mốc đã xong
 
-## M2b — Portfolio và hiệu ứng
+Chép nguyên văn từ chi tiết mốc.
 
-- [x] `/portfolio`, `/en/portfolio` bố cục kiểu tạp chí: hero hai cột + terminal giả, dải số liệu, cách làm việc, kỹ năng, việc đã làm, ghi nhận, liên hệ (`id="lien-he"`)
-- [x] Dữ liệu trong `content/portfolio/{vi,en}.yaml`, content collection + schema Zod; sai schema thì build lỗi; URL chỉ `https://`; có unit test schema ([ADR 0008](adr/0008-portfolio-data-css-motion.md))
-- [x] Phần "// hành trình" (sau dải số liệu, trước "cách tôi làm việc"): câu chuyện nghề nghiệp chỉ kể ở đây, hero intro chỉ giữ vai trò và giá trị; không có chi tiết định danh (tuổi, ngành cũ, nơi làm việc)
-- [x] Nút "Tải CV", link mạng xã hội, dòng PGP chỉ hiện khi có dữ liệu; hàng dự án chỉ là link (có hover, ↗) khi có URL
-- [x] Hiệu ứng chỉ CSS: hero trượt lên so le, terminal gõ chữ bằng `steps()`, hiện dần khi cuộn (`animation-timeline: view()` trong `@supports`), hover nút/hàng dự án; `prefers-reduced-motion` hiện ngay trạng thái cuối
-- [x] Không `style=`, không JS cho hiệu ứng; terminal giả `aria-hidden`
-- [x] Token mới: `font.size.2xl–5xl`, `font.lineHeight.*` (`$type: number`), `motion.easing.out` (`$type: cubicBezier`), `motion.duration.type`; generator kiểm tra allowlist cho hai `$type` mới
-- [x] Header di động: handle và hai nút cùng hàng, menu xuống hàng hai
-- [x] `test:dist` cho portfolio: email, `id="lien-he"`, không `style=`, chỉ 2 script, terminal ẩn, link ngoài https, hàng tĩnh không phải link, vi/en cùng số hàng
-- [x] Xóa `BaseLayout.astro.save` bị commit nhầm; `.gitignore` thêm mẫu file tạm của trình soạn thảo
-- [x] Đính chính dữ liệu cho trung thực: kinh nghiệm 6 năm (4 năm lập trình web, 2 năm bảo mật), TryHackMe 100k+ điểm, bỏ HackTheBox và Hall of Fame; danh sách ghi nhận được phép rỗng (rỗng thì ẩn phần "// ghi nhận")
-- [x] Sửa cache turbo: `apps/web/turbo.json` thêm `content/**` vào đầu vào của `build` (trước đó sửa YAML vẫn `cache hit`, build và `test:dist` chạy trên dữ liệu cũ)
-- [x] Bộ nhận diện: `favicon.svg`, `favicon-32.png`, `apple-touch-icon.png`, `theme-color` từ token; `test:dist` kiểm tra thẻ icon trên mọi trang và favicon SVG an toàn
-- [x] Bỏ metadata C2PA khỏi favicon (PNG 7036 → 1266 B và 11424 → 5654 B, SVG 8409 → 635 B, pixel không đổi); `test:dist` chặn chunk metadata PNG và `<metadata>` SVG; `brand/` là nguồn gốc bộ nhận diện
-- [x] `BrandMark.astro` (SVG nội tuyến, màu theo token, biến thể `mark`/`avatar`): header mọi trang và phần liên hệ portfolio; test tương phản đồ họa ≥ 3:1 và `test:dist` cho SVG nội tuyến
+### M2b
+
 - [ ] Chờ dữ liệu thật: số phòng TryHackMe, số write-up, số báo cáo bug bounty, chứng chỉ, URL GitHub/YouTube/HackerOne, link CV, fingerprint PGP, URL dự án video và cộng đồng
 - [ ] Duyệt bản tiếng Anh của `content/portfolio/en.yaml`
 
-## M3a — Khung hệ thống write-up
+### M3a
 
-- [x] Content collection `writeups` (glob `**/{vi,en}.mdx`, id `<slug>/<locale>`), schema Zod
-      strict `apps/web/src/schemas/writeup.ts`: platform/difficulty/tags/vulnClasses/translation/
-      draft…; `platform: hackthebox` bắt buộc `retired: true`; `draft` ẩn khỏi bản build công khai
-      ([ADR 0009](adr/0009-writeup-content-model.md))
-- [x] Trường `fixture`: build ra trang chi tiết để `test:dist` soi nhưng không hiện ở danh sách
-- [x] Trang `/writeups`, `/en/writeups`: danh sách hàng lớn (nền tảng, độ khó, tag, ngày), loại
-      bài draft và bài thiếu ngôn ngữ; trang chi tiết `/writeups/<slug>` + `/en/...`: metadata
-      (nền tảng, phòng + link, độ khó, loại lỗi, ngày, thời gian đọc), mục lục h2/h3, điều hướng
-      trước/sau
-- [x] Bản en `translation: pending`: `noindex`, thông báo + link bản vi, không khai báo
-      `<link alternate hreflang>` cho cặp đó
-- [x] Tô màu cú pháp bằng **Prism built-in** (0 dependency thêm cho tô màu): chỉ sinh class
-      `.token.*`, không `style=`; token màu `color.syntax.*` trong `packages/tokens` (tách theo
-      theme), test tương phản ≥ 4.5:1 trên `color.surface` ở cả hai theme; CSS ánh xạ
-      `apps/web/src/styles/prism.css` chỉ tham chiếu biến
-- [x] Nút sao chép qua script ngoài `public/copy-code.js` (không nội tuyến, progressive
-      enhancement); ảnh qua `astro:assets`, `alt` bắt buộc
-- [x] Dependency mới: `@astrojs/mdx` (render `.mdx`), ghim `catalog:` trong `pnpm-workspace.yaml`
-- [x] `test:dist` (`writeups.check.ts`): bắt flag `THM{…}`/`HTB{…}` chưa che (kể cả HTML-escaped),
-      xác nhận `.token.*`, fixture ẩn khỏi danh sách, nhánh en pending noindex + không hreflang;
-      `seo.check` tổng quát hoá "noindex → không canonical/hreflang" (dùng cho cả 404 lẫn pending)
-- [x] Phòng thủ nội dung MDX nhiều tầng: `inline.check` (phòng tuyến trước) làm build FAIL nếu
-      HTML có handler `on*=` trong thẻ thật hoặc thẻ nguy hiểm `iframe/object/embed/form` (phủ cả
-      output MDX; chuỗi escaped trong khối code không dính); CSP M5 là phòng tuyến hai
-- [x] Ép slug ASCII (`^[a-z0-9]+(-[a-z0-9]+)*$`) khi nạp collection: tên thư mục sai làm build lỗi
-- [x] Fixture `content/writeups/sample-writeup` (bản thường) và `sample-pending` (thử nhánh pending)
 - [ ] **Hoãn sang M4** (đã chốt): tự gắn `rel`/`target` cho link ngoài trong _thân_ MDX. Astro 7
       dùng Sätteri nên rehype/remark plugin cần cài `@astrojs/markdown-remark` (không "0 dep"); sẽ
       cân nhắc cùng `rehype-sanitize` khi thêm pipeline nội dung Notion ở M4. - Khoảng trống: link ngoài trong thân MDX chưa tự có `rel="noopener noreferrer"` (metadata
       `roomUrl` thì đã có). - Rủi ro hiện tại: thấp (chỉ reverse tabnabbing; nội dung trong Git là tin cậy). - Phòng tuyến tạm: CSP ở M5; xử lý dứt điểm ở M4 cùng `rehype-sanitize`. - Viết bài thủ công: nếu muốn chắc, tự thêm `rel` vào thẻ `<a>` cho link ngoài.
-- [x] Pagefind, RSS, trang chủ: xem M3b
 - [ ] Chưa làm: trang theo tag, bình luận
 
-## M3b — Pagefind, RSS và trang chủ
+### M3b
 
-- [x] Tìm kiếm Pagefind tĩnh ([ADR 0010](adr/0010-search-feed.md)): `apps/web/scripts/search-index.ts`
-      (Node API), turbo task `search:index` (`dependsOn: build`), `test:dist` chạy sau index, `pnpm build`
-      ở gốc gồm cả index; `pagefind` không có install script, `allowBuilds` không đổi
-- [x] Chỉ index write-up thật: `data-pagefind-body` trên `<article>` không fixture; pending/draft tự loại;
-      mục lục, meta, PrevNext `data-pagefind-ignore`; index tách vi/en theo `<html lang>`
-- [x] Trang `/search`, `/en/search`: UI tự dựng trên Pagefind API (không UI mặc định, xóa bundle UI khỏi
-      dist), không `innerHTML`, excerpt chỉ giữ `<mark>`, URL kết quả chỉ cùng origin; không `<form>`;
-      `<noscript>`; thông báo khi chạy `astro dev` (chưa có index); token-only
-- [x] Header thêm mục `search` / `tìm kiếm`
-- [x] RSS `/rss.xml`, `/en/rss.xml` (`@astrojs/rss`): công khai, không draft/fixture, en bỏ pending, mới nhất
-      trước, link tuyệt đối; `lib/feed.ts` hàm thuần; `<link rel="alternate" type="application/rss+xml">`
-      trong `BaseLayout` theo ngôn ngữ
-- [x] Unit test escape XML: dữ liệu `& < > "`/thẻ giả/`]]>` qua `toFeedItems` + `getRssString` →
-      `XMLValidator` hợp lệ, có entity, parse lại đúng chuỗi gốc; unit test `resultHref`/`excerptParts`
-- [x] Trang chủ thật (`components/home/HomePage.astro`): hero + 2 CTA (write-ups, portfolio), 5 write-up
-      mới nhất (tái dùng `WriteupList`), link RSS và tìm kiếm; hiệu ứng `.rise`/`.reveal` sẵn có; chuỗi
-      trong từ điển vi/en (`home.*`, `search.*`, `feed.*`, `nav.search`)
-- [x] Fixture `sample-draft` (`draft: true`, không `fixture`) chứng minh bộ lọc draft; thử đột biến
-      (đổi sang `draft: false`) làm `home`, `rss`, `writeups` check fail
-- [x] `test:dist`: `search.check` (index chỉ chứa write-up công khai, đủ vi/en, không bundle UI, script
-      cùng origin), `rss.check` (XML hợp lệ, đúng tập bài, link tuyệt đối, thứ tự, feed link mọi trang),
-      `home.check`, draft không build ra trang; tập bài công khai tính độc lập từ frontmatter nguồn
-- [x] Dependency mới: `pagefind`, `@astrojs/rss`, `fast-xml-parser` (dev), ghim trong `catalog:`
-- [x] Sửa theo review bảo mật: L1 `search-index.ts` chỉ quét write-up, dừng khi không có
-      `data-pagefind-body`, đối chiếu số trang (thử đột biến: bỏ thuộc tính → build fail); L2 allowlist
-      file lõi `dist/pagefind` (bỏ `pagefind-highlight.js`); L3 CSP Pagefind chỉ cho trang search (M5);
-      L4 feed lọc ký tự điều khiển C0 (thử đột biến: bỏ lọc → unit test fail); I3 đếm kết quả hiển thị
-      thật, bắt lỗi tìm kiếm (`search.error`)
-- [x] Sửa nhãn `<nav>` bài trước/sau (trước đây trùng "Mục lục"): khóa `writeups.prevNext` vi/en;
-      `test:dist` kiểm tra mọi trang write-up không có `<nav>` trùng nhãn (PrevNext chỉ render khi có
-      ≥ 2 bài công khai; đã thử đột biến với 2 bài: nhãn cũ → 4 trang fail)
-- [x] Tiêu đề trang chủ: "bền hơn" → "an toàn hơn" (en: "so it is safer next time")
-- [x] Kiểm tra thủ công trên trình duyệt (`pnpm build && pnpm --filter web preview`): gõ tìm, bàn phím,
-      reduced-motion, theme sáng
 - [ ] Chưa làm (đã chốt): trang theo tag, bình luận, sitemap (M5)
 
-## M3c — Thành phần nội dung phong phú cho write-up
+### M3c
 
-- [x] `Callout.astro` ([ADR 0012](adr/0012-mdx-components-og-image.md)): 5 loại `tldr|critical|insight|note|fix`, màu token
-      theo loại, icon SVG `currentColor` `aria-hidden`, nhãn từ từ điển theo ngôn ngữ trang, `title` ghi đè,
-      `role="note"`; loại lạ làm build lỗi
-- [x] `AttackChain.astro`: SVG nội tuyến `role="img"` + `aria-label`, ô dọc + mũi tên `path` (không `<marker>`/`url()`),
-      bước critical (đánh dấu hoặc mặc định bước cuối) dùng `severity.critical`; props validate Zod; `wrapText`
-      ngắt dòng mono (NFC, cắt cứng từ dài), `max-width: size.figure`, đọc được ở màn 320px
-- [x] Component dùng trong MDX không cần import: `mdxComponents` truyền qua `<Content components>`
-- [x] Token mới `border.width.accent` (3px), `size.figure` (28rem); test tương phản callout trên `surface` ở cả hai theme
-- [x] Từ điển: `callout.*`, `attackChain.caption`, `og.defaultAlt` (vi/en cùng tập khóa)
-- [x] Ảnh cover OG 1200×630 sinh lúc build bằng endpoint tĩnh: `/og/writeups/<slug>.png`, `/og/en/writeups/<slug>.png`,
-      `/og/default.png`; sharp + Pango, font `@fontsource` đổi WOFF1 → TTF (`lib/og/woff.ts`, 0 dependency);
-      guard font thật/font giả (thử đột biến: sai tên family → build fail); không gọi dịch vụ ngoài
-- [x] Spike font trước khi viết renderer: cover vi tiêu đề ValenFind đủ dấu, đã được duyệt bằng mắt
-- [x] Cache ảnh OG theo nội dung (`lib/og/cache.ts`): khóa sha256 của dữ liệu thẻ + dấu vân tay renderer (mã nguồn
-      `lib/og`, màu token, font, phiên bản sharp); lưu `apps/web/node_modules/.cache/og/` (gitignore); build lần hai
-      toàn `cache`, sửa thân bài không render lại ảnh
-- [x] `BaseLayout`: `og:image` (+ type/width/height/alt), `twitter:card summary_large_image`, `twitter:image`; ảnh phải
-      cùng origin; trang không có cover (404, trang thường, en pending) dùng ảnh mặc định
-- [x] ValenFind vi/en: callout TL;DR, insight (hai chi tiết `os.path.join`), critical (Tác động), fix (Khuyến nghị) và
-      sơ đồ 5 bước ngay sau TL;DR, chỉ dùng nội dung đã có; fixture `sample-writeup` phủ đủ 5 loại, `title`, critical ở giữa
-- [x] `test:dist`: `og.check` (đúng một og:image mỗi trang, cùng origin, PNG 1200×630 không metadata, cover riêng cho
-      mỗi bài công khai, mặc định cho trang khác, `dist/og` chỉ PNG hợp lệ), `content-components.check` (loại/nhãn
-      callout theo ngôn ngữ, `role`/`aria-label`/bước critical của sơ đồ, không `style=`/script/`on*=`); thử đột biến:
-      xóa cover, sai kích thước, og:image ngoài origin, og:image trùng, `style=` trong callout → đều fail
-- [x] Dependency: `sharp` 0.35.5 (devDependency `web`, `catalog:`) — đã có trong lockfile qua `astro`, không tải gói mới,
-      không install script, `allowBuilds` không đổi
-- [x] Review bảo mật (security-reviewer): không có Critical/High. Đã sửa: M1 `.pnpm-store/` vào `.gitignore`;
-      L1 parser WOFF chặn zip bomb (trần 16 MiB, `maxOutputLength`, tổng khớp header; thử đột biến); L4 bỏ ký tự
-      `\p{Cf}` (bidi/zero-width) khỏi chữ trên ảnh; Info: assert màu token `#RRGGBB`, `Callout` kiểm kiểu `title`,
-      `test:dist` chặn thêm chunk `tIME`. Hoãn: L2 (ràng buộc cache CI, xem M5), L3 (`rel` link ngoài, đã hoãn M4)
-- [x] Giới hạn độ dài `title` của write-up: `TITLE_MAX = 120` trong `schemas/writeup.ts`, vượt thì build lỗi kèm thông
-      báo (thử đột biến: tiêu đề 141 ký tự → build fail). Con số đo bằng renderer OG thật: 3 dòng ở 46px vừa ≤ 135 ký tự
-      tiếng Việt, ≤ 124 tiếng Anh, nên 120 không bao giờ bị cắt với tiêu đề thường (200 sẽ bị cắt). Unit test
-      `writeup.test.ts` (biên 120/121, trim, tiêu đề ValenFind thật); lý do ghi trong ADR 0012
 - [ ] Giới hạn cache OG (M5/tương lai): CI cần giữ `apps/web/node_modules/.cache/og` giữa các lần chạy mới có lợi;
       cache không tự dọn ảnh mồ côi (xóa thư mục bất kỳ lúc nào là an toàn)
 - [ ] Vite cảnh báo `MODULE_LEVEL_DIRECTIVE "use astro:head-inject"` khi MDX dùng component có style: chỉ là cảnh
       báo (CSS vẫn được nạp, đã kiểm tra); xem lại khi nâng Astro
-- [x] Kiểm tra thủ công trên trình duyệt: callout và sơ đồ ở theme sáng/tối, bề rộng 320px
 - [ ] Thử chia sẻ link (trình xem trước OG) sau khi deploy (M5)
 - [ ] Chưa làm (đã chốt): trang theo tag, cheatsheet, phân tích CVE, `og:type=article`/`article:*` (M5)
-
-## M4 — Đồng bộ Notion
-
-- [ ] Script đồng bộ trong `scripts/`: lấy trang từ Notion → sinh MDX vào `content/writeups/<slug>/{vi,en}.mdx`;
-      site không gọi Notion lúc chạy; kết quả đưa vào Git qua Merge Request
-- [ ] Token Notion chỉ qua biến môi trường, không commit; gitleaks phải qua
-- [ ] Ánh xạ thuộc tính Notion → frontmatter theo schema `apps/web/src/schemas/writeup.ts` (sai schema → build lỗi);
-      slug ASCII, slug đã xuất bản không đổi
-- [ ] Nội dung Notion là dữ liệu không tin cậy: `rehype-sanitize` (hoãn từ M3a), chặn `on*=`, thẻ nguy hiểm, `style=`
-- [ ] Tự gắn `rel="noopener noreferrer"` cho link ngoài trong thân MDX (hoãn từ M3a, review M3c L3)
-- [ ] Ảnh từ Notion tải về repo (URL Notion có hạn), dùng `astro:assets`, `alt` bắt buộc, bỏ metadata
-- [ ] Dependency mới (Notion SDK, `@astrojs/markdown-remark`, `rehype-sanitize`…) phải hỏi trước, ghim `catalog:`
-- [ ] Unit test chuyển đổi Notion → MDX và sanitize; `test:dist` vẫn qua
-- [ ] ADR cho pipeline đồng bộ Notion
-- [ ] Review bảo mật (security-reviewer)
 
 ## Bảo trì
 
