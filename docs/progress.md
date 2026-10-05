@@ -16,6 +16,7 @@ Quỹ thời gian: 5–10 giờ/tuần, mỗi mốc khoảng 1 tuần.
 | M2b | Portfolio và hiệu ứng                                     | Xong       |
 | M3a | Khung write-up (collection, trang, tô màu cú pháp)        | Xong       |
 | M3b | Pagefind, RSS, trang chủ                                  | Xong       |
+| M3c | Callout, sơ đồ chuỗi tấn công, ảnh cover OG               | Xong       |
 | M3  | Nội dung (bài thật)                                       | Đang làm   |
 | M4  | Đồng bộ Notion                                            | Chưa làm   |
 | M5  | CI/CD, security headers, security.txt                     | Chưa làm   |
@@ -156,6 +157,50 @@ Quỹ thời gian: 5–10 giờ/tuần, mỗi mốc khoảng 1 tuần.
       reduced-motion, theme sáng
 - [ ] Chưa làm (đã chốt): trang theo tag, bình luận, sitemap (M5)
 
+## M3c — Thành phần nội dung phong phú cho write-up
+
+- [x] `Callout.astro` ([ADR 0012](adr/0012-mdx-components-og-image.md)): 5 loại `tldr|critical|insight|note|fix`, màu token
+      theo loại, icon SVG `currentColor` `aria-hidden`, nhãn từ từ điển theo ngôn ngữ trang, `title` ghi đè,
+      `role="note"`; loại lạ làm build lỗi
+- [x] `AttackChain.astro`: SVG nội tuyến `role="img"` + `aria-label`, ô dọc + mũi tên `path` (không `<marker>`/`url()`),
+      bước critical (đánh dấu hoặc mặc định bước cuối) dùng `severity.critical`; props validate Zod; `wrapText`
+      ngắt dòng mono (NFC, cắt cứng từ dài), `max-width: size.figure`, đọc được ở màn 320px
+- [x] Component dùng trong MDX không cần import: `mdxComponents` truyền qua `<Content components>`
+- [x] Token mới `border.width.accent` (3px), `size.figure` (28rem); test tương phản callout trên `surface` ở cả hai theme
+- [x] Từ điển: `callout.*`, `attackChain.caption`, `og.defaultAlt` (vi/en cùng tập khóa)
+- [x] Ảnh cover OG 1200×630 sinh lúc build bằng endpoint tĩnh: `/og/writeups/<slug>.png`, `/og/en/writeups/<slug>.png`,
+      `/og/default.png`; sharp + Pango, font `@fontsource` đổi WOFF1 → TTF (`lib/og/woff.ts`, 0 dependency);
+      guard font thật/font giả (thử đột biến: sai tên family → build fail); không gọi dịch vụ ngoài
+- [x] Spike font trước khi viết renderer: cover vi tiêu đề ValenFind đủ dấu, đã được duyệt bằng mắt
+- [x] Cache ảnh OG theo nội dung (`lib/og/cache.ts`): khóa sha256 của dữ liệu thẻ + dấu vân tay renderer (mã nguồn
+      `lib/og`, màu token, font, phiên bản sharp); lưu `apps/web/node_modules/.cache/og/` (gitignore); build lần hai
+      toàn `cache`, sửa thân bài không render lại ảnh
+- [x] `BaseLayout`: `og:image` (+ type/width/height/alt), `twitter:card summary_large_image`, `twitter:image`; ảnh phải
+      cùng origin; trang không có cover (404, trang thường, en pending) dùng ảnh mặc định
+- [x] ValenFind vi/en: callout TL;DR, insight (hai chi tiết `os.path.join`), critical (Tác động), fix (Khuyến nghị) và
+      sơ đồ 5 bước ngay sau TL;DR, chỉ dùng nội dung đã có; fixture `sample-writeup` phủ đủ 5 loại, `title`, critical ở giữa
+- [x] `test:dist`: `og.check` (đúng một og:image mỗi trang, cùng origin, PNG 1200×630 không metadata, cover riêng cho
+      mỗi bài công khai, mặc định cho trang khác, `dist/og` chỉ PNG hợp lệ), `content-components.check` (loại/nhãn
+      callout theo ngôn ngữ, `role`/`aria-label`/bước critical của sơ đồ, không `style=`/script/`on*=`); thử đột biến:
+      xóa cover, sai kích thước, og:image ngoài origin, og:image trùng, `style=` trong callout → đều fail
+- [x] Dependency: `sharp` 0.35.5 (devDependency `web`, `catalog:`) — đã có trong lockfile qua `astro`, không tải gói mới,
+      không install script, `allowBuilds` không đổi
+- [x] Review bảo mật (security-reviewer): không có Critical/High. Đã sửa: M1 `.pnpm-store/` vào `.gitignore`;
+      L1 parser WOFF chặn zip bomb (trần 16 MiB, `maxOutputLength`, tổng khớp header; thử đột biến); L4 bỏ ký tự
+      `\p{Cf}` (bidi/zero-width) khỏi chữ trên ảnh; Info: assert màu token `#RRGGBB`, `Callout` kiểm kiểu `title`,
+      `test:dist` chặn thêm chunk `tIME`. Hoãn: L2 (ràng buộc cache CI, xem M5), L3 (`rel` link ngoài, đã hoãn M4)
+- [x] Giới hạn độ dài `title` của write-up: `TITLE_MAX = 120` trong `schemas/writeup.ts`, vượt thì build lỗi kèm thông
+      báo (thử đột biến: tiêu đề 141 ký tự → build fail). Con số đo bằng renderer OG thật: 3 dòng ở 46px vừa ≤ 135 ký tự
+      tiếng Việt, ≤ 124 tiếng Anh, nên 120 không bao giờ bị cắt với tiêu đề thường (200 sẽ bị cắt). Unit test
+      `writeup.test.ts` (biên 120/121, trim, tiêu đề ValenFind thật); lý do ghi trong ADR 0012
+- [ ] Giới hạn cache OG (M5/tương lai): CI cần giữ `apps/web/node_modules/.cache/og` giữa các lần chạy mới có lợi;
+      cache không tự dọn ảnh mồ côi (xóa thư mục bất kỳ lúc nào là an toàn)
+- [ ] Vite cảnh báo `MODULE_LEVEL_DIRECTIVE "use astro:head-inject"` khi MDX dùng component có style: chỉ là cảnh
+      báo (CSS vẫn được nạp, đã kiểm tra); xem lại khi nâng Astro
+- [ ] Kiểm tra thủ công trên trình duyệt: callout và sơ đồ ở theme sáng/tối, bề rộng 320px; thử chia sẻ link
+      (trình xem trước OG) sau khi deploy
+- [ ] Chưa làm (đã chốt): trang theo tag, cheatsheet, phân tích CVE, `og:type=article`/`article:*` (M5)
+
 ## Bảo trì
 
 - [x] Vá GHSA-ch52-4w7c-c8xp: pnpm override `http-cache-semantics@<4.3.0: ^4.3.0` trong
@@ -181,6 +226,8 @@ Security headers (`_headers`), CSP ngoài `default-src`/`script-src`/`style-src`
 - [ ] `form-action 'self'` (M6: thêm domain Brevo cho form newsletter)
 - [ ] Pagefind (ADR 0010): luật `_headers` riêng cho `/search`, `/en/search`, `/pagefind/*` với `script-src 'self' 'wasm-unsafe-eval'`, `worker-src 'self'`, `connect-src 'self'`; trang khác KHÔNG có `wasm-unsafe-eval`; thử trên preview với CSP thật, xem console worker có chạy
 - [ ] `X-Content-Type-Options: nosniff` (cả `rss.xml`); chạy `pnpm audit` trước khi merge
+- [ ] Cache ảnh OG trong CI (ADR 0012, review M3c L2): khóa cache theo nhánh (`$CI_COMMIT_REF_SLUG`), job deploy
+      `main`/protected build sạch không dùng cache OG (chống cache poisoning từ MR)
 - [ ] Sitemap (hoãn từ M3b)
 - [ ] Cache turbo không dọn `dist` khi cache hit: file thừa từ lần build trước (vd. trang draft) có
       thể còn lại trên máy local. CI phải build từ checkout sạch; local khi nghi ngờ thì `rm -rf apps/web/dist`

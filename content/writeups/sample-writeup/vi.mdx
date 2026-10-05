@@ -29,6 +29,35 @@ curl -s "https://example.com/health" | grep -i ok
 echo "flag đã che: THM{<redacted>}"
 ```
 
+## Thành phần nội dung
+
+<Callout type="tldr">Khối TL;DR mẫu.</Callout>
+
+<Callout type="critical">Khối nghiêm trọng mẫu.</Callout>
+
+<Callout type="insight">Khối điểm mấu chốt mẫu.</Callout>
+
+<Callout type="note" title="Ghi chú tùy chỉnh">
+
+Khối ghi chú mẫu với nhãn ghi đè và `code` nội tuyến.
+
+</Callout>
+
+<Callout type="fix">Khối khắc phục mẫu.</Callout>
+
+<AttackChain
+  label="Chuỗi mẫu: bước một → bước hai nghiêm trọng → bước ba."
+  steps={[
+    { label: 'Bước một', description: 'Mô tả ngắn của bước một.' },
+    {
+      label: 'Bước hai',
+      description: 'Bước giữa được đánh dấu critical; bước cuối thì không.',
+      critical: true,
+    },
+    { label: 'Bước ba', description: 'Mô tả ngắn của bước ba.' },
+  ]}
+/>
+
 ### Mục con
 
 Một tiêu đề cấp ba để kiểm tra mục lục hai cấp.

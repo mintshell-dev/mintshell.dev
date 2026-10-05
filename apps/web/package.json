@@ -23,6 +23,7 @@
     "astro": "catalog:",
     "fast-xml-parser": "catalog:",
     "pagefind": "catalog:",
+    "sharp": "catalog:",
     "typescript": "catalog:"
   }
 }

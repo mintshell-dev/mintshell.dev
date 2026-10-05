@@ -6,7 +6,9 @@ import type { MarkdownHeading } from 'astro';
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import {
   difficultyLabel,
+  hasCover,
   isoDate,
+  ogImagePath,
   platformLabel,
   readingTime,
   slugOf,
@@ -35,9 +37,17 @@ const minutes = readingTime(entry);
 // Pagefind chỉ index trang có data-pagefind-body: write-up thật, không fixture (ADR 0010).
 // Bản en pending không render <article> nên tự bị loại; draft không build ở production.
 const searchable = !d.fixture;
+// Cover OG riêng theo ngôn ngữ; bản en pending dùng ảnh mặc định của site (ADR 0012).
+const ogImage = hasCover(locale, entry) ? ogImagePath(locale, slugOf(entry.id)) : undefined;
 ---
 
-<BaseLayout title={d.title} description={d.description} noindex={pending}>
+<BaseLayout
+  title={d.title}
+  description={d.description}
+  noindex={pending}
+  ogImage={ogImage}
+  ogImageAlt={ogImage ? d.title : undefined}
+>
   {pending ? (
     <section class="pending">
       <h1>{d.title}</h1>

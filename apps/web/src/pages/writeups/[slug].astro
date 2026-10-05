@@ -1,6 +1,7 @@
 ---
 import { render } from 'astro:content';
 
+import { mdxComponents } from '../../components/mdx';
 import WriteupArticle from '../../components/writeups/WriteupArticle.astro';
 import { allBuildable, prevNext, slugOf } from '../../lib/writeups';
 
@@ -15,5 +16,5 @@ const { prev, next } = await prevNext('vi', slugOf(entry.id));
 ---
 
 <WriteupArticle locale="vi" entry={entry} headings={headings} prev={prev} next={next}>
-  <Content />
+  <Content components={mdxComponents} />
 </WriteupArticle>

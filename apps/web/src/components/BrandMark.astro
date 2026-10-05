@@ -7,6 +7,8 @@
  * - `mark`: không mắt, nét dày như favicon, cỡ `size.mark` (header).
  * - `avatar`: có mắt như avatar, cỡ `size.avatar` (phần liên hệ).
  */
+import { brandCursor, brandPrompt, brandShell, brandViewBox } from '../lib/brand-paths';
+
 interface Props {
   variant: 'mark' | 'avatar';
 }
@@ -14,7 +16,10 @@ interface Props {
 const { variant } = Astro.props;
 const isAvatar = variant === 'avatar';
 // Khung cắt sát hình vẽ (toạ độ gốc của brand/), avatar rộng hơn để chứa mắt.
-const viewBox = isAvatar ? '56 42 416 416' : '126 70 354 354';
+const markBox = brandViewBox;
+const viewBox = isAvatar
+  ? '56 42 416 416'
+  : `${markBox.x} ${markBox.y} ${markBox.size} ${markBox.size}`;
 const stroke = isAvatar ? { shell: 14, prompt: 18 } : { shell: 24, prompt: 28 };
 ---
 
@@ -27,14 +32,14 @@ const stroke = isAvatar ? { shell: 14, prompt: 18 } : { shell: 24, prompt: 28 };
   <g transform={isAvatar ? 'translate(-14 4)' : undefined}>
     <path
       class="accent"
-      d="M150 360 C140 220 230 120 330 126 C420 132 466 210 452 280 C440 340 384 372 316 370 L150 370 Z"
+      d={brandShell}
       fill="none"
       stroke-width={stroke.shell}
       stroke-linejoin="round"
     ></path>
     <polyline
       class="accent"
-      points="252,214 304,250 252,286"
+      points={brandPrompt}
       fill="none"
       stroke-width={stroke.prompt}
       stroke-linecap="round"
@@ -42,10 +47,10 @@ const stroke = isAvatar ? { shell: 14, prompt: 18 } : { shell: 24, prompt: 28 };
     ></polyline>
     <line
       class="accent"
-      x1="322"
-      y1="290"
-      x2="372"
-      y2="290"
+      x1={brandCursor.x1}
+      y1={brandCursor.y1}
+      x2={brandCursor.x2}
+      y2={brandCursor.y2}
       stroke-width={stroke.prompt}
       stroke-linecap="round"
     ></line>

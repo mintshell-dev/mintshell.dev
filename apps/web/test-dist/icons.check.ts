@@ -2,7 +2,15 @@ import { existsSync, readFileSync } from 'node:fs';
 
 import { describe, expect, it } from 'vitest';
 
-import { attr, DIST, distFiles, tags } from './dist-files';
+import {
+  attr,
+  DIST,
+  distFiles,
+  PNG_METADATA_CHUNKS,
+  PNG_SIGNATURE,
+  pngChunks,
+  tags,
+} from './dist-files';
 
 const html = distFiles('.html');
 
@@ -12,22 +20,6 @@ const icons = [
   { rel: 'icon', href: '/favicon-32.png', type: 'image/png', sizes: '32x32' },
   { rel: 'apple-touch-icon', href: '/apple-touch-icon.png' },
 ] as const;
-
-const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-
-/** Chunk metadata không được có trong PNG xuất ra (C2PA, văn bản, EXIF). */
-const PNG_METADATA_CHUNKS = ['caBX', 'tEXt', 'iTXt', 'zTXt', 'eXIf'];
-
-/** Danh sách loại chunk của một file PNG. */
-function pngChunks(buf: Buffer): string[] {
-  const types: string[] = [];
-  for (let i = PNG_SIGNATURE.length; i + 8 <= buf.length;) {
-    const length = buf.readUInt32BE(i);
-    types.push(buf.toString('latin1', i + 4, i + 8));
-    i += 12 + length;
-  }
-  return types;
-}
 
 describe('icon trên mọi trang (kể cả 404)', () => {
   it.each(html)('$path', ({ content }) => {

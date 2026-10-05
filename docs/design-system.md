@@ -120,8 +120,8 @@ Chiều cao dòng (`$type: number`): `font.lineHeight.tight` 1.1 (tiêu đề l�
 ## Spacing, kích thước và bo góc
 
 - Spacing: bội số 4px, `space.N` = N × 4px. Có sẵn các mức N = 1, 2, 3, 4, 5, 6, 8, 10, 12, 16.
-- Kích thước: `size.control` = 44px (nút vuông, đủ vùng chạm), `size.content` = 64rem (độ rộng tối đa của nội dung), `size.mark` = 28px và `size.avatar` = 120px (BrandMark).
-- Viền: `border.width.thin` = 1px (viền, gạch chân link), `border.width.focus` = 2px (vòng focus).
+- Kích thước: `size.control` = 44px (nút vuông, đủ vùng chạm), `size.content` = 64rem (độ rộng tối đa của nội dung), `size.mark` = 28px và `size.avatar` = 120px (BrandMark), `size.figure` = 28rem (độ rộng tối đa sơ đồ chuỗi tấn công).
+- Viền: `border.width.thin` = 1px (viền, gạch chân link), `border.width.focus` = 2px (vòng focus), `border.width.accent` = 3px (viền trái callout).
 - Bo góc: `radius.sm` = 4px, `radius.md` = 8px.
 - **Breakpoint** `48rem`: ngoại lệ có chủ đích, ghi thẳng trong `@media (min-width: 48rem)` vì CSS variable không dùng được trong media query. Dưới mức này là bố cục một cột (di động).
 
@@ -131,6 +131,30 @@ Chiều cao dòng (`$type: number`): `font.lineHeight.tight` 1.1 (tiêu đề l�
 - Nút điều khiển (`.control`): vuông `size.control`, viền `color.borderStrong`; hover đổi viền và chữ sang `color.accent`.
 - Link menu: gạch chân chạy từ trái sang khi hover/focus, thời lượng `motion.duration.base`. Link nằm giữa chữ cùng màu (footer) luôn gạch chân.
 - Link "Bỏ qua tới nội dung" là phần tử focus đầu tiên của mọi trang.
+
+## Thành phần nội dung MDX ([ADR 0012](adr/0012-mdx-components-og-image.md))
+
+Dùng trong `vi.mdx`/`en.mdx` không cần import.
+
+- `<Callout type="…" title?>`: viền trái `border.width.accent`, nền `color.surface`, bo `radius.sm`; hàng nhãn mono (icon SVG `currentColor` + nhãn từ từ điển `callout.*`, `title` ghi đè), rồi nội dung.
+
+  | `type`     | Màu viền/nhãn       | Nhãn vi / en            |
+  | ---------- | ------------------- | ----------------------- |
+  | `tldr`     | `color.accent`      | TL;DR / TL;DR           |
+  | `critical` | `severity.critical` | Nghiêm trọng / Critical |
+  | `insight`  | `color.highlight`   | Điểm mấu chốt / Insight |
+  | `note`     | `severity.low`      | Ghi chú / Note          |
+  | `fix`      | `color.muted`       | Khắc phục / Fix         |
+
+  Mọi màu nhãn và `color.text` đạt ≥ 4.5:1 trên `color.surface` ở cả hai theme (có test).
+
+- `<AttackChain label="…" steps={[{ label, description, critical? }]} />`: SVG nội tuyến các ô xếp dọc nối bằng mũi tên `color.borderStrong`. Viền và số thứ tự của bước thường dùng `color.accent`, bước critical (đánh dấu, mặc định là bước cuối) dùng `severity.critical`. Chữ mono, tự ngắt dòng lúc build; `role="img"` + `aria-label` = `label`; chú thích "Chuỗi tấn công" / "Attack chain".
+
+## Ảnh Open Graph
+
+- 1200×630 PNG, sinh lúc build ([ADR 0012](adr/0012-mdx-components-og-image.md)): nền `color.bg`, khung `color.border`, handle `mintshell_`, dòng lệnh giả `$ cat writeups/<slug>/<locale>.mdx`, tiêu đề Be Vietnam Pro 600 (tối đa 3 dòng), nền tảng · độ khó (màu severity như trang write-up), chip loại lỗi (`color.surface`/`color.borderStrong`), con ốc `color.accent` mờ 12% ở góc phải dưới.
+- Màu là token theme tối (ngoại lệ "màu trong file ảnh"); đổi token thì cache ảnh tự mất hiệu lực.
+- Ảnh mặc định `/og/default.png` cho trang không có cover riêng.
 
 ## Chuyển động
 

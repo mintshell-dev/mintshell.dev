@@ -17,13 +17,15 @@
     "control": { "$value": "44px" },
     "mark": { "$value": "28px" },
     "avatar": { "$value": "120px" },
+    "figure": { "$value": "28rem" },
     "content": { "$value": "64rem" }
   },
   "border": {
     "width": {
       "$type": "dimension",
       "thin": { "$value": "1px" },
-      "focus": { "$value": "2px" }
+      "focus": { "$value": "2px" },
+      "accent": { "$value": "3px" }
     }
   },
   "radius": {

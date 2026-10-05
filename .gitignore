@@ -1,4 +1,6 @@
 node_modules/
+# Store pnpm nếu bị tạo trong workspace (Dev Container): không bao giờ commit.
+.pnpm-store/
 dist/
 .astro/
 .turbo/

@@ -69,6 +69,18 @@ describe('theme', () => {
       ).toBeGreaterThanOrEqual(AA_TEXT);
     });
 
+    // Callout MDX (ADR 0012): nhãn màu theo loại và thân chữ, đều trên nền color.surface.
+    it.each([
+      ['tldr', theme.color.accent.$value],
+      ['critical', theme.severity.critical.$value],
+      ['insight', theme.color.highlight.$value],
+      ['note', theme.severity.low.$value],
+      ['fix', theme.color.muted.$value],
+      ['thân (color.text)', theme.color.text.$value],
+    ])('callout %s trên color.surface ≥ 4.5:1', (_type, fg) => {
+      expect(contrastRatio(fg, theme.color.surface.$value)).toBeGreaterThanOrEqual(AA_TEXT);
+    });
+
     it('color.onAccent trên color.accent ≥ 4.5:1', () => {
       expect(
         contrastRatio(theme.color.onAccent.$value, theme.color.accent.$value),

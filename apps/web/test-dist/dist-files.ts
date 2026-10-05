@@ -45,6 +45,27 @@ export function textOf(html: string, tag: string): string {
   return match[1].replace(/<[^>]+>/g, '');
 }
 
+export const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+/** Chunk metadata không được có trong PNG xuất ra (C2PA, văn bản, EXIF, thời điểm tạo). */
+export const PNG_METADATA_CHUNKS = ['caBX', 'tEXt', 'iTXt', 'zTXt', 'eXIf', 'tIME'];
+
+/** Danh sách loại chunk của một file PNG. */
+export function pngChunks(buf: Buffer): string[] {
+  const types: string[] = [];
+  for (let i = PNG_SIGNATURE.length; i + 8 <= buf.length;) {
+    const length = buf.readUInt32BE(i);
+    types.push(buf.toString('latin1', i + 4, i + 8));
+    i += 12 + length;
+  }
+  return types;
+}
+
+/** Kích thước PNG đọc từ IHDR (chunk đầu tiên, ngay sau chữ ký). */
+export function pngSize(buf: Buffer): { width: number; height: number } {
+  return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
+}
+
 export const isNotFound = (path: string): boolean => /(^|\/)404\.html$/.test(path);
 
 const CONTENT = new URL('../../../content/writeups/', import.meta.url);
