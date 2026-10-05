@@ -153,7 +153,7 @@ Quỹ thời gian: 5–10 giờ/tuần, mỗi mốc khoảng 1 tuần.
       `test:dist` kiểm tra mọi trang write-up không có `<nav>` trùng nhãn (PrevNext chỉ render khi có
       ≥ 2 bài công khai; đã thử đột biến với 2 bài: nhãn cũ → 4 trang fail)
 - [x] Tiêu đề trang chủ: "bền hơn" → "an toàn hơn" (en: "so it is safer next time")
-- [ ] Kiểm tra thủ công trên trình duyệt (`pnpm build && pnpm --filter web preview`): gõ tìm, bàn phím,
+- [x] Kiểm tra thủ công trên trình duyệt (`pnpm build && pnpm --filter web preview`): gõ tìm, bàn phím,
       reduced-motion, theme sáng
 - [ ] Chưa làm (đã chốt): trang theo tag, bình luận, sitemap (M5)
 
@@ -197,9 +197,24 @@ Quỹ thời gian: 5–10 giờ/tuần, mỗi mốc khoảng 1 tuần.
       cache không tự dọn ảnh mồ côi (xóa thư mục bất kỳ lúc nào là an toàn)
 - [ ] Vite cảnh báo `MODULE_LEVEL_DIRECTIVE "use astro:head-inject"` khi MDX dùng component có style: chỉ là cảnh
       báo (CSS vẫn được nạp, đã kiểm tra); xem lại khi nâng Astro
-- [ ] Kiểm tra thủ công trên trình duyệt: callout và sơ đồ ở theme sáng/tối, bề rộng 320px; thử chia sẻ link
-      (trình xem trước OG) sau khi deploy
+- [x] Kiểm tra thủ công trên trình duyệt: callout và sơ đồ ở theme sáng/tối, bề rộng 320px
+- [ ] Thử chia sẻ link (trình xem trước OG) sau khi deploy (M5)
 - [ ] Chưa làm (đã chốt): trang theo tag, cheatsheet, phân tích CVE, `og:type=article`/`article:*` (M5)
+
+## M4 — Đồng bộ Notion
+
+- [ ] Script đồng bộ trong `scripts/`: lấy trang từ Notion → sinh MDX vào `content/writeups/<slug>/{vi,en}.mdx`;
+      site không gọi Notion lúc chạy; kết quả đưa vào Git qua Merge Request
+- [ ] Token Notion chỉ qua biến môi trường, không commit; gitleaks phải qua
+- [ ] Ánh xạ thuộc tính Notion → frontmatter theo schema `apps/web/src/schemas/writeup.ts` (sai schema → build lỗi);
+      slug ASCII, slug đã xuất bản không đổi
+- [ ] Nội dung Notion là dữ liệu không tin cậy: `rehype-sanitize` (hoãn từ M3a), chặn `on*=`, thẻ nguy hiểm, `style=`
+- [ ] Tự gắn `rel="noopener noreferrer"` cho link ngoài trong thân MDX (hoãn từ M3a, review M3c L3)
+- [ ] Ảnh từ Notion tải về repo (URL Notion có hạn), dùng `astro:assets`, `alt` bắt buộc, bỏ metadata
+- [ ] Dependency mới (Notion SDK, `@astrojs/markdown-remark`, `rehype-sanitize`…) phải hỏi trước, ghim `catalog:`
+- [ ] Unit test chuyển đổi Notion → MDX và sanitize; `test:dist` vẫn qua
+- [ ] ADR cho pipeline đồng bộ Notion
+- [ ] Review bảo mật (security-reviewer)
 
 ## Bảo trì
 
