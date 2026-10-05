@@ -156,6 +156,13 @@ Quỹ thời gian: 5–10 giờ/tuần, mỗi mốc khoảng 1 tuần.
       reduced-motion, theme sáng
 - [ ] Chưa làm (đã chốt): trang theo tag, bình luận, sitemap (M5)
 
+## Bảo trì
+
+- [x] Vá GHSA-ch52-4w7c-c8xp: pnpm override `http-cache-semantics@<4.3.0: ^4.3.0` trong
+      `pnpm-workspace.yaml`; chờ bản 4.3.0 đủ 1 ngày tuổi, không dùng `minimumReleaseAgeExclude`
+      ([ADR 0011](adr/0011-override-http-cache-semantics.md))
+- [ ] Gỡ override khi nâng Astro lên bản tự dùng http-cache-semantics >=4.3.0, chạy lại `pnpm audit`
+
 ## M5 — CI/CD, security headers, security.txt
 
 - [ ] CI chạy `lint`, `typecheck`, `test`, rồi `build` và `test:dist` trên bản build vừa tạo.
