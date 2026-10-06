@@ -24,6 +24,7 @@
     "fast-xml-parser": "catalog:",
     "pagefind": "catalog:",
     "sharp": "catalog:",
-    "typescript": "catalog:"
+    "typescript": "catalog:",
+    "wrangler": "catalog:"
   }
 }

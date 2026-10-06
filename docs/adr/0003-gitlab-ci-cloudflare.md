@@ -1,6 +1,6 @@
 # ADR 0003 — GitLab + GitLab CI + Cloudflare Pages
 
-- Trạng thái: Chấp nhận
+- Trạng thái: Chấp nhận; hosting đổi sang Worker static assets, MR không deploy preview ([ADR 0014](0014-deploy-csp.md))
 - Ngày: 2026-10-03
 
 ## Bối cảnh
