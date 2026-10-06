@@ -2,7 +2,7 @@
 
 Quỹ thời gian: 5–10 giờ/tuần, mỗi mốc khoảng 1 tuần. Định nghĩa hoàn thành: [workflow.md](workflow.md).
 
-**Tiếp theo: M4 — đồng bộ Notion thủ công.**
+**Tiếp theo: duyệt M4, rồi chạy thử `notion:pull` với 1 bài thật.**
 
 | Mốc | Mục tiêu                                                  | Trạng thái | ADR                                                                          |
 | --- | --------------------------------------------------------- | ---------- | ---------------------------------------------------------------------------- |
@@ -14,7 +14,7 @@ Quỹ thời gian: 5–10 giờ/tuần, mỗi mốc khoảng 1 tuần. Định n
 | M3b | Pagefind, RSS, trang chủ                                  | Xong       | [0010](adr/0010-search-feed.md)                                              |
 | M3c | Callout, sơ đồ chuỗi tấn công, ảnh cover OG               | Xong       | [0012](adr/0012-mdx-components-og-image.md)                                  |
 | M3  | Nội dung (bài thật)                                       | Đang làm   | —                                                                            |
-| M4  | Đồng bộ Notion (thủ công)                                 | Tiếp theo  | —                                                                            |
+| M4  | Đồng bộ Notion (thủ công)                                 | Chờ duyệt  | [0013](adr/0013-notion-manual-pull.md)                                       |
 | M5  | CI/CD, security headers, security.txt                     | Chưa làm   | —                                                                            |
 | M6  | Email Brevo, chính sách quyền riêng tư, analytics, ra mắt | Chưa làm   | —                                                                            |
 
@@ -32,22 +32,52 @@ Chi tiết nguyên văn từng mốc: [history/m0-m3.md](history/m0-m3.md).
 
 ## M4 — Đồng bộ Notion (thủ công)
 
-Chạy bằng tay trên máy, không CI. Checklist chi tiết sẽ chốt khi lập kế hoạch M4.
+`pnpm notion:pull` kéo bài Ready về `_import/` để soát, không xuất bản ([ADR 0013](adr/0013-notion-manual-pull.md));
+hướng dẫn chạy trong [workflow.md](workflow.md).
 
-- [ ] `scripts/notion-pull.ts`: kéo các bài trạng thái "Ready" bằng token Notion chỉ-đọc, lưu vào
-      `content/writeups/_import/` (collection bỏ qua thư mục `_`, ADR 0009); site không gọi Notion lúc chạy
-- [ ] Token chỉ nằm trên máy (biến môi trường), không CI, không commit; gitleaks phải qua
-- [ ] `_import/` vào `.gitignore`: nháp có thể còn flag/IP chưa che
-- [ ] Script quét và cảnh báo flag (`THM{…}`, `HTB{…}`…) và địa chỉ IP trong file vừa kéo về
-- [ ] Xử lý thủ công như bài ValenFind: chuyển sang `content/writeups/<slug>/{vi,en}.mdx`, frontmatter theo
-      `apps/web/src/schemas/writeup.ts` (sai schema → build lỗi), slug ASCII vĩnh viễn
-- [ ] Nội dung Notion là dữ liệu không tin cậy: `inline.check` chặn `on*=`/thẻ nguy hiểm; cân nhắc `rehype-sanitize`
-- [ ] Tự gắn `rel="noopener noreferrer"` cho link ngoài trong thân MDX (hoãn từ M3a, review M3c L3)
-- [ ] Ảnh từ Notion tải về cùng bài (URL Notion có hạn), dùng `astro:assets`, `alt` bắt buộc, bỏ metadata
-- [ ] Client Notion: `fetch` thẳng API (0 dependency) hay `@notionhq/client` (phải hỏi trước, ghim `catalog:`)
-- [ ] Unit test chuyển đổi Notion → MDX và bộ quét flag/IP; `test:dist` vẫn qua
-- [ ] ADR cho quy trình đồng bộ Notion
-- [ ] Review bảo mật (security-reviewer)
+- [x] `content/writeups/_import/` vào `.gitignore` trước tiên (nháp có thể còn flag/IP chưa che); `git check-ignore` xác nhận
+- [x] `scripts/notion-pull.ts` + `scripts/notion/*`: `fetch` thẳng Notion API (0 dependency), `Notion-Version 2022-06-28`,
+      lọc Status = Ready (cột kiểu status hoặc select), phân trang đủ, retry 429/5xx, timeout, đệ quy block tối đa 8 tầng
+- [x] Token chỉ trong `.env` (`node --env-file-if-exists`), `.env.example` chỉ có tên biến; thiếu biến → báo tên và dừng;
+      token không bao giờ bị in (test với server lặp lại token trong lỗi)
+- [x] Block → Markdown: heading (lùi một cấp), đoạn, code (giữ ngôn ngữ), danh sách, to-do, trích dẫn, callout, ảnh,
+      bảng, divider; block lạ → `[chưa hỗ trợ: <type>]`, vẫn giữ nội dung con; escape `{ } <`… cho MDX (đã thử trên
+      Astro thật: `\{1+1\}` và `\<img onerror>` hiện nguyên chữ)
+- [x] Frontmatter từ các cột, `draft: true`, `translation: pending`, `[[THIẾU MÔ TẢ]]`, `retired` cần xác nhận cho
+      HackTheBox; hằng số so khớp `writeup.ts` và chạy qua `writeupSchema` thật trong test
+- [x] Slug kiểm như collection; sai/trùng → bỏ qua + cảnh báo; `_import/<slug>/` đã có → bỏ qua trừ khi `--force`
+      (bản cũ chỉ bị xóa sau khi lấy được nội dung mới); slug đã xuất bản → cảnh báo
+- [x] Ảnh: tải về `images/01-…`, chỉ https, ≤ 10 MiB, magic bytes PNG/JPEG/GIF/WebP, từ chối SVG, không gửi token tới
+      host ảnh, không chép URL S3 có chữ ký; caption → alt, thiếu → `[[THIẾU ALT]]`
+- [x] Quét (chỉ báo): flag chưa che, mọi IPv4 có nhãn, **mọi** `user@host`/`㉿` trong code, metadata ảnh; báo cáo bảng +
+      `file:dòng` + danh sách ảnh; dòng **TỔNG KẾT** luôn ở cuối kèm "CHƯA xuất bản gì"
+- [x] Lệnh `notion:pull` ở `package.json` gốc, không vào turbo/CI; `tsc -p scripts` vào `pnpm typecheck`;
+      `@types/node` (`catalog:`, đã có trong lockfile) vào devDependencies gốc
+- [x] Turbo: `apps/web/turbo.json` loại `content/writeups/_import/**` khỏi inputs của `build` (glob tường minh không
+      tôn trọng `.gitignore`: trước đó thêm một file nháp làm `web:build` cache miss); đã thử: nháp → cache hit, sửa
+      bài thật → miss
+- [x] 100 unit test trong `scripts/notion/` (gồm end-to-end với Notion giả và thư mục tạm); không gọi Notion thật
+- [x] Hướng dẫn trong `docs/workflow.md` (tường lửa 2 host do tác giả tự thêm, chạy trong container ở terminal riêng tách khỏi Claude Code, checklist chuyển
+      bài); ADR 0013
+- [x] Review bảo mật (security-reviewer): không có Critical. Đã sửa: **H1** dòng `import`/`export` sẽ thành ESM chạy lúc
+      build khi đổi sang `.mdx` → vô hiệu bằng character reference + cảnh báo (đã thử trên Astro thật; ADR 0013 đính
+      chính); **M1** quét `user@host` trên toàn văn bản (cả inline code, email), thêm chuỗi 32 hex (flag HTB), đường
+      dẫn home, cảnh báo mention người dùng Notion; **M2** (một phần) theo chuyển hướng thủ công, chỉ https, chặn
+      localhost/IP nội bộ (cả `2130706433`, `0x7f.1`)/IPv6 literal trước khi gửi request; **L1** escape emoji callout
+      và lý do ảnh lỗi; **L2** lọc ký tự điều khiển terminal trong báo cáo; **L3** bỏ href tới URL S3 có chữ ký;
+      **L4** metadata GIF, byte đệm JPEG; **L5** ghi nguyên tử (thư mục tạm → rename), lỗi tải ảnh giữa luồng không
+      làm dừng run. **L6** không cần sửa: `gitleaks dir` trên `scripts/` và `.env.example` không thấy gì
+- [x] Ảnh `external` mặc định KHÔNG tải (lộ IP cho host lạ), ghi chú `[[ẢNH EXTERNAL KHÔNG TẢI: url]]`, cờ
+      `--external-images` để bật; ảnh Notion (S3) vẫn tải; báo cáo có cột/tổng riêng
+- [x] Thống nhất câu chữ ADR 0013 + `workflow.md`: chạy trong Dev Container, ở terminal riêng tách khỏi Claude Code
+      (không phải ngoài container)
+- [x] Viết sẵn hook `no-notion-import` (`language: fail`, chặn cả `git add -f` vào `_import/`) trong ADR 0013; đã thử
+      bằng bản chép cấu hình ở `/tmp`
+- [ ] Tác giả tự dán hook `no-notion-import` vào `.pre-commit-config.yaml` (agent không sửa file này)
+- [ ] Tác giả chạy thật lần đầu: mở tường lửa, `pnpm notion:pull` trong container ở terminal riêng (tách khỏi Claude Code) với 1 bài Ready, chuyển bài theo
+      checklist trong `workflow.md`
+- [ ] Chưa làm (còn mở): quét IPv6; `rehype-sanitize`; tự gắn `rel="noopener noreferrer"` cho link ngoài trong thân MDX (hoãn từ
+      M3a, review M3c L3); bản `en`
 
 ## Việc còn mở từ các mốc đã xong
 

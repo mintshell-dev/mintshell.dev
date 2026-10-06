@@ -22,7 +22,7 @@ Triển khai:
 - **Tìm kiếm**: Pagefind index sau build (`search:index`); trang `/search` là script Astro nhỏ gọi Pagefind JS API cùng origin, không React ([ADR 0010](adr/0010-search-feed.md)).
 - **Newsletter**: form gửi thẳng tới Brevo; Brevo gửi email xác nhận (double opt-in).
 - **Analytics**: beacon Cloudflare Web Analytics.
-- **Đồng bộ Notion (M4)**: chạy thủ công trên máy, không CI. `scripts/notion-pull.ts` dùng token chỉ-đọc kéo các bài "Ready" về `content/writeups/_import/` (gitignore, collection không nạp) và cảnh báo flag/IP chưa che → tác giả tự xử lý thành `content/writeups/<slug>/` → đưa vào Git qua Merge Request. Site không gọi Notion lúc chạy.
+- **Đồng bộ Notion (M4)**: chạy thủ công trên máy, không CI. `scripts/notion-pull.ts` ([ADR 0013](adr/0013-notion-manual-pull.md)) dùng token chỉ-đọc kéo các bài "Ready" về `content/writeups/_import/` (gitignore, collection không nạp) và cảnh báo flag/IP chưa che → tác giả tự xử lý thành `content/writeups/<slug>/` → đưa vào Git qua Merge Request. Site không gọi Notion lúc chạy.
 
 ## Domain
 

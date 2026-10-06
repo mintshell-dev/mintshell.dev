@@ -11,6 +11,9 @@ dist/
 .DS_Store
 .claude/settings.local.json
 
+# Nháp kéo từ Notion (pnpm notion:pull): có thể chứa flag/IP chưa che, không bao giờ commit.
+content/writeups/_import/
+
 # File tạm của trình soạn thảo
 *.save
 *.swp

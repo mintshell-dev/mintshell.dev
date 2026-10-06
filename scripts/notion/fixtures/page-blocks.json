@@ -1,0 +1,85 @@
+{
+  "results": [
+    {
+      "id": "00000000000000000000000000000b01",
+      "type": "heading_1",
+      "has_children": false,
+      "heading_1": {
+        "rich_text": [{ "type": "text", "plain_text": "Trinh sát", "annotations": {} }]
+      }
+    },
+    {
+      "id": "00000000000000000000000000000b02",
+      "type": "paragraph",
+      "has_children": false,
+      "paragraph": {
+        "rich_text": [
+          {
+            "type": "text",
+            "plain_text": "Máy mục tiêu 10.10.123.45, flag đầu: ",
+            "annotations": {}
+          },
+          { "type": "text", "plain_text": "THM{fake-test-flag}", "annotations": { "code": true } }
+        ]
+      }
+    },
+    {
+      "id": "00000000000000000000000000000b03",
+      "type": "code",
+      "has_children": false,
+      "code": {
+        "language": "shell",
+        "caption": [],
+        "rich_text": [
+          {
+            "type": "text",
+            "plain_text": "user1@home-pc:~$ nmap -sV 10.10.123.45\n80/tcp open http",
+            "annotations": {}
+          }
+        ]
+      }
+    },
+    {
+      "id": "00000000000000000000000000000b04",
+      "type": "image",
+      "has_children": false,
+      "image": {
+        "type": "file",
+        "caption": [{ "type": "text", "plain_text": "Trang đăng nhập", "annotations": {} }],
+        "file": {
+          "url": "https://prod-files-secure.s3.us-west-2.amazonaws.com/ws/f/Login%20page.png?X-Amz-Signature=SIGNED-SECRET",
+          "expiry_time": "2026-10-05T15:00:00.000Z"
+        }
+      }
+    },
+    {
+      "id": "00000000000000000000000000000b05",
+      "type": "image",
+      "has_children": false,
+      "image": {
+        "type": "external",
+        "caption": [],
+        "external": { "url": "https://img.example/diagram.svg" }
+      }
+    },
+    {
+      "id": "00000000000000000000000000000b06",
+      "type": "callout",
+      "has_children": false,
+      "callout": {
+        "icon": { "type": "emoji", "emoji": "⚠️" },
+        "rich_text": [
+          { "type": "text", "plain_text": "Không chạy trên hệ thống thật.", "annotations": {} }
+        ]
+      }
+    },
+    {
+      "id": "00000000000000000000000000000b07",
+      "type": "toggle",
+      "has_children": false,
+      "toggle": { "rich_text": [{ "type": "text", "plain_text": "Gợi ý", "annotations": {} }] }
+    }
+  ],
+  "has_more": false,
+  "next_cursor": null
+}

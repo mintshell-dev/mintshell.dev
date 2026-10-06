@@ -13,3 +13,10 @@ repos:
         entry: pnpm exec prettier --check --ignore-unknown
         language: system
         pass_filenames: true
+      - id: no-notion-import
+        name: chặn nháp Notion (content/writeups/_import/)
+        # Nháp kéo bằng `pnpm notion:pull` có thể còn flag/IP/tên máy chưa che. .gitignore chặn
+        # `git add`, hook này chặn cả `git add -f` (ADR 0013).
+        entry: nháp Notion trong content/writeups/_import/ không bao giờ được commit (ADR 0013)
+        language: fail
+        files: ^content/writeups/_import/
