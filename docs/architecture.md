@@ -7,21 +7,25 @@ Site tĩnh hoàn toàn (SSG), không backend ở giai đoạn 1. Git là nguồn
 ## Luồng tĩnh (build & deploy)
 
 ```
-content/*.mdx ──► Astro build (SSG) ──► HTML/CSS/JS ──► Pagefind index + RSS ──► Cloudflare Pages
+content/*.mdx ──► Astro build (SSG) ──► HTML/CSS/JS ──► Pagefind index + RSS ──► Cloudflare Worker (static assets)
 ```
 
 Triển khai:
 
-1. Mở Merge Request → GitLab CI chạy lint, typecheck, test, build → deploy bản preview.
-2. Merge vào `main` → GitLab CI deploy production lên Cloudflare Pages.
-3. GitLab push mirror sang GitHub.
+1. Mở Merge Request → GitLab CI chạy lint, typecheck, test, format:check → build + `test:dist` → pnpm audit,
+   gitleaks, semgrep (tư vấn). MR **không** deploy.
+2. Merge vào `main` → cùng các bước trên (build sạch, không cache OG) → `wrangler deploy` lên Worker static assets
+   "mintshell" ([ADR 0014](adr/0014-deploy-csp.md)).
+3. Header (CSP, HSTS…) qua `apps/web/public/_headers`; routing (`/x.html` → `/x`, 404 theo thư mục) qua
+   `apps/web/wrangler.toml`.
+4. GitLab push mirror sang GitHub.
 
 ## Luồng động (không có backend riêng)
 
 - **Chuyển theme tối/sáng**: script nhỏ trong component Astro + `public/theme-init.js` chống nháy, không dùng React ([ADR 0007](adr/0007-layout-theme-url.md)).
 - **Tìm kiếm**: Pagefind index sau build (`search:index`); trang `/search` là script Astro nhỏ gọi Pagefind JS API cùng origin, không React ([ADR 0010](adr/0010-search-feed.md)).
 - **Newsletter**: form gửi thẳng tới Brevo; Brevo gửi email xác nhận (double opt-in).
-- **Analytics**: beacon Cloudflare Web Analytics.
+- **Analytics**: Cloudflare Web Analytics; beacon (script ngoài) chưa bật, quyết ở M6 ([ADR 0014](adr/0014-deploy-csp.md)).
 - **Đồng bộ Notion (M4)**: chạy thủ công trên máy, không CI. `scripts/notion-pull.ts` ([ADR 0013](adr/0013-notion-manual-pull.md)) dùng token chỉ-đọc kéo các bài "Ready" về `content/writeups/_import/` (gitignore, collection không nạp) và cảnh báo flag/IP chưa che → tác giả tự xử lý thành `content/writeups/<slug>/` → đưa vào Git qua Merge Request. Site không gọi Notion lúc chạy.
 
 ## Domain
@@ -81,7 +85,6 @@ Quy tắc slug:
 │   └── shared/       # kiểu, schema frontmatter, tiện ích, i18n (ngôn ngữ, path, từ điển)
 ├── content/          # nội dung MDX, dữ liệu trang (portfolio/*.yaml) (CC BY 4.0)
 ├── scripts/          # script tiện ích (vd. đồng bộ Notion)
-├── infra/            # cấu hình hạ tầng (headers, redirects, security.txt…)
 └── docs/             # tài liệu, ADR, tiến độ
 ```
 

@@ -1,0 +1,178 @@
+# GitLab CI của mintshell.dev (ADR 0014).
+# MR: install → check → build (+ test:dist) → security, KHÔNG deploy.
+# main (protected): như trên, rồi deploy Worker static assets "mintshell" bằng wrangler.
+# Không job nào in biến; CLOUDFLARE_* chỉ còn trong môi trường của job deploy.
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    # Nhánh đã có MR: chỉ chạy pipeline MR, không chạy trùng pipeline nhánh.
+    - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
+      when: never
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE == "push"
+
+stages:
+  - install
+  - check
+  - build
+  - security
+  - deploy
+
+variables:
+  ASTRO_TELEMETRY_DISABLED: '1'
+  TURBO_TELEMETRY_DISABLED: '1'
+  WRANGLER_SEND_METRICS: 'false'
+  COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
+  PNPM_STORE: .pnpm-store
+
+default:
+  # Cùng Node 24 + Debian bookworm với Dev Container (không slim: sharp/Pango cần fontconfig như máy dev).
+  image: node:24.21.0-bookworm
+  interruptible: true
+
+# Job Node: cài từ store pnpm đã cache. Chỉ cache store (khóa theo lockfile), không cache node_modules:
+# link lại từ store mất vài giây và mỗi job có node_modules sạch, đúng lockfile.
+.node:
+  before_script:
+    # Phòng thủ nhiều lớp: code build/test (kể cả dependency) không thấy token Cloudflare.
+    - unset CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID
+    - corepack enable
+    - pnpm install --frozen-lockfile --prefer-offline --store-dir "$PNPM_STORE"
+  # Khóa store tách theo ref protected, không chỉ dựa vào setting "separate caches" của GitLab.
+  cache:
+    - &pnpm_store
+      key:
+        prefix: pnpm-store-protected-$CI_COMMIT_REF_PROTECTED
+        files: [pnpm-lock.yaml]
+      paths: [.pnpm-store/]
+      policy: pull
+
+install:
+  extends: .node
+  stage: install
+  script:
+    - pnpm --version
+  cache:
+    - <<: *pnpm_store
+      policy: pull-push
+
+lint:
+  extends: .node
+  stage: check
+  script: pnpm lint
+
+typecheck:
+  extends: .node
+  stage: check
+  script: pnpm typecheck
+
+test:
+  extends: .node
+  stage: check
+  script: pnpm test
+
+format:check:
+  extends: .node
+  stage: check
+  script: pnpm format:check
+
+# Build từ checkout sạch: không có cache turbo giữa các pipeline (.turbo không được cache), TURBO_FORCE
+# để chắc chắn, xóa dist trước khi build để không sót file thừa (ghi chú M3b).
+.build:
+  extends: .node
+  stage: build
+  variables:
+    TURBO_FORCE: 'true'
+  script:
+    - rm -rf apps/web/dist
+    - pnpm build
+    - pnpm test:dist
+  artifacts:
+    paths: [apps/web/dist/]
+    expire_in: 1 week
+
+# MR: giữ cache ảnh OG theo nhánh (ADR 0012): MR này không đọc được cache của nhánh khác.
+build:
+  extends: .build
+  rules:
+    - if: $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH
+  cache:
+    - *pnpm_store
+    - key: og-$CI_COMMIT_REF_SLUG
+      paths: [apps/web/node_modules/.cache/og/]
+      policy: pull-push
+
+# main: KHÔNG dùng cache OG (chống cache poisoning từ MR, ADR 0012 L2); ảnh render lại từ đầu.
+build:production:
+  extends: .build
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  cache:
+    - *pnpm_store
+  script:
+    - rm -rf apps/web/dist apps/web/node_modules/.cache/og
+    - pnpm build
+    - pnpm test:dist
+
+audit:
+  stage: security
+  before_script:
+    - unset CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID
+    - corepack enable
+  # Chỉ đọc lockfile, không cần node_modules.
+  cache: []
+  script:
+    - pnpm audit --audit-level high
+
+gitleaks:
+  stage: security
+  # Cùng phiên bản với Dev Container/pre-commit.
+  image:
+    name: zricethezav/gitleaks:v8.30.1
+    entrypoint: ['']
+  variables:
+    # Quét toàn bộ lịch sử, không chỉ 20 commit mặc định.
+    GIT_DEPTH: '0'
+  cache: []
+  before_script:
+    - unset CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID
+    - git config --global --add safe.directory "$CI_PROJECT_DIR"
+  script:
+    - gitleaks git --redact --verbose --no-banner .
+
+# SAST TƯ VẤN, không chặn pipeline: rule p/* tải từ Semgrep Registry lúc chạy (không ghim, đổi theo
+# thời gian). Không vendor rule vào repo vì Semgrep Rules License cấm phân phối lại (ADR 0014).
+semgrep:
+  stage: security
+  image: semgrep/semgrep:1.100.0
+  allow_failure: true
+  variables:
+    SEMGREP_SEND_METRICS: 'off'
+  cache: []
+  before_script:
+    - unset CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID
+  script:
+    - semgrep scan --metrics=off --disable-version-check --config p/javascript --config p/typescript --severity ERROR --error
+
+# Chỉ main protected, sau khi mọi stage trước đã xanh. Dùng đúng dist của build:production.
+deploy:
+  stage: deploy
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_COMMIT_REF_PROTECTED == "true" && $CI_PIPELINE_SOURCE == "push"
+  interruptible: false
+  resource_group: production
+  environment:
+    name: production
+    url: https://mintshell.dev
+  dependencies: [build:production]
+  # Không dùng cache: cài thẳng từ registry, integrity kiểm theo lockfile (store cache không thể bị gài vào đây).
+  cache: []
+  before_script:
+    - corepack enable
+    # Token có trong môi trường: chỉ cài gói web (có wrangler), không chạy lifecycle script nào (kể cả của
+    # workspace) và không nạp .pnpmfile.
+    - pnpm install --frozen-lockfile --ignore-scripts --ignore-pnpmfile --filter web
+  script:
+    - test -f apps/web/dist/index.html -a -f apps/web/dist/_headers
+    # wrangler đọc CLOUDFLARE_API_TOKEN/CLOUDFLARE_ACCOUNT_ID từ môi trường; không truyền qua tham số, không echo.
+    - pnpm --filter web exec wrangler deploy

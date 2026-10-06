@@ -1,0 +1,15 @@
+# Worker "mintshell": chỉ phục vụ static assets (không có `main`), deploy bằng GitLab CI (ADR 0014).
+# Không khai báo `routes`: token CI chỉ có quyền Workers Scripts: Edit; custom domain gắn trên dashboard.
+# Kiểm tra bởi apps/web/test-dist/wrangler.check.ts.
+name = "mintshell"
+compatibility_date = "2026-10-01"
+# Chỉ phục vụ qua mintshell.dev: không mở URL *.workers.dev hay preview URL (origin thứ hai trùng nội dung).
+workers_dev = false
+preview_urls = false
+
+[assets]
+directory = "./dist"
+# build.format 'file' (ADR 0007): /en → en.html, /writeups.html → 307 /writeups, /x/ → /x.
+html_handling = "drop-trailing-slash"
+# Đường dẫn không tồn tại → 404.html gần nhất (dưới /en/ là en/404.html), mã 404.
+not_found_handling = "404-page"

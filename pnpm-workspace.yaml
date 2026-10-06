@@ -15,6 +15,8 @@ engineStrict: true
 allowBuilds:
   # postinstall chỉ kiểm tra/tải lại binary; binary đã có qua optionalDependencies theo nền tảng.
   esbuild: false
+  # postinstall chỉ kiểm tra/tải lại binary; binary đã có qua optionalDependencies @cloudflare/workerd-<os>-<cpu>.
+  workerd: false
 
 # Phiên bản ghim chính xác, dùng chung cho mọi package qua `catalog:`.
 catalog:
@@ -36,6 +38,7 @@ catalog:
   turbo: 2.11.6
   typescript: 6.0.3
   typescript-eslint: 8.71.0
+  wrangler: 4.147.0
   vitest: 5.0.3
 
 # Vá GHSA-ch52-4w7c-c8xp (dependency gián tiếp của astro); gỡ khi astro tự dùng >=4.3.0 (ADR 0011).

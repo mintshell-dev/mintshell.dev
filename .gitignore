@@ -20,3 +20,7 @@ content/writeups/_import/
 *.swo
 *~
 .*.un~
+
+# State local của wrangler dev (miniflare) và secret local của wrangler.
+.wrangler/
+.dev.vars*

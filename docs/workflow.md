@@ -4,7 +4,7 @@ Lệnh, quy ước và định nghĩa hoàn thành. Luật bảo mật và quy t
 
 ## Stack
 
-TypeScript · pnpm + Turborepo · Astro + React islands · nội dung MDX trong Git · Pagefind · RSS · Cloudflare Pages · GitLab CI. Giai đoạn 1 **không có backend**.
+TypeScript · pnpm + Turborepo · Astro + React islands · nội dung MDX trong Git · Pagefind · RSS · Cloudflare Worker static assets (wrangler) · GitLab CI. Giai đoạn 1 **không có backend**.
 
 ## Lệnh (có từ khi xong M0)
 
@@ -19,7 +19,19 @@ pnpm test:dist          # build rồi kiểm tra bản build (apps/web/dist)
 pnpm format:check       # kiểm tra định dạng (pnpm format để sửa)
 pnpm --filter web <lệnh>  # chạy lệnh cho một gói
 pnpm notion:pull        # THỦ CÔNG: kéo bài Notion "Ready" về _import/ để soát (xem dưới)
+pnpm build && pnpm --filter web exec wrangler dev   # thử header/routing như Cloudflare, ở local (xem dưới)
 ```
+
+## CI/CD và deploy
+
+[`.gitlab-ci.yml`](../.gitlab-ci.yml), lý do trong [ADR 0014](adr/0014-deploy-csp.md). MR chạy tới hết build +
+security, không deploy; chỉ `main` (protected) deploy bằng `wrangler deploy`. Không deploy từ máy dev.
+
+- Sửa CSP/header: `apps/web/public/_headers` **và** `apps/web/test-dist/headers.check.ts`. Thêm nguồn ngoài (Brevo,
+  analytics) phải khai báo chính xác domain ở cả hai.
+- Thử trước khi mở MR: `pnpm build`, rồi `WRANGLER_SEND_METRICS=false pnpm --filter web exec wrangler dev`
+  và `curl -I http://127.0.0.1:8787/search` (miniflare áp `_headers`, `html_handling`, 404 như production).
+- `security.txt` hết hạn theo `Expires`: `test:dist` báo lỗi khi còn dưới 30 ngày, gia hạn thêm ~1 năm.
 
 ## Quy ước
 

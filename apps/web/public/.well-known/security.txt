@@ -1,0 +1,7 @@
+# security.txt của mintshell.dev (RFC 9116).
+# Gia hạn Expires trước khi hết hạn: test:dist báo lỗi khi còn dưới 30 ngày.
+Contact: mailto:hi@mintshell.dev
+Expires: 2027-10-01T00:00:00.000Z
+Preferred-Languages: vi, en
+Canonical: https://mintshell.dev/.well-known/security.txt
+# Encryption: chưa có khóa PGP; khi có, thêm dòng "Encryption: https://mintshell.dev/pgp-key.txt".

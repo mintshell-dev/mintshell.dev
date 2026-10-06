@@ -28,26 +28,27 @@ Website cá nhân `mintshell.dev` chia sẻ kiến thức pentest ứng dụng w
 
 ## Quyết định đã chốt
 
-| Hạng mục             | Quyết định                                                                | ADR                                               |
-| -------------------- | ------------------------------------------------------------------------- | ------------------------------------------------- |
-| Ngôn ngữ & monorepo  | TypeScript, pnpm + Turborepo                                              | [0001](adr/0001-typescript-monorepo.md)           |
-| Frontend             | Astro + React islands, MDX, Pagefind, RSS; font tự host                   | [0002](adr/0002-astro-frontend.md)                |
-| Repo, CI/CD, hosting | GitLab (nguồn chính) + mirror GitHub, GitLab CI, Cloudflare Pages         | [0003](adr/0003-gitlab-ci-cloudflare.md)          |
-| Đa ngôn ngữ          | vi ở `/`, en ở `/en`, slug chung, `translation: pending\|done`            | [0004](adr/0004-bilingual-vi-root.md)             |
-| Lint, format, test   | ESLint flat, Prettier, Vitest; pnpm `minimumReleaseAge` + `allowBuilds`   | [0005](adr/0005-lint-format-test.md)              |
-| Design token         | W3C JSON, script TS tự sinh CSS + TS; severity tách theo theme            | [0006](adr/0006-design-token-pipeline.md)         |
-| Theme & URL          | Theme không dùng React, script chặn nháy từ file tĩnh; URL không `/` cuối | [0007](adr/0007-layout-theme-url.md)              |
-| Dữ liệu & hiệu ứng   | Dữ liệu trang bằng YAML + schema Zod; hiệu ứng chỉ CSS                    | [0008](adr/0008-portfolio-data-css-motion.md)     |
-| Nội dung write-up    | Mô hình nội dung write-up; tô màu cú pháp an toàn CSP                     | [0009](adr/0009-writeup-content-model.md)         |
-| Tìm kiếm & feed      | Pagefind là bước hậu build riêng, không React; feed RSS                   | [0010](adr/0010-search-feed.md)                   |
-| Dependency override  | pnpm override http-cache-semantics ^4.3.0, chờ bản vá đủ 1 ngày tuổi      | [0011](adr/0011-override-http-cache-semantics.md) |
-| Nội dung MDX & OG    | Callout/AttackChain qua `components`; ảnh OG bằng sharp + WOFF→TTF, cache | [0012](adr/0012-mdx-components-og-image.md)       |
-| Đồng bộ Notion       | Kéo thủ công về `_import/` (gitignore), `fetch` 0 dep, chỉ báo không sửa  | [0013](adr/0013-notion-manual-pull.md)            |
-| Nhánh                | `main` được bảo vệ, mọi thay đổi qua Merge Request                        | —                                                 |
-| Analytics            | Cloudflare Web Analytics                                                  | —                                                 |
-| Newsletter           | Brevo, double opt-in                                                      | —                                                 |
-| Bình luận            | Giai đoạn 2                                                               | —                                                 |
-| Giấy phép            | Code MIT, nội dung CC BY 4.0                                              | —                                                 |
-| Commit               | Conventional Commits, ký SSH, email `hi@mintshell.dev`                    | —                                                 |
-| Môi trường dev       | Dev Container có tường lửa; pre-commit chạy gitleaks                      | —                                                 |
-| Thời gian            | 5–10 giờ/tuần, mỗi mốc ~1 tuần                                            | —                                                 |
+| Hạng mục             | Quyết định                                                                   | ADR                                               |
+| -------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------- |
+| Ngôn ngữ & monorepo  | TypeScript, pnpm + Turborepo                                                 | [0001](adr/0001-typescript-monorepo.md)           |
+| Frontend             | Astro + React islands, MDX, Pagefind, RSS; font tự host                      | [0002](adr/0002-astro-frontend.md)                |
+| Repo, CI/CD, hosting | GitLab (nguồn chính) + mirror GitHub, GitLab CI, Cloudflare (Worker)         | [0003](adr/0003-gitlab-ci-cloudflare.md)          |
+| Deploy & CSP         | Worker static assets + wrangler từ GitLab CI; CSP `'self'`, wasm chỉ /search | [0014](adr/0014-deploy-csp.md)                    |
+| Đa ngôn ngữ          | vi ở `/`, en ở `/en`, slug chung, `translation: pending\|done`               | [0004](adr/0004-bilingual-vi-root.md)             |
+| Lint, format, test   | ESLint flat, Prettier, Vitest; pnpm `minimumReleaseAge` + `allowBuilds`      | [0005](adr/0005-lint-format-test.md)              |
+| Design token         | W3C JSON, script TS tự sinh CSS + TS; severity tách theo theme               | [0006](adr/0006-design-token-pipeline.md)         |
+| Theme & URL          | Theme không dùng React, script chặn nháy từ file tĩnh; URL không `/` cuối    | [0007](adr/0007-layout-theme-url.md)              |
+| Dữ liệu & hiệu ứng   | Dữ liệu trang bằng YAML + schema Zod; hiệu ứng chỉ CSS                       | [0008](adr/0008-portfolio-data-css-motion.md)     |
+| Nội dung write-up    | Mô hình nội dung write-up; tô màu cú pháp an toàn CSP                        | [0009](adr/0009-writeup-content-model.md)         |
+| Tìm kiếm & feed      | Pagefind là bước hậu build riêng, không React; feed RSS                      | [0010](adr/0010-search-feed.md)                   |
+| Dependency override  | pnpm override http-cache-semantics ^4.3.0, chờ bản vá đủ 1 ngày tuổi         | [0011](adr/0011-override-http-cache-semantics.md) |
+| Nội dung MDX & OG    | Callout/AttackChain qua `components`; ảnh OG bằng sharp + WOFF→TTF, cache    | [0012](adr/0012-mdx-components-og-image.md)       |
+| Đồng bộ Notion       | Kéo thủ công về `_import/` (gitignore), `fetch` 0 dep, chỉ báo không sửa     | [0013](adr/0013-notion-manual-pull.md)            |
+| Nhánh                | `main` được bảo vệ, mọi thay đổi qua Merge Request                           | —                                                 |
+| Analytics            | Cloudflare Web Analytics                                                     | —                                                 |
+| Newsletter           | Brevo, double opt-in                                                         | —                                                 |
+| Bình luận            | Giai đoạn 2                                                                  | —                                                 |
+| Giấy phép            | Code MIT, nội dung CC BY 4.0                                                 | —                                                 |
+| Commit               | Conventional Commits, ký SSH, email `hi@mintshell.dev`                       | —                                                 |
+| Môi trường dev       | Dev Container có tường lửa; pre-commit chạy gitleaks                         | —                                                 |
+| Thời gian            | 5–10 giờ/tuần, mỗi mốc ~1 tuần                                               | —                                                 |

@@ -2,7 +2,7 @@
 
 Quỹ thời gian: 5–10 giờ/tuần, mỗi mốc khoảng 1 tuần. Định nghĩa hoàn thành: [workflow.md](workflow.md).
 
-**Tiếp theo: duyệt M4, rồi chạy thử `notion:pull` với 1 bài thật.**
+**Tiếp theo: duyệt M5, làm các việc của tác giả (biến CI theo environment, custom domain), merge rồi chạy checklist sau deploy.**
 
 | Mốc | Mục tiêu                                                  | Trạng thái | ADR                                                                          |
 | --- | --------------------------------------------------------- | ---------- | ---------------------------------------------------------------------------- |
@@ -15,7 +15,7 @@ Quỹ thời gian: 5–10 giờ/tuần, mỗi mốc khoảng 1 tuần. Định n
 | M3c | Callout, sơ đồ chuỗi tấn công, ảnh cover OG               | Xong       | [0012](adr/0012-mdx-components-og-image.md)                                  |
 | M3  | Nội dung (bài thật)                                       | Đang làm   | —                                                                            |
 | M4  | Đồng bộ Notion (thủ công)                                 | Chờ duyệt  | [0013](adr/0013-notion-manual-pull.md)                                       |
-| M5  | CI/CD, security headers, security.txt                     | Chưa làm   | —                                                                            |
+| M5  | CI/CD, security headers, security.txt                     | Chờ duyệt  | [0014](adr/0014-deploy-csp.md)                                               |
 | M6  | Email Brevo, chính sách quyền riêng tư, analytics, ra mắt | Chưa làm   | —                                                                            |
 
 ## Mốc đã xong (tóm tắt)
@@ -104,7 +104,7 @@ Chép nguyên văn từ chi tiết mốc.
 
 ### M3c
 
-- [ ] Giới hạn cache OG (M5/tương lai): CI cần giữ `apps/web/node_modules/.cache/og` giữa các lần chạy mới có lợi;
+- [x] Giới hạn cache OG: đã có ở M5 (cache theo nhánh cho MR, `main` build sạch; ADR 0014). CI cần giữ `apps/web/node_modules/.cache/og` giữa các lần chạy mới có lợi;
       cache không tự dọn ảnh mồ côi (xóa thư mục bất kỳ lúc nào là an toàn)
 - [ ] Vite cảnh báo `MODULE_LEVEL_DIRECTIVE "use astro:head-inject"` khi MDX dùng component có style: chỉ là cảnh
       báo (CSS vẫn được nạp, đã kiểm tra); xem lại khi nâng Astro
@@ -120,24 +120,85 @@ Chép nguyên văn từ chi tiết mốc.
 
 ## M5 — CI/CD, security headers, security.txt
 
-- [ ] CI chạy `lint`, `typecheck`, `test`, rồi `build` và `test:dist` trên bản build vừa tạo.
+Deploy Worker static assets "mintshell" bằng `wrangler` từ GitLab CI, CSP `'self'` toàn site, wasm chỉ cho tìm kiếm
+([ADR 0014](adr/0014-deploy-csp.md)).
 
-Kiểm tra trên bản preview Cloudflare Pages (do `build.format: 'file'`, ADR 0007):
+- [x] `.gitlab-ci.yml`: install → check (lint, typecheck, test, format:check) → build (build + test:dist) →
+      security (pnpm audit high, gitleaks toàn lịch sử, semgrep tư vấn `allow_failure`) → deploy; MR không deploy,
+      `deploy` chỉ chạy trên `main` protected + push, có `resource_group`, `environment: production`
+- [x] Image `node:24.21.0-bookworm` (khớp Dev Container), cache store pnpm theo lockfile (không cache `node_modules`),
+      job không phải deploy `unset` biến Cloudflare trước `pnpm install`
+- [x] Build sạch: `.turbo` không cache, `TURBO_FORCE=true`, `rm -rf apps/web/dist`
+- [x] Cache ảnh OG (ADR 0012, review M3c L2): MR khóa `og-$CI_COMMIT_REF_SLUG`; `build:production` không cache OG,
+      xóa thư mục trước build
+- [x] Sửa lỗi lộ ra khi mô phỏng CI trên worktree sạch: `typecheck` thiếu `@mintshell/tokens` (file sinh lúc build) →
+      turbo `typecheck` phụ thuộc thêm `^build`
+- [x] `apps/web/wrangler.toml`: chỉ assets `./dist`, `html_handling = "drop-trailing-slash"`,
+      `not_found_handling = "404-page"`, `workers_dev = false`, `preview_urls = false`, không `routes`
+- [x] `apps/web/public/_headers`: CSP chặt (`frame-ancestors`/`base-uri`/`object-src 'none'`, `form-action 'self'`),
+      nosniff (mọi file, cả `rss.xml`), Referrer-Policy, HSTS 2 năm + includeSubDomains (chưa preload),
+      Permissions-Policy tắt hết, X-Frame-Options DENY, COOP + CORP `same-origin`
+- [x] Pagefind: `/search`, `/en/search`, `/pagefind/*` gỡ CSP chung (`! Content-Security-Policy`, nếu không Cloudflare
+      nối hai policy và wasm bị chặn) rồi đặt CSP + `'wasm-unsafe-eval'` + `worker-src 'self'`
+- [x] `/.well-known/security.txt` (RFC 9116): Contact, Expires 2027-10-01, Preferred-Languages, Canonical; PGP chỉ để comment
+- [x] `test:dist`: `headers.check.ts` (thử đột biến 6 kiểu, đều fail), `security-txt.check.ts` (fail khi còn < 30
+      ngày hoặc > 1 năm), `wrangler.check.ts`
+- [x] Thử bằng `wrangler dev` ở local: `/en` → en.html, `/en/writeups` → danh sách (không xung đột `en.html`/`en/`),
+      `/writeups.html` và `/writeups/` → 307 `/writeups`, `/en/khong-co` → 404 trang en, `/search` có đúng một CSP (bản
+      wasm), `/_headers` không bị phục vụ, `security.txt` 200; `wrangler deploy --dry-run` đọc 109 file
+- [x] `wrangler` 4.147.0 (devDep `web`, `catalog:`), `allowBuilds: workerd: false` (không cần postinstall, đã thử);
+      `pnpm audit`: không lỗ hổng
+- [x] ADR 0014; ADR 0003 ghi chú thay đổi hosting; `architecture.md`, `requirements.md`, `workflow.md` cập nhật
+- [x] Review bảo mật (security-reviewer): không có Critical. Đã sửa: **M1** khóa store có
+      `$CI_COMMIT_REF_PROTECTED`, deploy không dùng cache (cài thẳng từ registry); **M2** deploy cài
+      `--ignore-scripts --ignore-pnpmfile --filter web` (đã thử trên worktree sạch + `wrangler deploy --dry-run`);
+      **L5** test ghim đúng tập header `/*`, `wrangler.check` cấm `routes`/`[env.*]`/`run_worker_first`/`main`/bảng lạ
+      (thử đột biến); **L9** `.wrangler/`, `.dev.vars*` vào `.gitignore`; **L4** luật `/og/*` đặt CORP `cross-origin` (gỡ CORP chung) để site ngoài tải được ảnh chia sẻ, còn lại giữ `same-origin`, có test và thử đột biến. Ngoài repo (việc của tác giả bên dưới):
+      **H1** environment scope (Protected Environment không có ở gói Free, xem ADR 0014), **M3** digest image, **L6**, **L7**, **L10**. Chấp nhận,
+      ghi trong ADR 0014: L1 (`data:` giữ theo yêu cầu), L2, L3, L8
 
-- [ ] `/en` phục vụ `en.html`, `/en/writeups` phục vụ `en/writeups.html` (không xung đột giữa file `en.html` và thư mục `en/`).
-- [ ] `/writeups.html` chuyển hướng về `/writeups`.
-- [ ] Đường dẫn không tồn tại dưới `/en/` trả về `en/404.html`.
+Việc tác giả tự làm (trước/khi merge):
 
-Security headers (`_headers`), CSP ngoài `default-src`/`script-src`/`style-src`/`font-src` `'self'` thêm (gợi ý từ review bảo mật M2a):
+- [ ] **(review H1, cô lập chính)** Đặt **Environment scope = `production`** cho `CLOUDFLARE_API_TOKEN`,
+      `CLOUDFLARE_ACCOUNT_ID`: GitLab chỉ đưa token vào job `deploy` (`environment: production`). `unset` trong
+      `before_script` của job khác vẫn giữ, nhưng chỉ là lớp phụ (ADR 0014); cân nhắc TTL cho token Cloudflare
+- [ ] Xác nhận `main` là protected branch: không ai push thẳng, chỉ merge qua MR (một trong ba lớp cô lập token thay
+      cho Protected Environment, ADR 0014)
+- [ ] Bật "Prevent outdated deployment jobs" (Settings → CI/CD → General pipelines) để retry job deploy cũ không đưa
+      bản cũ lên lại (review L6)
+- [ ] Bật "Always Use HTTPS" ở zone Cloudflare (HSTS `includeSubDomains`, review L10)
+- [ ] Trả lời người báo lỗi bảo mật bằng địa chỉ "send as" `hi@mintshell.dev`, không phải hộp thư cá nhân nhận chuyển
+      tiếp (lộ danh tính); xác nhận Email Routing hoạt động (review L7)
+- [ ] Gắn custom domain `mintshell.dev` cho Worker "mintshell" trên dashboard (token CI không có quyền zone)
+- [ ] Xác nhận "Use separate caches for protected branches" đang bật (Settings → CI/CD → General pipelines)
+- [ ] Xác minh danh tính runner (shared runner GitLab)
+- [ ] Nâng `semgrep/semgrep:1.100.0` lên bản hiện tại (container không tra được Docker Hub); ghim cả ba image bằng
+      `@sha256:`, ít nhất image node (chạy job deploy có token) (review M3)
+- [ ] Web Analytics: tắt auto-inject beacon trên dashboard cho tới M6 (nếu không CSP sẽ chặn và báo lỗi console)
 
-- [ ] `frame-ancestors 'none'`
-- [ ] `base-uri 'none'`
-- [ ] `object-src 'none'`
-- [ ] `form-action 'self'` (M6: thêm domain Brevo cho form newsletter)
-- [ ] Pagefind (ADR 0010): luật `_headers` riêng cho `/search`, `/en/search`, `/pagefind/*` với `script-src 'self' 'wasm-unsafe-eval'`, `worker-src 'self'`, `connect-src 'self'`; trang khác KHÔNG có `wasm-unsafe-eval`; thử trên preview với CSP thật, xem console worker có chạy
-- [ ] `X-Content-Type-Options: nosniff` (cả `rss.xml`); chạy `pnpm audit` trước khi merge
-- [ ] Cache ảnh OG trong CI (ADR 0012, review M3c L2): khóa cache theo nhánh (`$CI_COMMIT_REF_SLUG`), job deploy
-      `main`/protected build sạch không dùng cache OG (chống cache poisoning từ MR)
-- [ ] Sitemap (hoãn từ M3b)
-- [ ] Cache turbo không dọn `dist` khi cache hit: file thừa từ lần build trước (vd. trang draft) có
-      thể còn lại trên máy local. CI phải build từ checkout sạch; local khi nghi ngờ thì `rm -rf apps/web/dist`
+Kiểm tra trên production sau deploy đầu tiên (`https://mintshell.dev`):
+
+- [ ] `/en` phục vụ `en.html`, `/en/writeups` phục vụ `en/writeups.html` (không xung đột file `en.html` và thư mục `en/`)
+- [ ] `/writeups.html` chuyển hướng về `/writeups`
+- [ ] Đường dẫn không tồn tại dưới `/en/` trả mã 404 với nội dung `en/404.html`
+- [ ] `curl -I` trang thường: một CSP không có wasm; `/search`, `/en/search`, `/pagefind/pagefind-worker.js`: đúng
+      một CSP có `'wasm-unsafe-eval'` và `worker-src 'self'`; HSTS, nosniff (cả `rss.xml`), Permissions-Policy, CORP `same-origin`; `/og/default.png` có CORP `cross-origin`
+- [ ] DevTools Console không có vi phạm CSP trên trang chủ, write-up (CSS, JS, font, ảnh, OG), portfolio, 404
+- [ ] Tìm kiếm Pagefind chạy ở `/search` và `/en/search`: có kết quả, Console không có lỗi wasm/worker, tab
+      Sources/Threads có worker `pagefind-worker.js` (không âm thầm chạy trên main thread)
+- [ ] `/.well-known/security.txt` trả 200, `text/plain; charset=utf-8`
+- [ ] Không còn `*.workers.dev` cho Worker này
+- [ ] Thử chia sẻ link (trình xem trước OG) (từ M3c)
+- [ ] Kiểm tra bằng securityheaders.com / Mozilla Observatory (tùy chọn)
+
+Chưa làm (còn mở):
+
+- [ ] Sitemap (`@astrojs/sitemap` là dependency mới, hoãn từ M3b)
+- [ ] `og:type=article`/`article:*`
+- [ ] Beacon Web Analytics và domain Brevo trong `form-action` (M6)
+- [ ] HSTS `preload`, ký PGP cho security.txt, rule semgrep tự viết (để semgrep thành cổng chặn), preview deploy cho MR
+- [ ] miniflare (qua wrangler) ghim `sharp` 0.35.4, nên lockfile có hai bản sharp (repo dùng 0.35.5): chỉ là dev tool,
+      không có install script; xem lại khi nâng wrangler
+- [ ] Redirect `www` → apex: cấu hình zone Cloudflare (ngoài repo)
+- [ ] Protected Environment `production` khi có cộng tác viên hoặc chuyển project vào group (gói Free cho personal
+      project không có, ADR 0014)
