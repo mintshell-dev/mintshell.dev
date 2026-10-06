@@ -84,10 +84,23 @@ soát kỹ; quy trình M4 giữ nguyên tinh thần đó.
 - Lý do tách terminal: script cầm token nhạy cảm và nạp dữ liệu ngoài không tin cậy. Chạy ở terminal riêng nghĩa là
   token và output thô của Notion không đi vào ngữ cảnh của agent: agent không bao giờ cần token, không đọc `.env`, và
   nội dung Notion chưa soát không thành "chỉ dẫn" cho agent (giảm rủi ro prompt injection).
-- Tường lửa Dev Container mặc định không cho phép Notion. Agent không sửa `init-firewall.sh`; tác giả tự thêm
-  `api.notion.com` và `prod-files-secure.s3.us-west-2.amazonaws.com` khi cần chạy.
+- Tường lửa Dev Container mở cố định `api.notion.com` và `prod-files-secure.s3.us-west-2.amazonaws.com` trong
+  `init-firewall.sh` (tác giả thêm, commit `5ce04e0`; agent không sửa file này). Lý do ở mục dưới.
 - Script chỉ dùng Node + `fetch`, không phụ thuộc Claude Code. Agent viết và kiểm thử bằng dữ liệu mẫu, không gọi
   Notion thật.
+
+### Tường lửa: hai host Notion luôn mở (2026-10-06)
+
+- `api.notion.com` và `prod-files-secure.s3.us-west-2.amazonaws.com` (ảnh Notion) nằm cố định trong danh sách cho
+  phép của `init-firewall.sh`, nên luôn mở trong mọi phiên container, kể cả khi không chạy `notion:pull`.
+- Rủi ro chính là **dữ liệu đi ra ngoài**, không phải dữ liệu đi vào: agent không có `NOTION_TOKEN` nên không đọc
+  được dữ liệu Notion của tác giả, nhưng nếu agent bị prompt injection kèm token Notion của kẻ tấn công, nó có thể
+  gửi dữ liệu trong container (mã nguồn, nháp) lên workspace của kẻ đó qua `api.notion.com`.
+- Rủi ro này tương đương các host đã mở sẵn: `gitlab.com` và `api.anthropic.com` cũng nhận dữ liệu gửi kèm
+  token/khóa của kẻ tấn công theo cách tương tự. Mở thêm Notion chỉ thêm một đường cùng loại với các đường đã có.
+- Chấp nhận hướng này vì tiện (không phải sửa tường lửa mỗi lần chạy `notion:pull`) và rủi ro tăng thêm không đáng
+  kể. Đánh đổi: nới lỏng nhẹ vùng cô lập của container. Nếu cần siết, chuyển sang mở hai host thủ công chỉ khi chạy
+  `notion:pull` rồi đóng lại.
 
 ### Ảnh external mặc định không tải
 
@@ -128,6 +141,9 @@ soát kỹ; quy trình M4 giữ nguyên tinh thần đó.
 - **`@notionhq/client` hoặc thư viện Notion → Markdown**: thêm dependency cho việc `fetch` làm được; thư viện chuyển
   đổi không escape cho MDX.
 - **Tự che flag/IP, tự xóa metadata**: dễ che sai hoặc sót mà người dùng tưởng đã an toàn; giữ quyết định ở người soát.
+- **Mở/đóng tường lửa thủ công mỗi lần chạy `notion:pull`**: chặt hơn nhưng phải sửa `init-firewall.sh` mỗi lần,
+  trong khi rủi ro tăng thêm khi mở cố định không đáng kể (mục "Tường lửa: hai host Notion luôn mở"). Giữ làm
+  phương án siết lại nếu cần.
 
 ## Hệ quả
 
