@@ -71,14 +71,23 @@ export const isNotFound = (path: string): boolean => /(^|\/)404\.html$/.test(pat
 const CONTENT = new URL('../../../content/writeups/', import.meta.url);
 
 /**
+ * Thư mục write-up thật: bỏ thư mục bắt đầu bằng `_` (vd. `_import/` của `pnpm notion:pull`, ADR 0013)
+ * và `.` (thư mục tạm/ẩn), nhất quán với collection Astro (glob không tự bỏ qua thư mục `_`,
+ * `content.config.ts` loại trừ tường minh).
+ */
+export const isWriteupDir = (name: string): boolean =>
+  !name.startsWith('_') && !name.startsWith('.');
+
+/**
  * Slug write-up công khai của một ngôn ngữ, tính độc lập từ frontmatter nguồn (không dùng lại
  * code của site): bỏ `draft: true`, `fixture: true`, và với en bỏ `translation: pending`.
+ * `dir` chỉ để test; mặc định là `content/writeups/`.
  */
-export function publicSlugs(locale: 'vi' | 'en'): string[] {
-  return readdirSync(CONTENT, { withFileTypes: true })
-    .filter((d) => d.isDirectory())
+export function publicSlugs(locale: 'vi' | 'en', dir: URL = CONTENT): string[] {
+  return readdirSync(dir, { withFileTypes: true })
+    .filter((d) => d.isDirectory() && isWriteupDir(d.name))
     .filter((d) => {
-      const source = readFileSync(new URL(`${d.name}/${locale}.mdx`, CONTENT), 'utf8');
+      const source = readFileSync(new URL(`${d.name}/${locale}.mdx`, dir), 'utf8');
       const front = /^---\n([\s\S]*?)\n---/.exec(source)?.[1] ?? '';
       const flag = (line: string) => new RegExp(`^${line}\\s*$`, 'm').test(front);
       if (flag('draft: true') || flag('fixture: true')) return false;

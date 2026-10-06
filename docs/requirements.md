@@ -42,6 +42,7 @@ Website cá nhân `mintshell.dev` chia sẻ kiến thức pentest ứng dụng w
 | Tìm kiếm & feed      | Pagefind là bước hậu build riêng, không React; feed RSS                   | [0010](adr/0010-search-feed.md)                   |
 | Dependency override  | pnpm override http-cache-semantics ^4.3.0, chờ bản vá đủ 1 ngày tuổi      | [0011](adr/0011-override-http-cache-semantics.md) |
 | Nội dung MDX & OG    | Callout/AttackChain qua `components`; ảnh OG bằng sharp + WOFF→TTF, cache | [0012](adr/0012-mdx-components-og-image.md)       |
+| Đồng bộ Notion       | Kéo thủ công về `_import/` (gitignore), `fetch` 0 dep, chỉ báo không sửa  | [0013](adr/0013-notion-manual-pull.md)            |
 | Nhánh                | `main` được bảo vệ, mọi thay đổi qua Merge Request                        | —                                                 |
 | Analytics            | Cloudflare Web Analytics                                                  | —                                                 |
 | Newsletter           | Brevo, double opt-in                                                      | —                                                 |

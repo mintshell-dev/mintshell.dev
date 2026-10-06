@@ -12,10 +12,15 @@ const portfolio = defineCollection({
 
 /**
  * Write-up: thư mục `content/writeups/<slug>/{vi,en}.mdx`, id = `<slug>/<locale>`.
- * glob bỏ qua file/thư mục bắt đầu bằng `_` (ví dụ `_import/`), nên chỉ slug hợp lệ được nạp.
+ * Loader glob KHÔNG tự bỏ qua thư mục `_` (quy ước `_` của Astro chỉ áp cho routing `src/pages`),
+ * nên loại trừ tường minh mọi thư mục bắt đầu bằng `_` (vd. `_import/` của `pnpm notion:pull`, ADR 0013). Lớp chặn slug ASCII
+ * (`lib/writeups.ts`) vẫn là phòng tuyến hai: id lạ làm build lỗi chứ không xuất bản.
  */
 const writeups = defineCollection({
-  loader: glob({ pattern: '**/{vi,en}.mdx', base: '../../content/writeups' }),
+  loader: glob({
+    pattern: ['**/{vi,en}.mdx', '!**/_*/**'],
+    base: '../../content/writeups',
+  }),
   schema: writeupSchema,
 });
 

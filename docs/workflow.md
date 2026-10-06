@@ -18,6 +18,7 @@ pnpm test               # chạy unit test
 pnpm test:dist          # build rồi kiểm tra bản build (apps/web/dist)
 pnpm format:check       # kiểm tra định dạng (pnpm format để sửa)
 pnpm --filter web <lệnh>  # chạy lệnh cho một gói
+pnpm notion:pull        # THỦ CÔNG: kéo bài Notion "Ready" về _import/ để soát (xem dưới)
 ```
 
 ## Quy ước
@@ -33,3 +34,57 @@ pnpm --filter web <lệnh>  # chạy lệnh cho một gói
 1. `lint`, `typecheck`, `test`, `build`, `test:dist`, `format:check` đều qua.
 2. Cập nhật `docs/progress.md`.
 3. Thêm ADR trong `docs/adr/` khi có quyết định kiến trúc.
+
+## Đồng bộ Notion (`pnpm notion:pull`, thủ công)
+
+Kéo bài Status = Ready từ database Notion "Mintshell" về `content/writeups/_import/<slug>/` để soát.
+**Không xuất bản gì**, không tự sửa hay xóa khi thấy cảnh báo. Lý do thiết kế: [ADR 0013](adr/0013-notion-manual-pull.md).
+
+**Chuẩn bị (một lần):**
+
+1. Tạo integration Notion **chỉ bật quyền "Read content"**, rồi share database "Mintshell" với integration đó.
+2. Chép `.env.example` thành `.env` (đã gitignore), điền `NOTION_TOKEN` và `NOTION_DATABASE_ID`. Token chỉ nằm
+   trong `.env`; agent không bao giờ cần và không đọc file này.
+
+**Tường lửa:** Dev Container mặc định chặn Notion. Để chạy, tác giả **tự** thêm 2 host vào
+`.devcontainer/init-firewall.sh`: `api.notion.com` và `prod-files-secure.s3.us-west-2.amazonaws.com` (ảnh Notion).
+Agent không sửa file này. IP của S3 xoay vòng mà tường lửa chỉ phân giải DNS lúc khởi động, nên nếu báo cáo có ảnh
+lỗi do kết nối thì khởi động lại tường lửa rồi chạy lại với `--force`.
+
+**Nơi chạy:** việc thủ công, chạy **trong Dev Container** nhưng ở **một terminal riêng**, tách khỏi terminal đang chạy
+Claude Code (không chạy ngoài container). Lý do: token và dữ liệu Notion chưa soát không đi vào ngữ cảnh của agent
+(ADR 0013). Không đưa vào turbo hay CI.
+
+**Chạy:**
+
+```sh
+pnpm notion:pull            # bỏ qua bài đã có trong _import/ (đang soát dở)
+pnpm notion:pull --force    # ghi đè _import/<slug>/ đã có
+pnpm notion:pull --external-images   # tải cả ảnh external (mặc định KHÔNG: lộ IP của bạn cho host đó)
+```
+
+Ảnh Notion lưu (S3) luôn được tải. Ảnh external mặc định chỉ được ghi chú `[[ẢNH EXTERNAL KHÔNG TẢI: <url>]]` và liệt
+kê trong báo cáo.
+
+**Hook chặn commit `_import/`:** tác giả tự thêm hook `no-notion-import` vào `.pre-commit-config.yaml` (nội dung trong
+ADR 0013) để chặn cả `git add -f`. Agent không sửa file đó.
+
+**Đọc báo cáo:** bảng mỗi bài (ảnh tải/lỗi/external không tải, flag, IP, prompt `user@host`, đường dẫn home, metadata ảnh, block chưa
+hỗ trợ, frontmatter, khác),
+rồi danh sách `content/writeups/_import/<slug>/vi.md:<dòng>` để nhảy tới, rồi danh sách ảnh để **tự mở xem** (script
+không đọc được nội dung ảnh: chữ trong ảnh chụp màn hình phải tự kiểm). Dòng cuối là **TỔNG KẾT**. Cảnh báo cố ý báo
+thừa (vd. mọi `user@host` trong code, mọi IPv4): tự loại những cái vô hại.
+
+**Chuyển một bài sang `content/` (sau khi soát):**
+
+- [ ] Che flag (`THM{REDACTED}`), IP, dấu nhắc terminal, email, đường dẫn home lộ tên máy/người dùng thật,
+      chuỗi 32 hex (flag HackTheBox), mention người dùng Notion.
+- [ ] Mở từng ảnh: che thông tin nhạy cảm trong ảnh; xóa metadata nếu báo cáo có ghi `[metadata: …]`.
+- [ ] Điền `[[THIẾU ALT]]`, `[[THIẾU MÔ TẢ]]`; xử lý `[[ẢNH CHƯA TẢI…]]`, `[[ẢNH EXTERNAL KHÔNG TẢI…]]`, `[chưa hỗ trợ: …]`, link nội bộ Notion.
+- [ ] Đổi `> **[Callout …]**` thành `<Callout type="…">` (ADR 0012).
+- [ ] Soát dòng có `&#101;xport`/`&#105;mport` (script đã vô hiệu dòng ESM, MDX sẽ chạy nếu là `export` thô); giữ
+      character reference hoặc viết lại câu.
+- [ ] HackTheBox: xác nhận phòng đã retired rồi đặt `retired: true`.
+- [ ] Chuyển `_import/<slug>/vi.md` thành `content/writeups/<slug>/vi.mdx` (kèm `images/`), đặt `draft: false`
+      khi sẵn sàng.
+- [ ] Chạy đủ định nghĩa hoàn thành (`test:dist` chặn flag chưa che lần nữa), rồi mở MR.

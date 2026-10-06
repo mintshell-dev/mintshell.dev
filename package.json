@@ -9,15 +9,17 @@
   "scripts": {
     "dev": "TURBO_TELEMETRY_DISABLED=1 turbo run dev",
     "build": "TURBO_TELEMETRY_DISABLED=1 turbo run build search:index",
-    "typecheck": "TURBO_TELEMETRY_DISABLED=1 turbo run typecheck",
+    "typecheck": "TURBO_TELEMETRY_DISABLED=1 turbo run typecheck && tsc -p scripts",
     "lint": "eslint .",
     "test": "vitest run",
     "test:dist": "TURBO_TELEMETRY_DISABLED=1 turbo run test:dist",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "notion:pull": "node --env-file-if-exists=.env scripts/notion-pull.ts"
   },
   "devDependencies": {
     "@eslint/js": "catalog:",
+    "@types/node": "catalog:",
     "eslint": "catalog:",
     "eslint-plugin-astro": "catalog:",
     "prettier": "catalog:",
