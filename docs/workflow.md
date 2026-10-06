@@ -46,9 +46,9 @@ Kéo bài Status = Ready từ database Notion "Mintshell" về `content/writeups
 2. Chép `.env.example` thành `.env` (đã gitignore), điền `NOTION_TOKEN` và `NOTION_DATABASE_ID`. Token chỉ nằm
    trong `.env`; agent không bao giờ cần và không đọc file này.
 
-**Tường lửa:** Dev Container mặc định chặn Notion. Để chạy, tác giả **tự** thêm 2 host vào
-`.devcontainer/init-firewall.sh`: `api.notion.com` và `prod-files-secure.s3.us-west-2.amazonaws.com` (ảnh Notion).
-Agent không sửa file này. IP của S3 xoay vòng mà tường lửa chỉ phân giải DNS lúc khởi động, nên nếu báo cáo có ảnh
+**Tường lửa:** 2 host đã được mở sẵn trong `.devcontainer/init-firewall.sh`: `api.notion.com` và
+`prod-files-secure.s3.us-west-2.amazonaws.com` (ảnh Notion), không cần sửa gì trước khi chạy. Lý do và đánh đổi:
+ADR 0013, mục "Tường lửa: hai host Notion luôn mở". Agent không sửa file này. IP của S3 xoay vòng mà tường lửa chỉ phân giải DNS lúc khởi động, nên nếu báo cáo có ảnh
 lỗi do kết nối thì khởi động lại tường lửa rồi chạy lại với `--force`.
 
 **Nơi chạy:** việc thủ công, chạy **trong Dev Container** nhưng ở **một terminal riêng**, tách khỏi terminal đang chạy

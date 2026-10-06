@@ -73,8 +73,10 @@ hướng dẫn chạy trong [workflow.md](workflow.md).
       (không phải ngoài container)
 - [x] Viết sẵn hook `no-notion-import` (`language: fail`, chặn cả `git add -f` vào `_import/`) trong ADR 0013; đã thử
       bằng bản chép cấu hình ở `/tmp`
-- [ ] Tác giả tự dán hook `no-notion-import` vào `.pre-commit-config.yaml` (agent không sửa file này)
-- [ ] Tác giả chạy thật lần đầu: mở tường lửa, `pnpm notion:pull` trong container ở terminal riêng (tách khỏi Claude Code) với 1 bài Ready, chuyển bài theo
+- [x] Tường lửa mở cố định 2 host Notion (`api.notion.com`, `prod-files-secure.s3…`), tác giả thêm ở `5ce04e0`;
+      lý do (rủi ro chính là dữ liệu đi ra ngoài, tương đương gitlab.com/api.anthropic.com) ghi trong ADR 0013
+- [x] Tác giả tự dán hook `no-notion-import` vào `.pre-commit-config.yaml` (agent không sửa file này)
+- [x] Tác giả chạy thật lần đầu: `pnpm notion:pull` trong container ở terminal riêng (tách khỏi Claude Code) với 1 bài Ready, chuyển bài theo
       checklist trong `workflow.md`
 - [ ] Chưa làm (còn mở): quét IPv6; `rehype-sanitize`; tự gắn `rel="noopener noreferrer"` cho link ngoài trong thân MDX (hoãn từ
       M3a, review M3c L3); bản `en`
