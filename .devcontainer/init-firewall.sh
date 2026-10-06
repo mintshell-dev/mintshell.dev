@@ -36,6 +36,8 @@ for domain in \
     "registry.npmjs.org" \
     "api.anthropic.com" \
     "gitlab.com" \
+    "api.notion.com" \
+    "prod-files-secure.s3.us-west-2.amazonaws.com" \
     "marketplace.visualstudio.com" \
     "vscode.blob.core.windows.net" \
     "update.code.visualstudio.com"; do
