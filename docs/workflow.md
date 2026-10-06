@@ -46,6 +46,20 @@ Kéo bài Status = Ready từ database Notion "Mintshell" về `content/writeups
 2. Chép `.env.example` thành `.env` (đã gitignore), điền `NOTION_TOKEN` và `NOTION_DATABASE_ID`. Token chỉ nằm
    trong `.env`; agent không bao giờ cần và không đọc file này.
 
+**Quy ước trạng thái (cột Status trong Notion):**
+
+- **Draft** — đang viết, chưa hoàn chỉnh. Script bỏ qua.
+- **Ready** — đã xong, chờ kéo về xử lý. `notion:pull` chỉ kéo bài Ready.
+- **Published** — đã kéo về, xử lý xong và chuyển sang `content/writeups/`. Script bỏ qua.
+
+Sau khi xuất bản một bài (chuyển từ `_import/` sang `content/writeups/`, đặt `draft: false`), đổi Status của bài
+đó trong Notion thành **Published**. Nhờ vậy mỗi bài chỉ được kéo đúng một lần; lần `notion:pull` sau không kéo
+lại bài đã xuất bản.
+
+Lưu ý: bài đang nằm trong `_import/<slug>/` không bị kéo lại (script bỏ qua thư mục đã tồn tại) trừ khi chạy với
+`--force`. Nhưng sau khi đã xóa `_import/<slug>/` lúc xuất bản, nếu Notion vẫn để Ready thì bài sẽ bị kéo lại vào
+`_import/` kèm cảnh báo "slug đã xuất bản". Đổi sang Published để tránh điều này.
+
 **Tường lửa:** 2 host đã được mở sẵn trong `.devcontainer/init-firewall.sh`: `api.notion.com` và
 `prod-files-secure.s3.us-west-2.amazonaws.com` (ảnh Notion), không cần sửa gì trước khi chạy. Lý do và đánh đổi:
 ADR 0013, mục "Tường lửa: hai host Notion luôn mở". Agent không sửa file này. IP của S3 xoay vòng mà tường lửa chỉ phân giải DNS lúc khởi động, nên nếu báo cáo có ảnh
