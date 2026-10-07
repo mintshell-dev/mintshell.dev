@@ -19,6 +19,7 @@ pnpm test:dist          # build rồi kiểm tra bản build (apps/web/dist)
 pnpm format:check       # kiểm tra định dạng (pnpm format để sửa)
 pnpm --filter web <lệnh>  # chạy lệnh cho một gói
 pnpm notion:pull        # THỦ CÔNG: kéo bài Notion "Ready" về _import/ để soát (xem dưới)
+pnpm writeups:promote <slug>|--all   # THỦ CÔNG: chuyển cơ học _import/<slug>/vi.md → content/writeups/<slug>/vi.mdx (xem dưới)
 pnpm build && pnpm --filter web exec wrangler dev   # thử header/routing như Cloudflare, ở local (xem dưới)
 ```
 
@@ -107,10 +108,13 @@ thừa (vd. mọi `user@host` trong code, mọi IPv4): tự loại những cái 
       chuỗi 32 hex (flag HackTheBox), mention người dùng Notion.
 - [ ] Mở từng ảnh: che thông tin nhạy cảm trong ảnh; xóa metadata nếu báo cáo có ghi `[metadata: …]`.
 - [ ] Điền `[[THIẾU ALT]]`, `[[THIẾU MÔ TẢ]]`; xử lý `[[ẢNH CHƯA TẢI…]]`, `[[ẢNH EXTERNAL KHÔNG TẢI…]]`, `[chưa hỗ trợ: …]`, link nội bộ Notion.
-- [ ] Đổi `> **[Callout …]**` thành `<Callout type="…">` (ADR 0012).
+- [ ] Đổi `> **[Callout …]**` thành `<Callout type="…">` (ADR 0012): `pnpm writeups:promote <slug>` đổi cú pháp thành
+      `type="note"`, bạn tự chọn đúng loại (tldr/critical/insight/fix).
 - [ ] Soát dòng có `&#101;xport`/`&#105;mport` (script đã vô hiệu dòng ESM, MDX sẽ chạy nếu là `export` thô); giữ
       character reference hoặc viết lại câu.
 - [ ] HackTheBox: xác nhận phòng đã retired rồi đặt `retired: true`.
-- [ ] Chuyển `_import/<slug>/vi.md` thành `content/writeups/<slug>/vi.mdx` (kèm `images/`), đặt `draft: false`
-      khi sẵn sàng.
+- [ ] Chuyển `_import/<slug>/vi.md` thành `content/writeups/<slug>/vi.mdx` (kèm `images/`) bằng
+      `pnpm writeups:promote <slug>` (hoặc `--all`; đích đã có thì bỏ qua, `--force` để ghi đè). Script chỉ đổi
+      cú pháp callout, chuẩn hóa alt rỗng thành `[[THIẾU ALT]]` và copy ảnh; KHÔNG đổi `draft`, KHÔNG xóa `_import/`,
+      và in danh sách việc tay (description, alt, loại callout). Đặt `draft: false` khi sẵn sàng.
 - [ ] Chạy đủ định nghĩa hoàn thành (`test:dist` chặn flag chưa che lần nữa), rồi mở MR.
