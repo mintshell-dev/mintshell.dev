@@ -26,6 +26,8 @@ Override đặt trong pnpm-workspace.yaml (pnpm 12 không còn đọc trường 
 trong package.json): `http-cache-semantics@<4.3.0: ^4.3.0`. Có cận trên ^ để
 không nhảy sang major mới.
 
+Override thêm sharp@<0.35.5 lên >=0.35.5 vì CVE-2026-96889 ở librsvg; chỉ miniflare (dev) dùng bản lỗi, nhưng audit chặn pipeline nên ép toàn bộ lên bản vá.
+
 ## Hệ quả
 
 - pnpm audit sạch; lint, typecheck, test, build, test:dist, format:check đều qua.
