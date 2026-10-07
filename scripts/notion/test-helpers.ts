@@ -45,6 +45,10 @@ export function properties(over: Partial<Record<string, unknown>> = {}): Record<
     Tags: { type: 'multi_select', multi_select: [{ name: 'web' }, { name: 'sqli' }] },
     'Vuln classes': { type: 'multi_select', multi_select: [{ name: 'SQL injection' }] },
     Date: { type: 'date', date: { start: '2026-10-05' } },
+    Description: {
+      type: 'rich_text',
+      rich_text: [rt('SQL injection chained into RCE on a sample room.')],
+    },
     ...over,
   };
 }
