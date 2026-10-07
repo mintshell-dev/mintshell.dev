@@ -24,3 +24,6 @@ content/writeups/_import/
 # State local của wrangler dev (miniflare) và secret local của wrangler.
 .wrangler/
 .dev.vars*
+
+# Thư mục tạm của writeups:promote
+content/writeups/.promote-*

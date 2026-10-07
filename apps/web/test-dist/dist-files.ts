@@ -80,7 +80,8 @@ export const isWriteupDir = (name: string): boolean =>
 
 /**
  * Slug write-up công khai của một ngôn ngữ, tính độc lập từ frontmatter nguồn (không dùng lại
- * code của site): bỏ `draft: true`, `fixture: true`, và với en bỏ `translation: pending`.
+ * code của site): bỏ `draft: true`, `fixture: true` và `translation: pending` (cả vi lẫn en: mỗi trang chỉ liệt kê bài có
+ * bản ngôn ngữ đó thật).
  * `dir` chỉ để test; mặc định là `content/writeups/`.
  */
 export function publicSlugs(locale: 'vi' | 'en', dir: URL = CONTENT): string[] {
@@ -91,8 +92,33 @@ export function publicSlugs(locale: 'vi' | 'en', dir: URL = CONTENT): string[] {
       const front = /^---\n([\s\S]*?)\n---/.exec(source)?.[1] ?? '';
       const flag = (line: string) => new RegExp(`^${line}\\s*$`, 'm').test(front);
       if (flag('draft: true') || flag('fixture: true')) return false;
-      return !(locale === 'en' && flag('translation: pending'));
+      return !flag('translation: pending');
     })
     .map((d) => d.name)
     .sort();
 }
+
+/** Slug mà frontmatter của `<slug>/<locale>.mdx` có đúng dòng `line` (vd. `translation: pending`). */
+export function slugsWithFlag(locale: 'vi' | 'en', line: string, dir: URL = CONTENT): string[] {
+  return readdirSync(dir, { withFileTypes: true })
+    .filter((d) => d.isDirectory() && isWriteupDir(d.name))
+    .filter((d) => {
+      const source = readFileSync(new URL(`${d.name}/${locale}.mdx`, dir), 'utf8');
+      const front = /^---\n([\s\S]*?)\n---/.exec(source)?.[1] ?? '';
+      return front.split('\n').some((l) => l.trim() === line);
+    })
+    .map((d) => d.name)
+    .sort();
+}
+
+/** Ký tự bao quanh từ "redacted" được coi là cách che: khoảng trắng, ngoặc, gạch dưới, gạch ngang, sao. */
+const WRAP = String.raw`[\s\[\]<>(){}_*-]*`;
+const REDACTED_FLAG = new RegExp(`^${WRAP}redacted${WRAP}$`, 'i');
+
+/**
+ * Nội dung trong `THM{…}`/`HTB{…}` (đã giải mã HTML entity) có phải placeholder đã che không: đúng từ
+ * `redacted` (không phân biệt hoa thường), tùy chọn bao bởi ngoặc/gạch dưới/gạch ngang, vd. `redacted`,
+ * `[REDACTED]`, `<redacted>`, `__redacted__`, `-redacted-`. Có thêm bất kỳ ký tự nào khác (chuỗi hex,
+ * `redacted_a1b2`) thì KHÔNG coi là đã che.
+ */
+export const isRedactedFlag = (inner: string): boolean => REDACTED_FLAG.test(inner.trim());

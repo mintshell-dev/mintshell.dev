@@ -1,14 +1,16 @@
 import { describe, expect, it } from 'vitest';
 
-import { attr, distFiles, readDist, tags } from './dist-files';
+import {
+  attr,
+  distFiles,
+  isRedactedFlag,
+  publicSlugs,
+  readDist,
+  slugsWithFlag,
+  tags,
+} from './dist-files';
 
 const html = distFiles('.html');
-
-/**
- * Giá trị flag đã che hợp lệ (sau khi giải mã HTML entity): `<redacted>`, `redacted`,
- * `REDACTED`, `<REDACTED>`. Mọi flag THM{…}/HTB{…} khác đều là flag lộ → fail.
- */
-const REDACTED = /^<?redacted>?$/i;
 
 function decode(s: string): string {
   return s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
@@ -19,7 +21,7 @@ describe('không lộ flag chưa che', () => {
     const matches = [...content.matchAll(/(THM|HTB)\{([^}]*)\}/g)];
     for (const m of matches) {
       const inner = decode(m[2] ?? '').trim();
-      expect(REDACTED.test(inner), `flag chưa che: ${m[0]}`).toBe(true);
+      expect(isRedactedFlag(inner), `flag chưa che: ${m[0]}`).toBe(true);
     }
   });
 });
@@ -43,6 +45,31 @@ describe('khung write-up', () => {
   it('fixture KHÔNG hiện ở trang danh sách', () => {
     expect(readDist('writeups.html')).not.toMatch(/sample-writeup/);
     expect(readDist('en/writeups.html')).not.toMatch(/sample-writeup/);
+  });
+
+  // Mỗi trang danh sách chỉ liệt kê bài có bản ngôn ngữ đó thật (translation: done), không fixture/draft.
+  describe.each([
+    ['vi', 'writeups.html', '/writeups/'],
+    ['en', 'en/writeups.html', '/en/writeups/'],
+  ] as const)('danh sách %s', (locale, file, prefix) => {
+    const listed = [...readDist(file).matchAll(/href="([^"#?]+)"/g)]
+      .map((m) => m[1] ?? '')
+      .filter((h) => h.startsWith(prefix))
+      .map((h) => h.slice(prefix.length))
+      .sort();
+
+    it('đúng tập bài công khai của ngôn ngữ, không thừa không thiếu', () => {
+      expect(listed).toEqual(publicSlugs(locale));
+    });
+
+    it('KHÔNG chứa fixture', () => {
+      for (const slug of slugsWithFlag(locale, 'fixture: true')) expect(listed).not.toContain(slug);
+    });
+
+    it(`KHÔNG chứa bài ${locale} chưa dịch (translation: pending)`, () => {
+      for (const slug of slugsWithFlag(locale, 'translation: pending'))
+        expect(listed, slug).not.toContain(slug);
+    });
   });
 
   it('khối code được Prism tô màu (class .token.*), không chỉ vắng style=', () => {

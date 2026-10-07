@@ -21,6 +21,10 @@ pháp cho khối code, nút sao chép. Ràng buộc nền tảng: CSP giai đo�
   `draft: true` không build ra trang công khai (chỉ hiện ở dev).
 - Trường `fixture` (mặc định `false`): bài kiểm thử khung — build ra trang chi tiết để `test:dist`
   soi, nhưng không bao giờ hiện ở trang danh sách (cả dev lẫn production).
+- Danh sách công khai (`/writeups`, `/en/writeups`, trang chủ, prev/next, RSS) theo `isListed`
+  (`apps/web/src/lib/listing.ts`): mỗi ngôn ngữ chỉ liệt kê bài có bản ngôn ngữ đó thật
+  (`translation: done`), không fixture, không draft (trừ dev). Bài `vi` pending không hiện ở danh sách vi, bài
+  `en` pending không hiện ở danh sách en; Pagefind cũng không index bản pending.
 - Bản `en` có `translation: pending`: trang `noindex`, hiện thông báo + link sang bản vi, không
   render nội dung dịch dở; không khai báo `<link rel=alternate hreflang>` cho cặp đó.
 

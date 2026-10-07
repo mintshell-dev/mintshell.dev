@@ -15,7 +15,8 @@
     "test:dist": "TURBO_TELEMETRY_DISABLED=1 turbo run test:dist",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "notion:pull": "node --env-file-if-exists=.env scripts/notion-pull.ts"
+    "notion:pull": "node --env-file-if-exists=.env scripts/notion-pull.ts",
+    "writeups:promote": "node scripts/promote-writeup.ts"
   },
   "devDependencies": {
     "@eslint/js": "catalog:",

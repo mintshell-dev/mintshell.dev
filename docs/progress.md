@@ -109,6 +109,43 @@ Chỉ dữ liệu tác giả đưa, ghi nguyên văn; mục chưa có thì xóa 
 - [ ] Thêm khi có: số write-up, số báo cáo bug bounty, chứng chỉ, HackerOne (`https://hackerone.com/…`), CV, PGP, URL dự án
       video và cộng đồng
 
+## Script chuyển write-up (`writeups:promote`)
+
+`pnpm writeups:promote <slug>|--all [--force]` chuyển cơ học `_import/<slug>/vi.md` sang `content/writeups/<slug>/vi.mdx`
+(0 dependency). Chỉ thay thế văn bản, không đọc hiểu nội dung; hướng dẫn trong [workflow.md](workflow.md).
+
+- [x] `scripts/promote/transform.ts`: `> **[Callout …]**` → `<Callout type="note">` (không đoán loại), alt rỗng →
+      `[[THIẾU ALT]]`, bỏ qua fenced code, frontmatter (cả `draft`, `translation`) và mọi dòng khác giữ nguyên byte
+- [x] `scripts/promote-writeup.ts`: slug kiểm `SLUG_RE`, đường dẫn phải nằm trong thư mục cho phép, `vi.md` phải là file
+      thường, đích đã có thì bỏ qua (trừ `--force`), ghi nguyên tử qua thư mục tạm, ảnh chỉ copy file thường tên an toàn,
+      không bao giờ xóa `_import/`
+- [x] Báo cáo mỗi bài: description còn `[[THIẾU MÔ TẢ]]`, ảnh còn `[[THIẾU ALT]]` (kèm `vi.md:<dòng>`), số khối
+      callout cần chọn type, marker callout còn sót; dòng TỔNG KẾT "CHƯA đổi draft, CHƯA xóa _import/"
+- [x] 23 unit test (input mẫu tự viết, thư mục tạm); chưa chạy trên bài thật
+- [x] Review bảo mật (security-reviewer): không có Critical. Đã sửa: **H1** `--force` không còn xóa trước (đổi tên bản cũ, thay,
+      rollback khi lỗi, giữ `en.mdx` và file anh em, chỉ thay `vi.mdx` + `images/`); **H2** quét và báo dòng MDX nguy hiểm
+      (`{ }`, `<thẻ>`, `import`/`export`) ngoài code, không tự sửa; **M1** ảnh chỉ png/jpg/gif/webp, tên không `..`;
+      **M2** `_import/<slug>` phải là thư mục thật (realpath); **M3** marker giả trong fence của callout không cắt khối;
+      **M4** bổ sung test; **L1** từ chối `vi.md` CRLF; **L3** lọc ký tự điều khiển trong báo cáo; **L4** `.promote-*` vào
+      `.gitignore`, thư mục đích chmod 0755. Chưa làm: **L2** (IMAGE bậc hai trên dòng cực dài), **L5** (quét flag; đã có
+      `test:dist`), **L6** (chạy song song), TOCTOU `lstat`→`copyFile` (chạy thủ công, rủi ro thấp)
+- [ ] Tác giả tự chạy trên bài thật rồi làm tay: loại callout, description, alt
+
+## Lọc danh sách write-up theo bản ngôn ngữ
+
+Mỗi trang danh sách chỉ liệt kê bài có bản ngôn ngữ đó thật ([ADR 0009](adr/0009-writeup-content-model.md)).
+
+- [x] `isListed(data, locale, dev)` (`src/lib/listing.ts`): không fixture, không draft (trừ dev), `translation: done` cho
+      cả vi và en; `listWriteups` dùng nó nên danh sách, trang chủ, prev/next và RSS (cả vi) cùng một quy tắc
+- [x] `WriteupArticle`: `searchable` chỉ khi `translation: done` (bản vi pending không vào Pagefind)
+- [x] Fixture: bộ lọc fixture vẫn đúng; `/writeups` ở dev hiện `sample-draft` vì bài này thiếu `fixture: true` (đã thêm cho
+      cả vi/en; `sample-writeup` chưa từng hiện ở danh sách, cả dev lẫn bản build)
+- [x] Test: unit `listing.test.ts` (fixture/draft/pending × vi/en); `test:dist` danh sách vi/en khớp đúng `publicSlugs`, không
+      fixture, không bài pending cùng ngôn ngữ; `publicSlugs` bỏ pending ở cả hai ngôn ngữ. Đột biến (bỏ lọc fixture; bỏ lọc
+      translation với `nax/vi.mdx` draft:false; với `tryheartme/en.mdx` pending draft:false) đều fail đúng chỗ, đối chứng qua
+- [x] Đã chốt: không làm noindex/link cho trang vi pending. Chiến lược: bài chưa dịch giữ `vi.mdx` `draft: true` (không build
+      trang vi), chỉ xuất bản `en.mdx`; dịch xong mới đổi vi sang `draft: false`. Nên không có trang vi pending nào tồn tại
+
 ## Việc còn mở từ các mốc đã xong
 
 Chép nguyên văn từ chi tiết mốc.

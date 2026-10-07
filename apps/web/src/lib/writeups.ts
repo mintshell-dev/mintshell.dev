@@ -3,6 +3,7 @@ import { type CollectionEntry, getCollection } from 'astro:content';
 
 import type { Difficulty, Platform } from '../schemas/writeup';
 import type { FeedSource } from './feed';
+import { isListed } from './listing';
 
 export type WriteupEntry = CollectionEntry<'writeups'>;
 
@@ -70,32 +71,27 @@ const byDateDesc = (a: WriteupEntry, b: WriteupEntry): number =>
   b.data.date.getTime() - a.data.date.getTime();
 
 /**
- * Bài hiện ở danh sách công khai của một ngôn ngữ: đúng locale, không phải fixture,
- * không phải draft (ở production; dev vẫn cho draft để xem thử). Mới nhất trước.
+ * Bài hiện ở danh sách công khai của một ngôn ngữ (`isListed`): đúng locale, không fixture, không draft
+ * (ở production; dev vẫn cho draft để xem thử), và bản ngôn ngữ đó đã dịch (`translation: done`).
+ * Mới nhất trước.
  */
 export async function listWriteups(locale: Locale): Promise<WriteupEntry[]> {
   const all = await loadAll();
   return all
-    .filter((e) => localeOf(e.id) === locale && !e.data.fixture)
-    .filter((e) => import.meta.env.DEV || !e.data.draft)
+    .filter((e) => localeOf(e.id) === locale && isListed(e.data, locale, import.meta.env.DEV))
     .sort(byDateDesc);
 }
 
-/**
- * Bài đưa vào feed RSS của một ngôn ngữ: như danh sách công khai nhưng bỏ bản en chưa dịch
- * (`translation: pending`), vì trang đó chỉ là thông báo noindex chứ không phải nội dung.
- */
+/** Bài đưa vào feed RSS của một ngôn ngữ: đúng tập của danh sách công khai (ADR 0010). */
 export async function feedWriteups(locale: Locale): Promise<FeedSource[]> {
   const list = await listWriteups(locale);
-  return list
-    .filter((e) => !(locale === 'en' && e.data.translation === 'pending'))
-    .map((e) => ({
-      slug: slugOf(e.id),
-      title: e.data.title,
-      description: e.data.description,
-      date: e.data.date,
-      tags: e.data.tags,
-    }));
+  return list.map((e) => ({
+    slug: slugOf(e.id),
+    title: e.data.title,
+    description: e.data.description,
+    date: e.data.date,
+    tags: e.data.tags,
+  }));
 }
 
 /**
