@@ -46,6 +46,8 @@ hướng dẫn chạy trong [workflow.md](workflow.md).
       Astro thật: `\{1+1\}` và `\<img onerror>` hiện nguyên chữ)
 - [x] Frontmatter từ các cột, `draft: true`, `translation: pending`, `[[THIẾU MÔ TẢ]]`, `retired` cần xác nhận cho
       HackTheBox; hằng số so khớp `writeup.ts` và chạy qua `writeupSchema` thật trong test
+- [x] Cột Notion `Description` (tiếng Anh) → `description` của bản được kéo; rỗng/thiếu → `[[THIẾU MÔ TẢ]]` +
+      cảnh báo "description rỗng". Bản dịch vi cần description tiếng Việt riêng, điền khi dịch
 - [x] Slug kiểm như collection; sai/trùng → bỏ qua + cảnh báo; `_import/<slug>/` đã có → bỏ qua trừ khi `--force`
       (bản cũ chỉ bị xóa sau khi lấy được nội dung mới); slug đã xuất bản → cảnh báo
 - [x] Ảnh: tải về `images/01-…`, chỉ https, ≤ 10 MiB, magic bytes PNG/JPEG/GIF/WebP, từ chối SVG, không gửi token tới

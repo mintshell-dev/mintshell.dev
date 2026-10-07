@@ -67,7 +67,7 @@ describe('buildFrontmatter', () => {
     const data = parseOwnYaml(fm.yaml);
     expect(data).toMatchObject({
       title: 'Phòng mẫu: SQLi tới RCE',
-      description: MISSING_DESCRIPTION,
+      description: 'SQL injection chained into RCE on a sample room.',
       platform: 'tryhackme',
       difficulty: 'medium',
       tags: ['web', 'sqli'],
@@ -91,6 +91,40 @@ describe('buildFrontmatter', () => {
     expect(data.room).toBe(evil);
     expect(data.draft).toBe(true);
     expect(fm.yaml.split('\n').filter((l) => l === '---')).toHaveLength(2);
+  });
+
+  it('cột Description có giá trị → trim rồi vào description, không cảnh báo', () => {
+    const fm = buildFrontmatter(
+      properties({ Description: { type: 'rich_text', rich_text: [rt('  Hello world.  ')] } }),
+    );
+    expect(parseOwnYaml(fm.yaml).description).toBe('Hello world.');
+    expect(fm.warnings).toEqual([]);
+  });
+
+  it('Description chứa ký tự YAML đặc biệt không phá cấu trúc', () => {
+    const evil = 'a: b # c\n---\ndraft: false\n"q" \\ \'s\' {x}';
+    const fm = buildFrontmatter(
+      properties({ Description: { type: 'rich_text', rich_text: [rt(evil)] } }),
+    );
+    const data = parseOwnYaml(fm.yaml);
+    expect(data.description).toBe(evil);
+    expect(data.draft).toBe(true);
+    expect(fm.yaml.split('\n').filter((l) => l === '---')).toHaveLength(2);
+  });
+
+  it('Description thiếu cột / rỗng / toàn khoảng trắng → placeholder + cảnh báo', () => {
+    const cases = [
+      properties({ Description: undefined }),
+      properties({ Description: { type: 'rich_text', rich_text: [] } }),
+      properties({ Description: { type: 'rich_text', rich_text: [rt('   ')] } }),
+    ];
+    for (const props of cases) {
+      const fm = buildFrontmatter(props);
+      expect(parseOwnYaml(fm.yaml).description).toBe(MISSING_DESCRIPTION);
+      expect(fm.warnings).toEqual(
+        expect.arrayContaining([expect.stringMatching(/description rỗng/)]),
+      );
+    }
   });
 
   it('giá trị lạ → cảnh báo, giữ nguyên dạng chuỗi để tác giả sửa', () => {

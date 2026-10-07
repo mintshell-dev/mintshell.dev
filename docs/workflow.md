@@ -107,7 +107,8 @@ thừa (vd. mọi `user@host` trong code, mọi IPv4): tự loại những cái 
 - [ ] Che flag (`THM{REDACTED}`), IP, dấu nhắc terminal, email, đường dẫn home lộ tên máy/người dùng thật,
       chuỗi 32 hex (flag HackTheBox), mention người dùng Notion.
 - [ ] Mở từng ảnh: che thông tin nhạy cảm trong ảnh; xóa metadata nếu báo cáo có ghi `[metadata: …]`.
-- [ ] Điền `[[THIẾU ALT]]`, `[[THIẾU MÔ TẢ]]`; xử lý `[[ẢNH CHƯA TẢI…]]`, `[[ẢNH EXTERNAL KHÔNG TẢI…]]`, `[chưa hỗ trợ: …]`, link nội bộ Notion.
+- [ ] Điền `[[THIẾU ALT]]`, `[[THIẾU MÔ TẢ]]` (cột Notion `Description` là tiếng Anh; `vi.mdx` cần description
+      tiếng Việt riêng); xử lý `[[ẢNH CHƯA TẢI…]]`, `[[ẢNH EXTERNAL KHÔNG TẢI…]]`, `[chưa hỗ trợ: …]`, link nội bộ Notion.
 - [ ] Đổi `> **[Callout …]**` thành `<Callout type="…">` (ADR 0012): `pnpm writeups:promote <slug>` đổi cú pháp thành
       `type="note"`, bạn tự chọn đúng loại (tldr/critical/insight/fix).
 - [ ] Soát dòng có `&#101;xport`/`&#105;mport` (script đã vô hiệu dòng ESM, MDX sẽ chạy nếu là `export` thô); giữ

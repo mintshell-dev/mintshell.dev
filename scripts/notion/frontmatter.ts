@@ -27,6 +27,7 @@ export const COLUMNS = {
   tags: 'Tags',
   vulnClasses: 'Vuln classes',
   date: 'Date',
+  description: 'Description',
 } as const;
 
 type Prop = Record<string, unknown> & { type?: unknown };
@@ -147,10 +148,15 @@ export function buildFrontmatter(props: Record<string, unknown>): FrontmatterRes
   const vulnClasses = readList(props, COLUMNS.vulnClasses);
   if (!vulnClasses.length) warnings.push('vulnClasses rỗng');
 
+  // Cột Description của Notion là tiếng Anh (bài gốc), đổ vào description của bản được kéo. Bản dịch
+  // tiếng Việt cần description tiếng Việt riêng, điền khi dịch (ngoài phạm vi script).
+  const description = readText(props, COLUMNS.description);
+  if (!description) warnings.push('description rỗng');
+
   const lines = [
     '---',
     `title: ${yamlString(title)}`,
-    `description: ${yamlString(MISSING_DESCRIPTION)}`,
+    `description: ${yamlString(description || MISSING_DESCRIPTION)}`,
     `date: ${date || yamlString(MISSING_DATE)}`,
     `platform: ${platform}`,
     `room: ${yamlString(room)}`,
