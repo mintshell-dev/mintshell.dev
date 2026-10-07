@@ -3,7 +3,20 @@ import { z } from 'astro/zod';
 /** Số ký tự tối đa của một lệnh terminal, khớp `--type-chars` trong Terminal.astro. */
 export const TERMINAL_CMD_MAX = 24;
 
-const text = z.string().trim().min(1);
+/**
+ * Dấu hiệu chỗ giữ chỗ (`[Số phòng]`, `<Năm>`, `XXXX`, `TODO`…). Trang portfolio công khai chỉ được
+ * hiện số liệu thật: chưa có thì xóa mục, không để chỗ giữ chỗ. `test:dist` quét lại bản build.
+ */
+export const PLACEHOLDER =
+  /\[[^\]\n]*\]|<[^>\n]*>|[［【]|\{\{|\bX{4}\b|\bTODO\b|\bTBD\b|lorem ipsum/i;
+
+const text = z
+  .string()
+  .trim()
+  .min(1)
+  .refine((s) => !PLACEHOLDER.test(s), {
+    message: 'Còn chỗ giữ chỗ, hãy điền số liệu thật hoặc xóa mục',
+  });
 
 /**
  * Chỉ `https://host/…`, để href không thể là `javascript:`, `data:` hay `http:`. Bắt buộc
@@ -25,6 +38,35 @@ export const httpsUrl = z
 
 /** https hoặc path nội bộ `/…` (không phải `//host`). */
 const httpsOrLocal = z.union([httpsUrl, z.string().regex(/^\/(?![/\\])[^\s]*$/)]);
+
+/**
+ * Host được phép cho từng nhãn trong `contact.links`, so khớp chính xác hostname (không `endsWith`,
+ * để `evilgithub.com` hay `github.com.evil.example` không lọt) và không cho cổng. Thêm mạng mới thì
+ * thêm vào đây. Có trong bảng không có nghĩa là đang hiện: chỉ link có trong YAML mới render.
+ */
+export const LINK_HOSTS: ReadonlyMap<string, readonly string[]> = new Map([
+  ['GitHub', ['github.com']],
+  ['YouTube', ['youtube.com', 'www.youtube.com']],
+  // Chưa dùng (chưa có tài khoản công khai), giữ sẵn để thêm link sau.
+  ['HackerOne', ['hackerone.com']],
+]);
+
+const contactLink = z
+  .strictObject({ label: text, url: httpsUrl.optional() })
+  .refine((link) => LINK_HOSTS.has(link.label), {
+    message: 'Nhãn link chưa có trong LINK_HOSTS',
+    path: ['label'],
+  })
+  .refine(
+    // Như `httpsUrl`: không giả định url parse được, lỗi định dạng đã do bước trước báo.
+    (link) => {
+      const hosts = LINK_HOSTS.get(link.label);
+      if (!link.url || !hosts || !URL.canParse(link.url)) return true;
+      const { hostname, port } = new URL(link.url);
+      return port === '' && hosts.includes(hostname);
+    },
+    { message: 'Host của url không khớp nhãn link (xem LINK_HOSTS)', path: ['url'] },
+  );
 
 /** Phần một đoạn văn: nhãn mono bên trái, đoạn văn cỡ lớn bên phải. */
 const prose = z.strictObject({ label: text, body: text });
@@ -70,7 +112,11 @@ export const portfolioSchema = z.strictObject({
     label: text,
     title: text,
     email: z.email(),
-    links: z.array(z.strictObject({ label: text, url: httpsUrl.optional() })),
+    links: z
+      .array(contactLink)
+      .refine((links) => new Set(links.map((l) => l.label)).size === links.length, {
+        message: 'Nhãn link bị trùng',
+      }),
     /** Fingerprint OpenPGP: 40 ký tự hex, chia nhóm 4. */
     pgp: z
       .string()

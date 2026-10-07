@@ -1,5 +1,6 @@
 # Data for /en/portfolio (English). Schema: apps/web/src/schemas/portfolio.ts.
-# [..] placeholders await real figures. Never add a real name or identifying details.
+# Real figures only, verbatim; if missing, remove the item (the section hides itself), no placeholders.
+# Never add a real name or identifying details.
 meta:
   title: portfolio
   description: mintshell's portfolio — web application penetration testing, bug bounty and CTF.
@@ -15,7 +16,6 @@ hero:
     with developers to fix the root cause.
   ctaContact: Let's work together
   ctaCv: Download CV
-  # cvUrl: https://… (the "Download CV" button only shows when a link is set)
 
 terminal:
   title: ~/mintshell
@@ -31,12 +31,7 @@ stats:
   - label: TryHackMe points
     value: 100k+
   - label: TryHackMe rooms completed
-    value: '[Rooms]'
-  - label: Write-ups published
-    value: '[Write-ups]'
-  - label: Bug bounty reports
-    value: '[Reports]'
-    highlight: true
+    value: 800+
 
 # The career story is told only here. No age, former field or employers.
 journey:
@@ -80,19 +75,15 @@ projects:
 
 recognition:
   label: recognition
-  items:
-    - name: '[Certification 1]'
-      year: '[Year]'
-    - name: '[Certification 2]'
-      year: '[Year]'
+  items: []
 
 contact:
   label: contact
   title: Let's talk.
   email: hi@mintshell.dev
-  # Add an https url to show a link; links without a url are hidden.
+  # The label must be in LINK_HOSTS (schema) and the url must use that label's host.
   links:
     - label: GitHub
+      url: https://github.com/mintshell-dev
     - label: YouTube
-    - label: HackerOne
-  # pgp: 'XXXX XXXX XXXX XXXX XXXX XXXX XXXX XXXX XXXX XXXX'
+      url: https://www.youtube.com/@mintshell32
