@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { PLACEHOLDER } from '../src/schemas/portfolio';
 import { attr, readDist, tags } from './dist-files';
 
 const pages = [
@@ -132,6 +133,26 @@ describe.each(pages)('portfolio %s', (_locale, path) => {
 
   it('không còn là trang tạm', () => {
     expect(html).not.toMatch(/Đang xây dựng|Under construction/);
+  });
+
+  it('không còn chỗ giữ chỗ chờ số liệu thật', () => {
+    // Cả <head> (title, description, og:*) lẫn thuộc tính người xem thấy hoặc bấm vào; bỏ script/style.
+    const visible = html
+      .replace(/<(script|style)\b[\s\S]*?<\/\1>/g, ' ')
+      .replace(/<[^>]+>/g, (tag) =>
+        [...tag.matchAll(/\s(?:content|href|alt|title|aria-label)="([^"]*)"/g)]
+          .map((m) => ` ${m[1] ?? ''} `)
+          .join(''),
+      )
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&#39;/g, "'");
+    // Bảo đảm thật sự quét được nội dung (không âm thầm qua khi chuỗi rỗng).
+    expect(visible).toContain('hi@mintshell.dev');
+    const description = tags(html, 'meta').find((m) => attr(m, 'name') === 'description');
+    expect(description && attr(description, 'content')).toBeTruthy();
+    expect(visible).toContain(attr(description ?? '', 'content'));
+    expect(visible).not.toMatch(PLACEHOLDER);
   });
 });
 

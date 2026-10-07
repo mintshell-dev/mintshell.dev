@@ -4,19 +4,20 @@ Quỹ thời gian: 5–10 giờ/tuần, mỗi mốc khoảng 1 tuần. Định n
 
 **Tiếp theo: duyệt M5, làm các việc của tác giả (biến CI theo environment, custom domain), merge rồi chạy checklist sau deploy.**
 
-| Mốc | Mục tiêu                                                  | Trạng thái | ADR                                                                          |
-| --- | --------------------------------------------------------- | ---------- | ---------------------------------------------------------------------------- |
-| M0  | Khung monorepo                                            | Xong       | [0001](adr/0001-typescript-monorepo.md)–[0005](adr/0005-lint-format-test.md) |
-| M1  | Design token                                              | Xong       | [0006](adr/0006-design-token-pipeline.md)                                    |
-| M2a | Layout chung, menu, chuyển theme và ngôn ngữ              | Xong       | [0007](adr/0007-layout-theme-url.md)                                         |
-| M2b | Portfolio và hiệu ứng                                     | Xong       | [0008](adr/0008-portfolio-data-css-motion.md)                                |
-| M3a | Khung write-up (collection, trang, tô màu cú pháp)        | Xong       | [0009](adr/0009-writeup-content-model.md)                                    |
-| M3b | Pagefind, RSS, trang chủ                                  | Xong       | [0010](adr/0010-search-feed.md)                                              |
-| M3c | Callout, sơ đồ chuỗi tấn công, ảnh cover OG               | Xong       | [0012](adr/0012-mdx-components-og-image.md)                                  |
-| M3  | Nội dung (bài thật)                                       | Đang làm   | —                                                                            |
-| M4  | Đồng bộ Notion (thủ công)                                 | Chờ duyệt  | [0013](adr/0013-notion-manual-pull.md)                                       |
-| M5  | CI/CD, security headers, security.txt                     | Chờ duyệt  | [0014](adr/0014-deploy-csp.md)                                               |
-| M6  | Email Brevo, chính sách quyền riêng tư, analytics, ra mắt | Chưa làm   | —                                                                            |
+| Mốc   | Mục tiêu                                                  | Trạng thái | ADR                                                                          |
+| ----- | --------------------------------------------------------- | ---------- | ---------------------------------------------------------------------------- |
+| M0    | Khung monorepo                                            | Xong       | [0001](adr/0001-typescript-monorepo.md)–[0005](adr/0005-lint-format-test.md) |
+| M1    | Design token                                              | Xong       | [0006](adr/0006-design-token-pipeline.md)                                    |
+| M2a   | Layout chung, menu, chuyển theme và ngôn ngữ              | Xong       | [0007](adr/0007-layout-theme-url.md)                                         |
+| M2b   | Portfolio và hiệu ứng                                     | Xong       | [0008](adr/0008-portfolio-data-css-motion.md)                                |
+| M3a   | Khung write-up (collection, trang, tô màu cú pháp)        | Xong       | [0009](adr/0009-writeup-content-model.md)                                    |
+| M3b   | Pagefind, RSS, trang chủ                                  | Xong       | [0010](adr/0010-search-feed.md)                                              |
+| M3c   | Callout, sơ đồ chuỗi tấn công, ảnh cover OG               | Xong       | [0012](adr/0012-mdx-components-og-image.md)                                  |
+| M3    | Nội dung (bài thật)                                       | Đang làm   | —                                                                            |
+| M4    | Đồng bộ Notion (thủ công)                                 | Chờ duyệt  | [0013](adr/0013-notion-manual-pull.md)                                       |
+| M5    | CI/CD, security headers, security.txt                     | Chờ duyệt  | [0014](adr/0014-deploy-csp.md)                                               |
+| M6a-1 | Số liệu thật và link công khai cho portfolio              | Chờ duyệt  | [0008](adr/0008-portfolio-data-css-motion.md) (bổ sung)                      |
+| M6    | Email Brevo, chính sách quyền riêng tư, analytics, ra mắt | Chưa làm   | —                                                                            |
 
 ## Mốc đã xong (tóm tắt)
 
@@ -81,14 +82,42 @@ hướng dẫn chạy trong [workflow.md](workflow.md).
 - [ ] Chưa làm (còn mở): quét IPv6; `rehype-sanitize`; tự gắn `rel="noopener noreferrer"` cho link ngoài trong thân MDX (hoãn từ
       M3a, review M3c L3); bản `en`
 
+## M6a-1 — Số liệu thật và link công khai cho portfolio
+
+Chỉ dữ liệu tác giả đưa, ghi nguyên văn; mục chưa có thì xóa để phần đó tự ẩn ([ADR 0008](adr/0008-portfolio-data-css-motion.md), bổ sung).
+
+- [x] `content/portfolio/{vi,en}.yaml`: số liệu chỉ còn điểm TryHackMe `100k+` và số phòng `800+`; xóa mục số write-up
+      và số báo cáo bug bounty (chưa có); `recognition.items: []` (chưa có chứng chỉ, phần "// ghi nhận" ẩn); bỏ comment
+      mẫu `cvUrl`/`pgp` (nút CV và dòng PGP ẩn); link liên hệ chỉ còn GitHub, YouTube (bỏ HackerOne)
+- [x] Schema: `LINK_HOSTS` (nhãn → hostname được phép, so khớp chính xác); nhãn lạ hoặc host sai → build lỗi; unit test
+      cho `evilgithub.com`, `github.com.evil.example`, `gist.github.com`, `github.com.`, `youtu.be`, nhãn lạ, `constructor`
+- [x] Chặn chỗ giữ chỗ hai lớp, chung regex `PLACEHOLDER` (`[…]`, `<…>`, `［`/`【`, `{{`, `XXXX`/`xxxx`, `TODO`, `TBD`,
+      `lorem ipsum`): schema `text` từ chối lúc build (đã thử: `'[Số phòng]'` trong YAML → build lỗi đúng trường);
+      `test:dist` quét cả `<head>` và thuộc tính `content`/`href`/`alt`/`title`/`aria-label`, có kiểm tra quét được
+      nội dung (đã thử đột biến: `[..]` trong meta description, `XXXX` trong href, `&lt;Số phòng&gt;` → đều fail)
+- [x] Review bảo mật (security-reviewer): không có Critical/High. Đã sửa: **M1** test placeholder bỏ sót `<head>` và
+      thuộc tính; **M2** test âm thầm qua khi không parse được trang; **M3** regex placeholder hẹp, schema chấp nhận
+      placeholder; **L1** chặn cổng trong link liên hệ (`:443` vẫn qua vì URL chuẩn hóa về mặc định); **L3** nhãn link
+      trùng; **L4** ghi chú `HackerOne` trong `LINK_HOSTS` là chưa dùng. Chưa làm: **L2** allowlist path (chặn
+      `youtube.com/redirect`, OAuth GitHub; YAML do tác giả viết trong Git, rủi ro thấp). Việc của tác giả: **M4**, **M5** bên dưới
+- [x] Kiểm tra ở local (dev server và `dist`): đúng `100k+`, `800+`, href GitHub/YouTube đúng nguyên văn; không có HackerOne,
+      nút CV, phần ghi nhận, dòng PGP
+- [ ] (review M4) Tự soát hồ sơ GitHub `mintshell-dev` (tên hiển thị, email trong commit, org) và kênh YouTube
+      `@mintshell32` (tên kênh, email liên hệ, mặt/giọng) không lộ danh tính thật; cân nhắc handle thống nhất
+- [ ] (review M5) Tự soát hồ sơ TryHackMe công khai không lộ danh tính (100k+ điểm, 800+ phòng cùng trang tiếng Việt
+      đủ để thu hẹp trên bảng xếp hạng theo quốc gia)
+- [ ] Thêm khi có: số write-up, số báo cáo bug bounty, chứng chỉ, HackerOne (`https://hackerone.com/…`), CV, PGP, URL dự án
+      video và cộng đồng
+
 ## Việc còn mở từ các mốc đã xong
 
 Chép nguyên văn từ chi tiết mốc.
 
 ### M2b
 
-- [ ] Chờ dữ liệu thật: số phòng TryHackMe, số write-up, số báo cáo bug bounty, chứng chỉ, URL GitHub/YouTube/HackerOne, link CV, fingerprint PGP, URL dự án video và cộng đồng
-- [ ] Duyệt bản tiếng Anh của `content/portfolio/en.yaml`
+- [x] Dữ liệu thật đã điền ở M6a-1: số phòng TryHackMe, URL GitHub/YouTube
+- [ ] Còn chờ (đang ẩn, xem M6a-1): số write-up, số báo cáo bug bounty, chứng chỉ, URL HackerOne, link CV, fingerprint PGP, URL dự án video và cộng đồng
+- [x] Duyệt bản tiếng Anh của `content/portfolio/en.yaml`
 
 ### M3a
 
@@ -159,22 +188,22 @@ Deploy Worker static assets "mintshell" bằng `wrangler` từ GitLab CI, CSP `'
 
 Việc tác giả tự làm (trước/khi merge):
 
-- [ ] **(review H1, cô lập chính)** Đặt **Environment scope = `production`** cho `CLOUDFLARE_API_TOKEN`,
+- [x] **(review H1, cô lập chính)** Đặt **Environment scope = `production`** cho `CLOUDFLARE_API_TOKEN`,
       `CLOUDFLARE_ACCOUNT_ID`: GitLab chỉ đưa token vào job `deploy` (`environment: production`). `unset` trong
       `before_script` của job khác vẫn giữ, nhưng chỉ là lớp phụ (ADR 0014); cân nhắc TTL cho token Cloudflare
-- [ ] Xác nhận `main` là protected branch: không ai push thẳng, chỉ merge qua MR (một trong ba lớp cô lập token thay
+- [x] Xác nhận `main` là protected branch: không ai push thẳng, chỉ merge qua MR (một trong ba lớp cô lập token thay
       cho Protected Environment, ADR 0014)
-- [ ] Bật "Prevent outdated deployment jobs" (Settings → CI/CD → General pipelines) để retry job deploy cũ không đưa
+- [x] Bật "Prevent outdated deployment jobs" (Settings → CI/CD → General pipelines) để retry job deploy cũ không đưa
       bản cũ lên lại (review L6)
-- [ ] Bật "Always Use HTTPS" ở zone Cloudflare (HSTS `includeSubDomains`, review L10)
+- [x] Bật "Always Use HTTPS" ở zone Cloudflare (HSTS `includeSubDomains`, review L10)
 - [ ] Trả lời người báo lỗi bảo mật bằng địa chỉ "send as" `hi@mintshell.dev`, không phải hộp thư cá nhân nhận chuyển
       tiếp (lộ danh tính); xác nhận Email Routing hoạt động (review L7)
-- [ ] Gắn custom domain `mintshell.dev` cho Worker "mintshell" trên dashboard (token CI không có quyền zone)
-- [ ] Xác nhận "Use separate caches for protected branches" đang bật (Settings → CI/CD → General pipelines)
-- [ ] Xác minh danh tính runner (shared runner GitLab)
+- [x] Gắn custom domain `mintshell.dev` cho Worker "mintshell" trên dashboard (token CI không có quyền zone)
+- [x] Xác nhận "Use separate caches for protected branches" đang bật (Settings → CI/CD → General pipelines)
+- [x] Xác minh danh tính runner (shared runner GitLab)
 - [ ] Nâng `semgrep/semgrep:1.100.0` lên bản hiện tại (container không tra được Docker Hub); ghim cả ba image bằng
       `@sha256:`, ít nhất image node (chạy job deploy có token) (review M3)
-- [ ] Web Analytics: tắt auto-inject beacon trên dashboard cho tới M6 (nếu không CSP sẽ chặn và báo lỗi console)
+- [x] Web Analytics: tắt auto-inject beacon trên dashboard cho tới M6 (nếu không CSP sẽ chặn và báo lỗi console)
 
 Kiểm tra trên production sau deploy đầu tiên (`https://mintshell.dev`):
 

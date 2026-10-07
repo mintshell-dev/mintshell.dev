@@ -1,5 +1,6 @@
 # Dữ liệu trang /portfolio (tiếng Việt). Schema: apps/web/src/schemas/portfolio.ts.
-# Chỗ giữ chỗ dạng [..] chờ điền số liệu thật. Không đưa tên thật hay thông tin định danh.
+# Chỉ ghi số liệu thật, đúng nguyên văn; chưa có thì xóa mục (phần đó tự ẩn), không để chỗ giữ chỗ.
+# Không đưa tên thật hay thông tin định danh.
 meta:
   title: portfolio
   description: Portfolio của mintshell — kiểm thử xâm nhập ứng dụng web, bug bounty và CTF.
@@ -15,7 +16,6 @@ hero:
     nguyên nhân.
   ctaContact: Trao đổi công việc
   ctaCv: Tải CV
-  # cvUrl: https://… (chỉ hiện nút "Tải CV" khi có link)
 
 terminal:
   title: ~/mintshell
@@ -31,12 +31,7 @@ stats:
   - label: Điểm TryHackMe
     value: 100k+
   - label: Phòng TryHackMe đã hoàn thành
-    value: '[Số phòng]'
-  - label: Write-up đã xuất bản
-    value: '[Số write-up]'
-  - label: Báo cáo bug bounty
-    value: '[Số báo cáo]'
-    highlight: true
+    value: 800+
 
 # Câu chuyện nghề nghiệp chỉ kể ở đây. Không thêm tuổi, ngành cũ, nơi làm việc.
 journey:
@@ -79,19 +74,15 @@ projects:
 
 recognition:
   label: ghi nhận
-  items:
-    - name: '[Chứng chỉ 1]'
-      year: '[Năm]'
-    - name: '[Chứng chỉ 2]'
-      year: '[Năm]'
+  items: []
 
 contact:
   label: liên hệ
   title: Nói chuyện nhé.
   email: hi@mintshell.dev
-  # Thêm url (https) để hiện link; link không có url sẽ bị ẩn.
+  # Nhãn phải có trong LINK_HOSTS (schema) và url phải đúng host của nhãn.
   links:
     - label: GitHub
+      url: https://github.com/mintshell-dev
     - label: YouTube
-    - label: HackerOne
-  # pgp: 'XXXX XXXX XXXX XXXX XXXX XXXX XXXX XXXX XXXX XXXX'
+      url: https://www.youtube.com/@mintshell32

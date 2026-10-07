@@ -19,7 +19,7 @@ const valid = {
       { cmd: 'uptime', out: 'c' },
     ],
   },
-  stats: [{ label: 'Hạng', value: '[Hạng]' }],
+  stats: [{ label: 'Phòng TryHackMe', value: '800+' }],
   journey: { label: 'hành trình', body: 'Đoạn văn' },
   approach: { label: 'cách tôi làm việc', body: 'Đoạn văn' },
   skills: { label: 'kỹ năng', items: [{ name: 'Web', description: 'mô tả' }] },
@@ -30,7 +30,7 @@ const valid = {
       { name: 'B', description: 'mô tả', url: 'https://gitlab.com/mintshell/mintshell.dev' },
     ],
   },
-  recognition: { label: 'ghi nhận', items: [{ name: '[Chứng chỉ 1]', year: '[Năm]' }] },
+  recognition: { label: 'ghi nhận', items: [{ name: 'Chứng chỉ', year: '2026' }] },
   contact: {
     label: 'liên hệ',
     title: 'Nói chuyện nhé.',
@@ -90,6 +90,63 @@ describe('portfolioSchema', () => {
     expect(portfolioSchema.safeParse(project).success).toBe(false);
     expect(portfolioSchema.safeParse(link).success).toBe(false);
     expect(portfolioSchema.safeParse(cv).success).toBe(false);
+  });
+
+  it.each([
+    ['GitHub', 'https://github.com/mintshell'],
+    ['YouTube', 'https://www.youtube.com/@mintshell'],
+    ['YouTube', 'https://youtube.com/@mintshell'],
+    ['HackerOne', 'https://hackerone.com/mintshell'],
+  ])('chấp nhận link %s tới %s', (label, url) => {
+    const data = variant((d) => Object.assign(d.contact, { links: [{ label, url }] }));
+    expect(portfolioSchema.safeParse(data).success).toBe(true);
+  });
+
+  it.each([
+    ['GitHub', 'https://gitlab.com/mintshell'],
+    ['GitHub', 'https://evilgithub.com/mintshell'],
+    ['GitHub', 'https://github.com.evil.example/mintshell'],
+    ['GitHub', 'https://gist.github.com/mintshell'],
+    ['GitHub', 'https://github.com./mintshell'],
+    ['GitHub', 'https://github.com:8443/mintshell'],
+    ['YouTube', 'https://youtu.be/x'],
+    ['HackerOne', 'https://github.com/mintshell'],
+    ['Twitter', 'https://x.com/mintshell'],
+    ['constructor', undefined],
+  ])('từ chối link %s tới %s', (label, url) => {
+    const data = variant((d) => Object.assign(d.contact, { links: [{ label, url }] }));
+    expect(portfolioSchema.safeParse(data).success).toBe(false);
+  });
+
+  it('từ chối nhãn link trùng', () => {
+    const url = 'https://github.com/mintshell';
+    const data = variant((d) =>
+      Object.assign(d.contact, {
+        links: [
+          { label: 'GitHub', url },
+          { label: 'GitHub', url },
+        ],
+      }),
+    );
+    expect(portfolioSchema.safeParse(data).success).toBe(false);
+  });
+
+  it.each([
+    ['[Số phòng]'],
+    ['[Year]'],
+    ['<SỐ PHÒNG>'],
+    ['［Năm］'],
+    ['{{rooms}}'],
+    ['XXXX'],
+    ['xxxx'],
+    ['TODO'],
+    ['tbd'],
+    ['Lorem ipsum dolor'],
+  ])('từ chối chỗ giữ chỗ %s', (value) => {
+    const stat = variant((d) => (d.stats[0]!.value = value));
+    const cert = variant((d) => (d.recognition.items[0]!.name = value));
+    expect(portfolioSchema.safeParse(stat).success).toBe(false);
+    expect(portfolioSchema.safeParse(cert).success).toBe(false);
   });
 
   it.each<[string, (d: Data) => void]>([

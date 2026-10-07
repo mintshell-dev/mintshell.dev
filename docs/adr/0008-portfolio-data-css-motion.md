@@ -36,3 +36,13 @@ Hiệu ứng:
 - Tốc độ gõ của terminal cố định theo ký tự, lệnh ngắn gõ xong thì chờ; số lệnh cố định 3 vì độ trễ nằm trong stylesheet.
 - Trình duyệt chưa hỗ trợ scroll-driven animation (hiện là Firefox) thấy nội dung tĩnh, không có hiệu ứng cuộn.
 - Thêm phần dữ liệu khác (trang chủ ở M3) nên theo cùng mẫu: YAML theo locale + schema.
+
+## Bổ sung (M6a-1, 2026-10-07)
+
+- Link liên hệ: ngoài `httpsUrl`, mỗi nhãn chỉ được trỏ tới host khai báo trong `LINK_HOSTS` (`GitHub` →
+  `github.com`, `YouTube` → `youtube.com`/`www.youtube.com`, `HackerOne` → `hackerone.com`), so khớp chính xác
+  hostname, không cho cổng, nhãn không trùng. Nhãn không có trong bảng → build lỗi; thêm mạng mới thì thêm vào
+  bảng. Chưa kiểm path (ví dụ `youtube.com/redirect`): YAML do tác giả viết trong Git. Mục đích: dán nhầm link hay
+  link giả mạo (`evilgithub.com`) dưới nhãn quen thuộc không lọt lên trang công khai.
+- Không còn chỗ giữ chỗ: số liệu chưa có thì xóa mục chứ không để `[..]`. Regex `PLACEHOLDER` dùng chung cho schema
+  (build lỗi) và `test:dist` (quét bản build vi/en, cả `<head>` và thuộc tính).
