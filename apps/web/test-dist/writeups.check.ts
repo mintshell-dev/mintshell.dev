@@ -42,6 +42,15 @@ describe('khung write-up', () => {
     expect(() => readDist('en/writeups/sample-draft.html')).toThrow();
   });
 
+  it.each(['writeups/sample-writeup.html', 'en/writeups/sample-writeup.html'])(
+    'fixture %s: noindex, không canonical (ADR 0015)',
+    (path) => {
+      const page = readDist(path);
+      expect(page).toMatch(/<meta name="robots" content="noindex"/);
+      expect(page).not.toMatch(/rel="canonical"/);
+    },
+  );
+
   it('fixture KHÔNG hiện ở trang danh sách', () => {
     expect(readDist('writeups.html')).not.toMatch(/sample-writeup/);
     expect(readDist('en/writeups.html')).not.toMatch(/sample-writeup/);
@@ -125,10 +134,10 @@ describe('bản tiếng Anh pending', () => {
     expect(links).toContain('/writeups/sample-pending');
   });
 
-  it('bản tiếng Việt của bài đó vẫn index bình thường', () => {
+  it('bản tiếng Việt của bài đó vẫn build và render nội dung, nhưng là fixture nên noindex (ADR 0015)', () => {
     const vi = readDist('writeups/sample-pending.html');
-    expect(vi).not.toMatch(/<meta name="robots"/);
-    const canonical = tags(vi, 'link').filter((l) => attr(l, 'rel') === 'canonical');
-    expect(canonical).toHaveLength(1);
+    expect(vi).toMatch(/<article class="writeup/);
+    expect(vi).toMatch(/<meta name="robots" content="noindex"/);
+    expect(vi).not.toMatch(/rel="canonical"/);
   });
 });

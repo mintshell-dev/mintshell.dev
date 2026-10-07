@@ -1,0 +1,6 @@
+# Cho phép index toàn site (ADR 0015). Chỉ chặn mảnh chỉ mục Pagefind; 404, fixture, bản dịch pending
+# dùng <meta name="robots" content="noindex"> (chặn ở đây thì crawler không đọc được thẻ đó).
+User-agent: *
+Disallow: /pagefind/
+
+Sitemap: https://mintshell.dev/sitemap.xml

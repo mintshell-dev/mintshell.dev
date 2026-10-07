@@ -8,6 +8,7 @@ import {
   difficultyLabel,
   hasCover,
   isoDate,
+  listedLocales,
   ogImagePath,
   platformLabel,
   readingTime,
@@ -38,15 +39,22 @@ const minutes = readingTime(entry);
 // Bản chưa dịch (pending, vi hay en) không bao giờ vào chỉ mục; draft không build ở production.
 const searchable = !d.fixture && d.translation === 'done';
 // Cover OG riêng theo ngôn ngữ; bản en pending dùng ảnh mặc định của site (ADR 0012).
+// Một quy tắc với danh sách và sitemap (ADR 0015): trang chỉ index được khi bản ngôn ngữ của nó qua `isListed`.
+// Nhờ vậy fixture, bản en pending và bản vi pending (dev, hoặc lỡ `draft: false`) đều noindex, không canonical.
+// hreflang chỉ trỏ tới các bản có thật.
+const alternates = await listedLocales(slugOf(entry.id));
+const noindex = !alternates.includes(locale);
 const ogImage = hasCover(locale, entry) ? ogImagePath(locale, slugOf(entry.id)) : undefined;
 ---
 
 <BaseLayout
   title={d.title}
   description={d.description}
-  noindex={pending}
+  noindex={noindex}
   ogImage={ogImage}
   ogImageAlt={ogImage ? d.title : undefined}
+  alternates={noindex ? undefined : alternates}
+  article={pending ? undefined : { publishedTime: d.date, modifiedTime: d.updated, tags: d.tags }}
 >
   {pending ? (
     <section class="pending">

@@ -36,21 +36,24 @@ Triển khai:
 
 ## URL và slug
 
-| Trang      | Tiếng Việt            | Tiếng Anh                |
-| ---------- | --------------------- | ------------------------ |
-| Trang chủ  | `/`                   | `/en`                    |
-| Write-up   | `/writeups/<slug>`    | `/en/writeups/<slug>`    |
-| Cheatsheet | `/cheatsheets/<slug>` | `/en/cheatsheets/<slug>` |
-| Portfolio  | `/portfolio`          | `/en/portfolio`          |
-| Tìm kiếm   | `/search`             | `/en/search`             |
-| RSS        | `/rss.xml`            | `/en/rss.xml`            |
+| Trang      | Tiếng Việt             | Tiếng Anh                |
+| ---------- | ---------------------- | ------------------------ |
+| Trang chủ  | `/`                    | `/en`                    |
+| Write-up   | `/writeups/<slug>`     | `/en/writeups/<slug>`    |
+| Cheatsheet | `/cheatsheets/<slug>`  | `/en/cheatsheets/<slug>` |
+| Portfolio  | `/portfolio`           | `/en/portfolio`          |
+| Tìm kiếm   | `/search`              | `/en/search`             |
+| RSS        | `/rss.xml`             | `/en/rss.xml`            |
+| Sitemap    | `/sitemap.xml` (chung) |                          |
+| robots.txt | `/robots.txt` (chung)  |                          |
 
 Quy tắc slug:
 
 - ASCII chữ thường, gạch nối, không dấu (vd. `sqli-blind-time-based`).
 - Dùng chung cho cả hai ngôn ngữ.
 - Đã xuất bản là **vĩnh viễn**; nếu buộc phải đổi thì thêm redirect 301.
-- Mỗi trang có `canonical` và `hreflang` (vi, en, x-default → vi).
+- Mỗi trang index được có `canonical` và `hreflang` chỉ cho bản ngôn ngữ có thật (x-default → vi nếu có, không thì
+  en); 404, fixture và bản pending là `noindex`, không canonical/hreflang, không vào sitemap ([ADR 0015](adr/0015-sitemap-seo.md)).
 - URL không có `/` cuối (`trailingSlash: 'never'`, `build.format: 'file'`), xem [ADR 0007](adr/0007-layout-theme-url.md).
 - Bản tiếng Anh có `translation: pending` hiển thị thông báo và liên kết sang bản tiếng Việt.
 
