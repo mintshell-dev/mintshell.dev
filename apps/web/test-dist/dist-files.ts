@@ -68,6 +68,24 @@ export function pngSize(buf: Buffer): { width: number; height: number } {
 
 export const isNotFound = (path: string): boolean => /(^|\/)404\.html$/.test(path);
 
+/** URL công khai của một file HTML trong dist: `index.html` → `/`, `en.html` → `/en`, `a/b.html` → `/a/b`. */
+export function pageUrl(path: string): string {
+  if (path === 'index.html') return `${SITE}/`;
+  return `${SITE}/${path.replace(/\.html$/, '')}`;
+}
+
+/** URL tuyệt đối, đúng domain, không `.html`, không `/` cuối (trừ gốc) (ADR 0007). */
+export function isCleanUrl(url: string | undefined): boolean {
+  if (url === `${SITE}/`) return true;
+  return !!url?.startsWith(`${SITE}/`) && !/\.html$/.test(url) && !/\/$/.test(url);
+}
+
+/** Trang có `<meta name="robots" content="noindex">` (404, bản dịch pending, fixture). */
+export const isNoindex = (content: string): boolean =>
+  tags(content, 'meta').some(
+    (m) => attr(m, 'name') === 'robots' && /\bnoindex\b/.test(attr(m, 'content') ?? ''),
+  );
+
 const CONTENT = new URL('../../../content/writeups/', import.meta.url);
 
 /**
@@ -96,6 +114,41 @@ export function publicSlugs(locale: 'vi' | 'en', dir: URL = CONTENT): string[] {
     })
     .map((d) => d.name)
     .sort();
+}
+
+/** Giá trị thô một khóa frontmatter (một dòng `key: value`) của `<slug>/<locale>.mdx`, đọc thẳng từ nguồn. */
+export function frontmatterValue(
+  slug: string,
+  locale: 'vi' | 'en',
+  key: string,
+  dir: URL = CONTENT,
+): string | undefined {
+  const source = readFileSync(new URL(`${slug}/${locale}.mdx`, dir), 'utf8');
+  const front = /^---\n([\s\S]*?)\n---/.exec(source)?.[1] ?? '';
+  return new RegExp(`^${key}:\\s*(.+?)\\s*$`, 'm').exec(front)?.[1];
+}
+
+/**
+ * Danh sách YAML một khóa frontmatter, đọc thẳng từ nguồn: dạng `key: [a, b]` hoặc khối `- a` thụt lề.
+ * Chỉ đủ cho tag (chuỗi không dấu phẩy); bỏ ngoặc kép/đơn bao quanh.
+ */
+export function frontmatterList(
+  slug: string,
+  locale: 'vi' | 'en',
+  key: string,
+  dir: URL = CONTENT,
+): string[] {
+  const source = readFileSync(new URL(`${slug}/${locale}.mdx`, dir), 'utf8');
+  const front = /^---\n([\s\S]*?)\n---/.exec(source)?.[1] ?? '';
+  const unquote = (s: string) => s.trim().replace(/^(['"])(.*)\1$/, '$2');
+  const inline = new RegExp(`^${key}:\\s*\\[(.*)\\]\\s*$`, 'm').exec(front);
+  if (inline) return (inline[1] ?? '').split(',').map(unquote).filter(Boolean);
+  const block = new RegExp(`^${key}:\\s*\\n((?:\\s+-.*\\n?)+)`, 'm').exec(front);
+  return (block?.[1] ?? '')
+    .split('\n')
+    .map((l) => l.replace(/^\s+-\s*/, ''))
+    .map(unquote)
+    .filter(Boolean);
 }
 
 /** Slug mà frontmatter của `<slug>/<locale>.mdx` có đúng dòng `line` (vd. `translation: pending`). */

@@ -2,7 +2,7 @@
 
 Quỹ thời gian: 5–10 giờ/tuần, mỗi mốc khoảng 1 tuần. Định nghĩa hoàn thành: [workflow.md](workflow.md).
 
-**Tiếp theo: duyệt M5, làm các việc của tác giả (biến CI theo environment, custom domain), merge rồi chạy checklist sau deploy.**
+**Tiếp theo: duyệt M6a-2 (SEO), merge; sau deploy gửi sitemap lên Search Console và chạy checklist sau deploy của M5.**
 
 | Mốc   | Mục tiêu                                                  | Trạng thái | ADR                                                                          |
 | ----- | --------------------------------------------------------- | ---------- | ---------------------------------------------------------------------------- |
@@ -17,6 +17,7 @@ Quỹ thời gian: 5–10 giờ/tuần, mỗi mốc khoảng 1 tuần. Định n
 | M4    | Đồng bộ Notion (thủ công)                                 | Chờ duyệt  | [0013](adr/0013-notion-manual-pull.md)                                       |
 | M5    | CI/CD, security headers, security.txt                     | Chờ duyệt  | [0014](adr/0014-deploy-csp.md)                                               |
 | M6a-1 | Số liệu thật và link công khai cho portfolio              | Chờ duyệt  | [0008](adr/0008-portfolio-data-css-motion.md) (bổ sung)                      |
+| M6a-2 | SEO: sitemap, robots.txt, og:type=article, hreflang       | Chờ duyệt  | [0015](adr/0015-sitemap-seo.md)                                              |
 | M6    | Email Brevo, chính sách quyền riêng tư, analytics, ra mắt | Chưa làm   | —                                                                            |
 
 ## Mốc đã xong (tóm tắt)
@@ -111,6 +112,47 @@ Chỉ dữ liệu tác giả đưa, ghi nguyên văn; mục chưa có thì xóa 
 - [ ] Thêm khi có: số write-up, số báo cáo bug bounty, chứng chỉ, HackerOne (`https://hackerone.com/…`), CV, PGP, URL dự án
       video và cộng đồng
 
+## M6a-2 — SEO: sitemap, robots.txt, og:type=article
+
+Sitemap tự sinh theo cùng `isListed`, hreflang chỉ cho bản có thật, fixture `noindex` ([ADR 0015](adr/0015-sitemap-seo.md)).
+0 dependency (không dùng `@astrojs/sitemap`: không ra `/sitemap.xml`, không lọc được bằng `isListed`).
+
+- [x] `src/lib/seo.ts`: `STATIC_PATHS`, `xDefault`, `sitemapXml` (escape XML, hreflang `xhtml:link`, `lastmod` =
+      `updated ?? date` cho write-up); 11 unit test
+- [x] `src/pages/sitemap.xml.ts`: 24 URL (5 trang tĩnh × 2, 3 cặp vi/en, 8 bài chỉ en); không draft/fixture/pending/404/
+      `/og/*`/rss
+- [x] **Sửa lỗi có sẵn**: 8 bài chỉ có en khai `hreflang=vi` + `x-default` trỏ tới trang vi 404 → `BaseLayout` nhận
+      `alternates` (write-up dùng `listedLocales`, cùng `isListed`), `x-default` → vi nếu có, không thì en
+- [x] **Sửa lỗi có sẵn**: trang fixture index được → `noindex`, không canonical (vẫn build cho `test:dist`)
+- [x] `og:type=article` + `article:published_time`/`modified_time` (khi có `updated`, chỉ ngày)/`article:tag` cho
+      write-up có nội dung; trang khác (cả en pending) `website`; `<link rel="sitemap">` mọi trang
+- [x] `public/robots.txt`: cho phép tất cả, chỉ `Disallow: /pagefind/`, `Sitemap: https://mintshell.dev/sitemap.xml`
+- [x] `test:dist`: `sitemap.check` (XML hợp lệ, namespace, URL sạch tuyệt đối, tập `<loc>` = tập tính từ frontmatter =
+      tập trang `.html` không noindex trong `dist`, không draft/fixture/pending, hreflang hai chiều, `lastmod`),
+      `robots.check`, `seo.check` (hreflang chỉ trỏ trang index được + hai chiều, title/description/og:description/
+      og:url = canonical/og:image cùng origin, og:type article/website, `article:*` khớp frontmatter), `writeups.check`
+      (fixture noindex)
+- [x] Thử đột biến 6 kiểu, đều fail đúng test: draft vào sitemap; fixture vào sitemap; hreflang luôn đủ vi/en; bỏ
+      `article:published_time`; robots thiếu `Sitemap:`; thêm trang tĩnh `tmp-seo.astro` không khai `STATIC_PATHS`
+      (test so sitemap với `dist` đỏ)
+- [x] `wrangler dev`: `/sitemap.xml` 200 `application/xml`, `/robots.txt` 200 `text/plain; charset=utf-8`, cả hai
+      nosniff + một CSP chung; không sửa `_headers`/CSP
+- [x] Review bảo mật (security-reviewer): không có Critical/High/Medium; không lọt draft/fixture/pending/`_import`,
+      không injection từ frontmatter, không cần nới CSP. Đã sửa: **lỗi chức năng** trang vi pending (dev, hoặc lỡ
+      `draft: false`) làm `BaseLayout` throw → quy tắc một dòng "index được ⇔ bản ngôn ngữ qua `isListed`"
+      (`noindex = !listedLocales.includes(locale)`, gồm cả fixture và en pending; đã thử `astro dev` `/writeups/nax`:
+      200, noindex, không hreflang); **L1** export `escapeXml` và test trực tiếp (`new URL` đã percent-encode `<>"`);
+      **L2** `article:tag` so đúng danh sách tag trong frontmatter (cả dạng `[a, b]` lẫn khối `- a`); **L3** `isNoindex`
+      dùng `attr` thay vì regex thứ tự thuộc tính; **L6** `article:*_time` chỉ ghi ngày `YYYY-MM-DD` (không lộ giờ viết
+      nếu sau này có giờ). Chấp nhận: L3 phần so khớp nguyên dòng `draft: true` (lệch đều làm test đỏ), L4 hai danh
+      sách trang tĩnh (cố ý, lưới thật là so với `dist`), L5 domain ghi ở robots.txt (đã có test)
+- [x] Ghi chú: thử đột biến bằng `pnpm test:dist` (turbo) để lại file thừa trong `dist` khi cache hit (turbo khôi phục
+      output đè lên, không xóa file lạ); sau khi thử, `rm -rf apps/web/dist` rồi `TURBO_FORCE=true pnpm test:dist`
+- [ ] Việc của tác giả sau deploy: gửi `https://mintshell.dev/sitemap.xml` lên Google Search Console/Bing Webmaster;
+      kiểm tra `curl -I` sitemap/robots trên production
+- [ ] Chưa làm: JSON-LD `Article` (script nội tuyến, cần xem lại CSP), sitemap ảnh; chưa có bài nào có `updated` nên
+      nhánh `article:modified_time` mới chỉ được unit/logic test, chưa có trên dữ liệu thật
+
 ## Script chuyển write-up (`writeups:promote`)
 
 `pnpm writeups:promote <slug>|--all [--force]` chuyển cơ học `_import/<slug>/vi.md` sang `content/writeups/<slug>/vi.mdx`
@@ -168,7 +210,8 @@ Chép nguyên văn từ chi tiết mốc.
 
 ### M3b
 
-- [ ] Chưa làm (đã chốt): trang theo tag, bình luận, sitemap (M5)
+- [ ] Chưa làm (đã chốt): trang theo tag, bình luận
+- [x] Sitemap: xong ở M6a-2
 
 ### M3c
 
@@ -177,7 +220,8 @@ Chép nguyên văn từ chi tiết mốc.
 - [ ] Vite cảnh báo `MODULE_LEVEL_DIRECTIVE "use astro:head-inject"` khi MDX dùng component có style: chỉ là cảnh
       báo (CSS vẫn được nạp, đã kiểm tra); xem lại khi nâng Astro
 - [ ] Thử chia sẻ link (trình xem trước OG) sau khi deploy (M5)
-- [ ] Chưa làm (đã chốt): trang theo tag, cheatsheet, phân tích CVE, `og:type=article`/`article:*` (M5)
+- [ ] Chưa làm (đã chốt): trang theo tag, cheatsheet, phân tích CVE
+- [x] `og:type=article`/`article:*`: xong ở M6a-2
 
 ## Bảo trì
 
@@ -261,8 +305,8 @@ Kiểm tra trên production sau deploy đầu tiên (`https://mintshell.dev`):
 
 Chưa làm (còn mở):
 
-- [ ] Sitemap (`@astrojs/sitemap` là dependency mới, hoãn từ M3b)
-- [ ] `og:type=article`/`article:*`
+- [x] Sitemap: xong ở M6a-2 (tự sinh, không thêm `@astrojs/sitemap`, ADR 0015)
+- [x] `og:type=article`/`article:*`: xong ở M6a-2
 - [ ] Beacon Web Analytics và domain Brevo trong `form-action` (M6)
 - [ ] HSTS `preload`, ký PGP cho security.txt, rule semgrep tự viết (để semgrep thành cổng chặn), preview deploy cho MR
 - [ ] miniflare (qua wrangler) ghim `sharp` 0.35.4, nên lockfile có hai bản sharp (repo dùng 0.35.5): chỉ là dev tool,

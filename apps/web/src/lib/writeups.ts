@@ -82,6 +82,17 @@ export async function listWriteups(locale: Locale): Promise<WriteupEntry[]> {
     .sort(byDateDesc);
 }
 
+/**
+ * Các bản ngôn ngữ của một slug có ở danh sách công khai (`isListed`): hreflang của trang và sitemap chỉ
+ * trỏ tới các bản này, không trỏ tới bản draft/pending (không build hoặc noindex) (ADR 0015).
+ */
+export async function listedLocales(slug: string): Promise<Locale[]> {
+  const all = await loadAll();
+  return locales.filter((locale) =>
+    all.some((e) => e.id === `${slug}/${locale}` && isListed(e.data, locale, import.meta.env.DEV)),
+  );
+}
+
 /** Bài đưa vào feed RSS của một ngôn ngữ: đúng tập của danh sách công khai (ADR 0010). */
 export async function feedWriteups(locale: Locale): Promise<FeedSource[]> {
   const list = await listWriteups(locale);
