@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { attr, distFiles, readDist, tags } from './dist-files';
+import { attr, distFiles, publicSlugs, readDist, slugsWithFlag, tags } from './dist-files';
 
 const html = distFiles('.html');
 
@@ -43,6 +43,31 @@ describe('khung write-up', () => {
   it('fixture KHÔNG hiện ở trang danh sách', () => {
     expect(readDist('writeups.html')).not.toMatch(/sample-writeup/);
     expect(readDist('en/writeups.html')).not.toMatch(/sample-writeup/);
+  });
+
+  // Mỗi trang danh sách chỉ liệt kê bài có bản ngôn ngữ đó thật (translation: done), không fixture/draft.
+  describe.each([
+    ['vi', 'writeups.html', '/writeups/'],
+    ['en', 'en/writeups.html', '/en/writeups/'],
+  ] as const)('danh sách %s', (locale, file, prefix) => {
+    const listed = [...readDist(file).matchAll(/href="([^"#?]+)"/g)]
+      .map((m) => m[1] ?? '')
+      .filter((h) => h.startsWith(prefix))
+      .map((h) => h.slice(prefix.length))
+      .sort();
+
+    it('đúng tập bài công khai của ngôn ngữ, không thừa không thiếu', () => {
+      expect(listed).toEqual(publicSlugs(locale));
+    });
+
+    it('KHÔNG chứa fixture', () => {
+      for (const slug of slugsWithFlag(locale, 'fixture: true')) expect(listed).not.toContain(slug);
+    });
+
+    it(`KHÔNG chứa bài ${locale} chưa dịch (translation: pending)`, () => {
+      for (const slug of slugsWithFlag(locale, 'translation: pending'))
+        expect(listed, slug).not.toContain(slug);
+    });
   });
 
   it('khối code được Prism tô màu (class .token.*), không chỉ vắng style=', () => {
