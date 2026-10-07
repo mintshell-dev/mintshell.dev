@@ -1,6 +1,6 @@
 ---
 title: 'TryHeartMe'
-description: '[[THIẾU MÔ TẢ]]'
+description: 'Một JWT được ký bằng một secret yếu đến buồn cười cho ta ký lại token của chính mình thành admin, mở khóa panel admin, và "mua" flag.'
 date: 2026-10-05
 platform: tryhackme
 room: 'TryHeartMe'
@@ -8,8 +8,157 @@ roomUrl: 'https://tryhackme.com/room/lafb2026e5'
 difficulty: easy
 tags: [web, jwt, authentication, token forgery]
 vulnClasses: [Weak JWT Secret, Authentication Bypass, Broken Access Control]
-translation: pending
-draft: true
+translation: done
+draft: false
 ---
 
-Bản dịch tiếng Việt đang được chuẩn bị. Đọc bản tiếng Anh.
+## TryHackMe: TryHeartMe — Giả mạo một JWT admin để "mua" flag ẩn
+
+_Lời giải thử thách web "TryHeartMe" từ sự kiện Love at First Breach 2026 của TryHackMe. Một cửa hàng quà tặng chủ đề Valentine trao cho mỗi người dùng một JSON Web Token để theo dõi phiên của họ — nhưng token được ký bằng một secret yếu đến buồn cười, nên ta chỉ việc ký lại token của chính mình thành_ _`admin`_, _mở khóa panel admin, và thanh toán sản phẩm duy nhất quan trọng: flag._
+
+> Giá trị flag đã được che. TryHeartMe là một thử thách luyện tập được phép trên TryHackMe; mọi thứ ở đây được thực hiện trên một mục tiêu luyện tập hợp pháp.
+
+---
+
+### TL;DR — toàn bộ chuỗi
+
+<Callout type="tldr">
+
+Web app ở cổng 5000 (một cửa hàng Valentine) → đăng ký một tài khoản thường → phiên được theo dõi bằng một **cookie JWT** mang `"role": "user"` → giải mã nó và nhận ra nó được **ký HS256 bằng secret đoán-được** **`secret`** → ký lại một token đã sửa với `"role": "admin"` trong CyberChef → đặt cookie trở lại và tải lại trang → panel **Admin** xuất hiện → mở sản phẩm _ValenFlag_ và "mua" nó → **flag**.
+
+Không có leo quyền trên OS, không có mã khai thác — chỉ là một quyết định tin tưởng mà app không bao giờ nên đưa ra: ký một tuyên bố phân quyền bằng một secret mà kẻ tấn công đoán được.
+
+</Callout>
+
+### Mục tiêu
+
+```text
+export IP=<target-ip>
+nmap -sS -vv -p- -A $IP
+```
+
+```text
+22/tcp    open  ssh
+5000/tcp  open  upnp        # actually the app's HTTP service (Flask/Werkzeug)
+```
+
+Chỉ hai cổng. SSH không phải đường vào của ta — chưa có thông tin đăng nhập nào — nên toàn bộ thử thách nằm trên **cổng 5000**. Nmap gán 5000 là `upnp` từ bảng ánh xạ cổng-sang-dịch-vụ mặc định của nó, nhưng truy cập vào thì thấy một ứng dụng web, không phải UPnP:
+
+```text
+curl -s http://$IP:5000/ | head
+```
+
+Đó là một **cửa hàng quà tặng ngày Valentine** — danh sách sản phẩm, giá, một giỏ hàng, và một form đăng ký. Một cửa hàng theo dõi phiên đăng nhập chính xác là loại app mà lỗi phân quyền ẩn nấp, nên ta tạo một tài khoản và xem _cách_ nó nhớ ta là ai.
+
+### Liệt kê: đăng ký và đọc phiên
+
+Đăng ký bằng một email dùng-một-lần bất kỳ và đăng nhập. Duyệt một trang sản phẩm, một chi tiết nổi bật — app phơi ra một thuộc tính **`role: user`** gắn với tài khoản. Bất cứ nơi nào một app ghi lại một role, câu hỏi tức thì là: **ai thực thi nó, và tôi có thể đổi nó không?**
+
+Mở DevTools của trình duyệt → **Application → Cookies** cho site. Phiên không phải một ID ngẫu nhiên mờ đục — đó là một chuỗi dài, có dấu chấm, trông-giống-base64 với ba đoạn:
+
+```text
+eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJlbWFpbCI6...<payload>....<signature>
+```
+
+Ba đoạn base64url ngăn cách bằng dấu chấm là hình dạng không thể nhầm lẫn của một **JSON Web Token (JWT)**. JWT là một cách phổ biến để mang trạng thái phiên và phân quyền, và lỗ hổng của chúng gần như luôn đến từ các lựa chọn _triển khai_ — secret ký yếu, thiếu xác minh chữ ký, hoặc tin vào các claim mà kẻ tấn công sửa được. Vì ở đây một JWT quyết định ta là user hay admin, một lỗi trong nó nghĩa là **leo quyền** thẳng tuột.
+
+### Đọc token: cửa hàng tin vào cái gì
+
+Chép giá trị cookie vào [jwt.io](https://www.jwt.io/) để giải mã header và payload. Header nêu thuật toán; payload là phần thú vị:
+
+```text
+{
+  "email": "<our-account>@example.com",
+  "role": "user",
+  "credits": 0,
+  "iat": 1771185503,
+  "theme": "valentine"
+}
+```
+
+Header:
+
+```text
+{ "alg": "HS256", "typ": "JWT" }
+```
+
+Hai thứ nhảy ra:
+
+1. **`role`** **là một claim bên trong token**, và app rõ ràng đọc nó để quyết định ta thấy gì. Nếu ta có thể tạo ra một token nói `admin`, server sẽ trao cho ta giao diện admin.
+2. Token được ký bằng **HS256** — một HMAC đối xứng. HS256 chỉ mạnh bằng secret của nó. Nếu secret ngắn hoặc đoán-được, _bất kỳ ai_ cũng có thể đúc ra token hợp lệ; chữ ký thôi không còn là bằng chứng của gì cả.
+
+Thứ duy nhất đứng giữa "user" và "admin" là chữ ký đó. Nên toàn bộ cuộc tấn công thu về một câu hỏi: **ta có đoán được secret ký không?**
+
+### Giả mạo token: secret là `secret`
+
+Secret mặc-định-lười cho một app dùng-một-lần thường đúng là chữ `secret`, nên ta thử nó trước. Lấy payload đã giải mã, đổi một trường, và ký lại bằng HS256 dùng `secret` làm khóa. [CyberChef](https://gchq.github.io/CyberChef/) làm điều này trong một thao tác `JWT Sign` duy nhất:
+
+- **Recipe:** `JWT Sign` với khóa `secret`, thuật toán `HS256`
+- **Input:** payload với `role` đổi thành `admin`
+
+```text
+{
+  "email": "<our-account>@example.com",
+  "role": "admin",
+  "credits": 0,
+  "iat": 1771185503,
+  "theme": "valentine"
+}
+```
+
+CyberChef nhả ra một JWT mới được ký, ba đoạn. Nếu `secret` là khóa sai thì server sẽ từ chối chữ ký — việc nó không từ chối chính là toàn bộ lỗi: cửa hàng ký một **quyết định phân quyền** bằng một secret mà kẻ tấn công đoán trúng ngay lần đầu.
+
+### Trở thành admin
+
+Quay lại DevTools → **Application → Cookies**, thay giá trị cookie phiên bằng token giả mạo và **tải lại trang**. Server xác minh chữ ký (hợp lệ, vì ta dùng đúng secret thật của nó), đọc `"role": "admin"`, và nâng cấp giao diện của ta:
+
+- Một mục **Admin** xuất hiện trong thanh điều hướng mà một user thường không bao giờ thấy.
+- Bên trong có một sản phẩm đặc biệt — **ValenFlag**.
+
+Mở ValenFlag và bấm **Mua (Buy)**. Thanh toán — chỉ được gác bởi role ta vừa giả mạo — hoàn tất, và cửa hàng lộ ra flag:
+
+```text
+THM{<redacted>}
+```
+
+Flag đã lấy. Từ "đăng ký một tài khoản thường" tới "thanh toán admin" là ba nước đi: giải mã, ký lại, thay thế.
+
+### Vì sao nó hoạt động
+
+<Callout type="insight">
+
+Cửa hàng mắc một lỗi JWT kinh điển: nó coi token là **trạng thái đáng tin** trong khi ký nó bằng một **secret có độ mạnh không đáng tin**.
+
+</Callout>
+
+- Claim `role` nằm _phía client_, trong một cookie mà người dùng kiểm soát hoàn toàn. Điều đó ổn **chỉ khi** chữ ký không thể giả mạo.
+- Bảo mật của HS256 nằm toàn bộ ở khóa HMAC. Một từ trong từ điển như `secret` không cho bảo mật nào — nó bị đoán tức thì (và sẽ gục trong vài mili-giây trước một công cụ như `hashcat -m 16500` hoặc `jwt_tool`, nếu nó không phải là thứ đầu tiên bạn thử sẵn).
+- Một khi biết secret, kẻ tấn công _chính là_ người phát hành. Mọi token "đã xác minh" mà server thấy đều có thể do kẻ tấn công đúc ra, nên không claim nào trong đó — `role`, `credits`, bất cứ gì — có thể tin được.
+
+### Mức độ nghiêm trọng
+
+<Callout type="critical">
+
+**Cao.** Lỗ hổng là một cú leo quyền từ xa, thực-tế-không-cần-xác-thực: bất kỳ người dùng nào đăng ký được đều nhận một token, và từ đó một cú đoán secret tầm thường cấp quyền admin đầy đủ. Không cần tương tác người dùng nào ngoài việc sửa cookie của chính bạn, và tác động là vượt phân quyền hoàn toàn với bất cứ gì role admin kiểm soát.
+
+</Callout>
+
+### Khắc phục
+
+<Callout type="fix">
+
+1. **Dùng một secret ký mạnh, ngẫu nhiên.** Tối thiểu một khóa dài, entropy cao (32+ byte ngẫu nhiên) lưu trong cấu hình/quản lý secret — không bao giờ là một từ trong từ điển, không bao giờ commit vào mã nguồn. Xoay secret hiện tại; coi `secret` như đã cháy, điều này vô hiệu mọi token kẻ tấn công có thể đã giả mạo.
+2. **Đừng tin các claim role do client giữ.** Dẫn xuất phân quyền từ một bản ghi phiên phía server hoặc kiểm lại role của người dùng với database ở mỗi hành động đặc quyền, thay vì tin bất cứ gì cookie khẳng định.
+3. **Cân nhắc ký bất đối xứng (RS256/EdDSA).** Với một khóa ký riêng mà server không bao giờ gửi cho client, một khóa _xác minh_ bị lộ hay đoán được không thể dùng để giả mạo token.
+4. **Thực thi các giao dịch/hành động nhạy cảm ở phía server** với kiểm tra phân quyền thật, để việc lật một claim không thể mở khóa một sản phẩm chỉ-dành-cho-admin.
+
+</Callout>
+
+### Điểm rút ra
+
+- **Một token được ký chỉ đáng tin bằng secret của nó.** HS256 với `secret` là bảo mật diễn kịch — chữ ký không chứng minh gì một khi khóa đoán-được.
+- **Bất kỳ claim nào bạn đặt trong một token do client giữ đều do kẻ tấn công sửa được** trừ khi chữ ký thật sự không thể giả mạo. Đặt `role` ở nơi người dùng không thể phát hành lại.
+- **Đoán secret tẻ nhạt trước.** Trước khi với tới `hashcat`, hãy thử `secret`, tên app, và các mặc-định-lười khác — CTF (và, khó chịu thay, cả app thật) thường trao sẵn cánh cửa cho bạn.
+- **Trinh sát không chỉ là nmap.** Bề mặt tấn công thật ở đây là một cookie duy nhất; chiến thắng đến từ việc _đọc_ phiên, không phải quét host.
+
+Cảm ơn bạn đã đọc — và chúc "tan vỡ trái tim" (một cách có đạo đức) vui vẻ. TryHeartMe là một lời nhắc gọn gàng rằng token xác thực là một lời hứa, và một lời hứa ký bằng `secret` thì không đáng giá bao nhiêu.

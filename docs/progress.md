@@ -146,6 +146,11 @@ Sitemap tự sinh theo cùng `isListed`, hreflang chỉ cho bản có thật, fi
       dùng `attr` thay vì regex thứ tự thuộc tính; **L6** `article:*_time` chỉ ghi ngày `YYYY-MM-DD` (không lộ giờ viết
       nếu sau này có giờ). Chấp nhận: L3 phần so khớp nguyên dòng `draft: true` (lệch đều làm test đỏ), L4 hai danh
       sách trang tĩnh (cố ý, lưới thật là so với `dist`), L5 domain ghi ở robots.txt (đã có test)
+- [x] Sau khi tác giả dịch hết sang tiếng Việt (mọi bài song ngữ; số "24 URL / 8 bài chỉ en" ở trên là lúc làm mốc):
+      test bài chỉ-en ở `seo.check`/`sitemap.check` thành có điều kiện (danh sách rỗng là hợp lệ, có bài chỉ-en thì
+      vẫn kiểm không hreflang vi); `seo.check` tính bài chỉ-en bằng `publicSlugs` (bắt cả vi pending, không chỉ vi
+      draft). Đột biến: `binex/vi.mdx` → `draft: true` thì pass và thật sự kiểm `binex`; thêm hreflang luôn đủ vi/en →
+      fail ở `binex`; sitemap gán đủ vi/en cho mọi bài → fail; đã khôi phục (so `cmp` với bản sao lưu)
 - [x] Ghi chú: thử đột biến bằng `pnpm test:dist` (turbo) để lại file thừa trong `dist` khi cache hit (turbo khôi phục
       output đè lên, không xóa file lạ); sau khi thử, `rm -rf apps/web/dist` rồi `TURBO_FORCE=true pnpm test:dist`
 - [ ] Việc của tác giả sau deploy: gửi `https://mintshell.dev/sitemap.xml` lên Google Search Console/Bing Webmaster;

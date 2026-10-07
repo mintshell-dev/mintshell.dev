@@ -9,6 +9,7 @@ import {
   isNoindex,
   isNotFound,
   pageUrl,
+  publicSlugs,
   SITE,
   slugsWithFlag,
   tags,
@@ -103,19 +104,17 @@ describe('canonical và hreflang', () => {
     expect(metas(content, 'og:url')).toHaveLength(0);
   });
 
-  it('bài chỉ có bản en (vi draft) không khai hreflang vi', () => {
-    const enOnly = slugsWithFlag('vi', 'draft: true').filter(
-      (s) => !slugsWithFlag('en', 'draft: true').includes(s),
-    );
-    const real = enOnly.filter((s) => !slugsWithFlag('en', 'fixture: true').includes(s));
-    expect(real.length).toBeGreaterThan(0);
-    for (const slug of real) {
+  // Danh sách rỗng là hợp lệ (mọi bài đã dịch): không khẳng định phải có bài chỉ-en, chỉ kiểm khi có.
+  it('bài chỉ có bản en (vi draft/pending) không khai hreflang vi', () => {
+    const vi = publicSlugs('vi');
+    const enOnly = publicSlugs('en').filter((s) => !vi.includes(s));
+    enOnly.forEach((slug) => {
       const page = html.find((f) => f.path === `en/writeups/${slug}.html`);
       expect(page, slug).toBeDefined();
       const alternates = hreflangs(page?.content ?? '');
-      expect(Object.keys(alternates).sort()).toEqual(['en', 'x-default']);
-      expect(alternates['x-default']).toBe(`${SITE}/en/writeups/${slug}`);
-    }
+      expect(Object.keys(alternates).sort(), slug).toEqual(['en', 'x-default']);
+      expect(alternates['x-default'], slug).toBe(`${SITE}/en/writeups/${slug}`);
+    });
   });
 });
 

