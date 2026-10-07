@@ -1,6 +1,6 @@
 ---
 title: 'Hidden Deep Into My Heart'
-description: '[[THIẾU MÔ TẢ]]'
+description: 'robots.txt làm lộ một thư mục ẩn và một chuỗi trông-giống-mật-khẩu; một lần quét nội dung tìm ra trang đăng nhập admin, và chuỗi bị lộ cho ta vào thẳng.'
 date: 2026-10-05
 platform: tryhackme
 room: 'Hidden Deep Into my Heart'
@@ -8,8 +8,113 @@ roomUrl: 'https://tryhackme.com/room/lafb2026e9'
 difficulty: easy
 tags: [web, robots.txt, information disclosure, content discovery, authentication]
 vulnClasses: [Information Disclosure, Broken Access Control, Weak Credentials]
-translation: pending
-draft: true
+translation: done
+draft: false
 ---
 
-Bản dịch tiếng Việt đang được chuẩn bị. Đọc bản tiếng Anh.
+## TryHackMe: Hidden Deep Into my Heart — robots.txt làm lộ một kho bí mật và một mật khẩu
+
+_Lời giải thử thách web "Hidden Deep Into my Heart" từ sự kiện Love at First Breach 2026 của TryHackMe. Chiếc máy gần như để ngỏ cửa trước:_ _`robots.txt`_ _trỏ tới một thư mục ẩn và làm lộ một chuỗi trông-giống-mật-khẩu, một lần quét nội dung nhanh tìm ra trang đăng nhập admin trong thư mục đó, và chuỗi bị lộ đăng nhập thẳng cho ta với tư cách quản trị viên._
+
+> Flag và thông tin đăng nhập đã được che. Đây là một thử thách luyện tập được phép trên TryHackMe; mọi thứ ở đây được thực hiện trên một mục tiêu luyện tập hợp pháp.
+
+---
+
+### TL;DR — toàn bộ chuỗi
+
+<Callout type="tldr">
+
+Web app ở cổng 5000 → đọc **`/robots.txt`**, thứ làm lộ một đường dẫn ẩn `/cupids_secret_vault/` **và** một chuỗi khả nghi trông-giống-mật-khẩu → **gobuster** cái vault và tìm thấy một trang đăng nhập **`administrator`** → dùng lại chuỗi bị lộ làm mật khẩu admin → **đã xác thực với tư cách admin**, flag nằm trong khu admin.
+
+Không có khai thác nào — chỉ là liệt kê và một thông tin đăng nhập mà site tự trao cho ta miễn phí.
+
+</Callout>
+
+### Mục tiêu
+
+```text
+export IP=<target-ip>
+```
+
+Một web app chủ đề Valentine ở cổng 5000. Khi một thử thách tên là "hidden deep into my heart" (ẩn sâu trong tim), gợi ý chẳng hề tinh tế: có thứ gì đó bị _ẩn_, và nơi đầu tiên để tìm những thứ một site không muốn bạn thấy chính là file liệt kê chúng ra một cách sát nghĩa.
+
+### Liệt kê: đọc `robots.txt` trước tiên
+
+`robots.txt` là chỉ dẫn cho các trình thu thập (crawler), không phải một biện pháp bảo mật — và lập trình viên thường xuyên liệt kê đúng các đường dẫn họ muốn giữ riêng tư, khiến nó thành một tấm bản đồ miễn phí cho kẻ tấn công:
+
+```text
+curl -s http://$IP:5000/robots.txt
+```
+
+Hai thứ rơi ra từ nó:
+
+1. Một mục **`Disallow`** **cho một thư mục ẩn**, `/cupids_secret_vault/` — khu vực "bí mật" mà tên thử thách đã úp mở.
+2. Một **chuỗi lạc trông rất giống một mật khẩu** (`cupid_arrow_...`, đã che). Tự nó chẳng có ý nghĩa gì, nhưng đây là loại giá trị bạn ghi lại và thử sau với bất kỳ trang đăng nhập nào bạn tìm thấy.
+
+`robots.txt` vừa nói cho ta biết _gõ cửa ở đâu_ và, rất có thể, _nói gì_.
+
+### Tìm trang đăng nhập admin bên trong vault
+
+Đường dẫn vault tự nó không hiển thị gì hữu ích, nên ta brute-force nội dung của nó bằng **gobuster**, tìm các trang và phần mở rộng phổ biến:
+
+```text
+gobuster dir -u http://$IP:5000/cupids_secret_vault/ \
+  -w /usr/share/wordlists/dirb/big.txt -t 100 -x php,txt,js,html,bak
+```
+
+```text
+administrator        (Status: 200) [Size: 2381]
+```
+
+Nó đây — một endpoint **`administrator`** trả về `200`. Truy cập `http://$IP:5000/cupids_secret_vault/administrator` cho thấy một form đăng nhập admin.
+
+### Điểm đặt chân: đăng nhập admin bằng mật khẩu bị lộ
+
+Giờ hai manh mối kết nối. Ta có một trang đăng nhập admin và một chuỗi trông-giống-mật-khẩu mà `robots.txt` đã làm lộ. Phán đoán hiển nhiên cho username trên một panel admin là `admin`, nên ta thử cặp này:
+
+```text
+username: admin
+password: <đã che — chuỗi bị lộ trong robots.txt>
+```
+
+Nó hoạt động. Ta vào được khu **admin** đã xác thực, nơi flag của thử thách được hiển thị:
+
+```text
+THM{<redacted>}
+```
+
+Từ một request ẩn danh tới quyền truy cập admin, "kỹ năng" duy nhất cần có là đọc `robots.txt`, chạy một lần quét thư mục, và dùng lại một thông tin đăng nhập mà chính site đã công bố.
+
+### Vì sao nó hoạt động
+
+Thử thách này là một chuỗi các lỗi nhỏ về lộ thông tin và vệ sinh bảo mật, mỗi cái vô hại khi đứng riêng và chí mạng khi gộp lại:
+
+- **`robots.txt`** **dùng làm nơi giấu đồ.** Liệt kê một thư mục nhạy cảm trong `robots.txt` không giấu nó — mà quảng cáo nó. Crawler bỏ qua nó _theo yêu cầu_; kẻ tấn công đọc nó _đầu tiên_.
+- **Một bí mật lưu trong một file công khai.** Một mật khẩu (hay bất cứ thứ gì trông-giống-mật-khẩu) trong một file đọc-được-từ-client đã là bị lộ. Không có cái gọi là "đủ khó thấy".
+- **Một username admin dễ đoán và thông tin đăng nhập dùng lại.** `admin` cộng với một mật khẩu nằm dạng thô trên server là một cú đột nhập một dòng.
+
+### Mức độ nghiêm trọng
+
+<Callout type="critical">
+
+**Cao.** Quyền truy cập quản trị đầy đủ mà không cần khai thác nào, đạt được bởi bất kỳ người dùng ẩn danh nào chỉ trong vài request. Mọi thứ vai trò admin kiểm soát đều bị phơi ra.
+
+</Callout>
+
+### Khuyến nghị khắc phục
+
+<Callout type="fix">
+
+1. **Không bao giờ đặt bí mật trong** **`robots.txt`** (hay bất kỳ file nào phục vụ cho client). Nếu một đường dẫn phải riêng tư, bảo vệ nó bằng xác thực và phân quyền thật — không phải một dòng `Disallow`.
+2. **Gỡ mật khẩu bị lộ** và xoay nó; coi giá trị đã phơi ra như đã cháy. Lưu thông tin đăng nhập dạng băm (hash), không bao giờ trong file phẳng dưới web root.
+3. **Đưa panel admin ra sau một xác thực không phụ thuộc vào sự khó-thấy**, và cân nhắc giới hạn theo IP (IP-allowlisting) hoặc MFA cho các lần đăng nhập quản trị.
+
+</Callout>
+
+### Điểm rút ra
+
+- **`robots.txt`** **là mỏ vàng trinh sát.** Nó là thứ đầu tiên để `curl` trên bất kỳ mục tiêu web nào; nó thường nêu tên đúng các thư mục mà lập trình viên coi là nhạy cảm.
+- **Sự khó-thấy không phải là bảo mật.** Giấu một đường dẫn hay một bí mật trong một file trình duyệt lấy được chỉ có nghĩa là kẻ tấn công tìm thấy nó vài giây sau đó.
+- **Ghi lại mọi chuỗi lạc.** Một token trông-ngẫu-nhiên trên một trang thường là mật khẩu cho một trang đăng nhập ở trang khác — nối các manh mối lại.
+
+Cảm ơn bạn đã đọc. "Hidden Deep Into my Heart" là một lời nhắc gọn gàng rằng con đường vào nhanh nhất thường là con đường mà chính mục tiêu đã ghi lại sẵn cho bạn.
