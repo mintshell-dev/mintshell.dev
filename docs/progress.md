@@ -21,7 +21,7 @@ Quỹ thời gian: 5–10 giờ/tuần, mỗi mốc khoảng 1 tuần. Định n
 | M6b-A | Sitemap gửi Search Console, trạng thái Thành công (08/10) | Xong       | —                                                                            |
 | M6b-B | Rewrite tác giả, ký lại 72 commit, GitHub public (08/10)  | Xong       | —                                                                            |
 | M6b-B | Link repo cho người đọc chuyển sang GitHub công khai      | Xong       | —                                                                            |
-| M6b-C | Thông báo ra mắt                                          | Chưa làm   | —                                                                            |
+| M6b-C | Thông báo ra mắt                                          | Xong       | —                                                                            |
 | M6    | Email Brevo, chính sách quyền riêng tư, analytics, ra mắt | Chưa làm   | —                                                                            |
 
 ## Mốc đã xong (tóm tắt)
