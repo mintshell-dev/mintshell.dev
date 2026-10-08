@@ -18,6 +18,10 @@ Quỹ thời gian: 5–10 giờ/tuần, mỗi mốc khoảng 1 tuần. Định n
 | M5    | CI/CD, security headers, security.txt                     | Chờ duyệt  | [0014](adr/0014-deploy-csp.md)                                               |
 | M6a-1 | Số liệu thật và link công khai cho portfolio              | Chờ duyệt  | [0008](adr/0008-portfolio-data-css-motion.md) (bổ sung)                      |
 | M6a-2 | SEO: sitemap, robots.txt, og:type=article, hreflang       | Chờ duyệt  | [0015](adr/0015-sitemap-seo.md)                                              |
+| M6b-A | Sitemap gửi Search Console, trạng thái Thành công (08/10) | Xong       | —                                                                            |
+| M6b-B | Rewrite tác giả, ký lại 72 commit, GitHub public (08/10)  | Xong       | —                                                                            |
+| M6b-B | Link repo cho người đọc chuyển sang GitHub công khai      | Xong       | —                                                                            |
+| M6b-C | Thông báo ra mắt                                          | Chưa làm   | —                                                                            |
 | M6    | Email Brevo, chính sách quyền riêng tư, analytics, ra mắt | Chưa làm   | —                                                                            |
 
 ## Mốc đã xong (tóm tắt)
