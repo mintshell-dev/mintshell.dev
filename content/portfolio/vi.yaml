@@ -68,7 +68,7 @@ projects:
       description: >-
         Chính website này, xây dựng theo tư duy DevSecOps: quét secret, hàng rào chuỗi cung
         ứng và kiểm tra bản build tự động.
-      url: https://gitlab.com/mintshell/mintshell.dev
+      url: https://github.com/mintshell-dev/mintshell.dev
     - name: Cộng đồng bảo mật tiếng Việt
       description: Cộng đồng học bảo mật web bằng tiếng Việt, với write-up, cheatsheet và thảo luận.
 

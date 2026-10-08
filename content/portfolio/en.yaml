@@ -69,7 +69,7 @@ projects:
       description: >-
         This very website, built with a DevSecOps mindset: secret scanning, supply-chain
         safeguards and automated build checks.
-      url: https://gitlab.com/mintshell/mintshell.dev
+      url: https://github.com/mintshell-dev/mintshell.dev
     - name: Vietnamese security community
       description: A Vietnamese-language community for learning web security, with write-ups, cheatsheets and discussion.
 
