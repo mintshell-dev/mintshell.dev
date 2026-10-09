@@ -5,7 +5,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { isRedactedFlag, isWriteupDir, publicSlugs } from './dist-files';
+import { isWriteupDir, pairedSlugs, publicSlugs, slugsWithFlag } from './dist-files';
 
 /**
  * `publicSlugs` (dùng trong test:dist) phải bỏ qua thư mục bắt đầu bằng `_` (vd. `_import/` của
@@ -69,43 +69,27 @@ describe('publicSlugs bỏ qua thư mục _', () => {
   });
 });
 
-describe('isRedactedFlag', () => {
-  it.each([
-    'redacted',
-    'REDACTED',
-    'Redacted',
-    '[REDACTED]',
-    '[redacted]',
-    '<redacted>',
-    '<REDACTED>',
-    '__redacted__',
-    '__REDACTED__',
-    '_redacted_',
-    '-redacted-',
-    '--redacted--',
-    '(redacted)',
-    '{REDACTED}',
-    '*redacted*',
-    '  [ REDACTED ]  ',
-  ])('coi %j là đã che', (inner) => {
-    expect(isRedactedFlag(inner)).toBe(true);
-  });
+describe('thư mục chỉ có một bản (vi hoặc en)', () => {
+  it('publicSlugs và slugsWithFlag bỏ qua ngôn ngữ thiếu, không ném lỗi', () => {
+    const root = mkdtempSync(join(tmpdir(), 'one-locale-'));
+    try {
+      const write = (path: string, body: string) => {
+        mkdirSync(join(root, path, '..'), { recursive: true });
+        writeFileSync(join(root, path), body);
+      };
+      write('chi-en/en.mdx', front('translation: done\n'));
+      write('chi-vi/vi.mdx', front('draft: true\n'));
+      write('du/vi.mdx', front());
+      write('du/en.mdx', front());
 
-  it.each([
-    'a1b2c3d4e5f67890a1b2c3d4e5f67890',
-    'a1b2c3d4e5f6',
-    '5f4dcc3b5aa765d61d8327deb882cf99',
-    'Fl4g_s3cr3t',
-    'th1s_1s_r34l',
-    'redacted_a1b2c3',
-    'a1b2_redacted',
-    '[REDACTED]a1b2',
-    'not redacted at all',
-    'redactedd',
-    'REDACT',
-    '...',
-    '',
-  ])('coi %j là KHÔNG che (flag lộ hoặc không phải placeholder)', (inner) => {
-    expect(isRedactedFlag(inner)).toBe(false);
+      const dir = pathToFileURL(`${root}/`);
+      expect(publicSlugs('en', dir)).toEqual(['chi-en', 'du']);
+      expect(publicSlugs('vi', dir)).toEqual(['du']);
+      expect(slugsWithFlag('vi', 'draft: true', dir)).toEqual(['chi-vi']);
+      expect(slugsWithFlag('en', 'draft: true', dir)).toEqual([]);
+      expect(pairedSlugs(dir)).toEqual(['du']);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

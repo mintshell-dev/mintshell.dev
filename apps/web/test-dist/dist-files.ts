@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -96,24 +96,38 @@ const CONTENT = new URL('../../../content/writeups/', import.meta.url);
 export const isWriteupDir = (name: string): boolean =>
   !name.startsWith('_') && !name.startsWith('.');
 
+/** Tên thư mục write-up thật trong `dir`, sắp xếp. */
+function writeupDirs(dir: URL): string[] {
+  return readdirSync(dir, { withFileTypes: true })
+    .filter((d) => d.isDirectory() && isWriteupDir(d.name))
+    .map((d) => d.name)
+    .sort();
+}
+
+/** Bài `name` có bản `locale` (bài chỉ có một ngôn ngữ là hợp lệ, ADR 0015). */
+const hasLocale = (name: string, locale: 'vi' | 'en', dir: URL): boolean =>
+  existsSync(new URL(`${name}/${locale}.mdx`, dir));
+
+/** Frontmatter thô (giữa hai dòng `---`) của `<name>/<locale>.mdx`. */
+function frontOf(name: string, locale: 'vi' | 'en', dir: URL): string {
+  const source = readFileSync(new URL(`${name}/${locale}.mdx`, dir), 'utf8');
+  return /^---\n([\s\S]*?)\n---/.exec(source)?.[1] ?? '';
+}
+
 /**
  * Slug write-up công khai của một ngôn ngữ, tính độc lập từ frontmatter nguồn (không dùng lại
- * code của site): bỏ `draft: true`, `fixture: true` và `translation: pending` (cả vi lẫn en: mỗi trang chỉ liệt kê bài có
- * bản ngôn ngữ đó thật).
+ * code của site): bỏ bài không có bản ngôn ngữ đó, `draft: true`, `fixture: true` và `translation: pending`
+ * (cả vi lẫn en: mỗi trang chỉ liệt kê bài có bản ngôn ngữ đó thật).
  * `dir` chỉ để test; mặc định là `content/writeups/`.
  */
 export function publicSlugs(locale: 'vi' | 'en', dir: URL = CONTENT): string[] {
-  return readdirSync(dir, { withFileTypes: true })
-    .filter((d) => d.isDirectory() && isWriteupDir(d.name))
-    .filter((d) => {
-      const source = readFileSync(new URL(`${d.name}/${locale}.mdx`, dir), 'utf8');
-      const front = /^---\n([\s\S]*?)\n---/.exec(source)?.[1] ?? '';
-      const flag = (line: string) => new RegExp(`^${line}\\s*$`, 'm').test(front);
-      if (flag('draft: true') || flag('fixture: true')) return false;
-      return !flag('translation: pending');
-    })
-    .map((d) => d.name)
-    .sort();
+  return writeupDirs(dir).filter((name) => {
+    if (!hasLocale(name, locale, dir)) return false;
+    const front = frontOf(name, locale, dir);
+    const flag = (line: string) => new RegExp(`^${line}\\s*$`, 'm').test(front);
+    if (flag('draft: true') || flag('fixture: true')) return false;
+    return !flag('translation: pending');
+  });
 }
 
 /** Giá trị thô một khóa frontmatter (một dòng `key: value`) của `<slug>/<locale>.mdx`, đọc thẳng từ nguồn. */
@@ -151,27 +165,58 @@ export function frontmatterList(
     .filter(Boolean);
 }
 
-/** Slug mà frontmatter của `<slug>/<locale>.mdx` có đúng dòng `line` (vd. `translation: pending`). */
+/**
+ * Slug mà frontmatter của `<slug>/<locale>.mdx` có đúng dòng `line` (vd. `translation: pending`); bài không có
+ * bản `locale` bị bỏ qua.
+ */
 export function slugsWithFlag(locale: 'vi' | 'en', line: string, dir: URL = CONTENT): string[] {
-  return readdirSync(dir, { withFileTypes: true })
-    .filter((d) => d.isDirectory() && isWriteupDir(d.name))
-    .filter((d) => {
-      const source = readFileSync(new URL(`${d.name}/${locale}.mdx`, dir), 'utf8');
-      const front = /^---\n([\s\S]*?)\n---/.exec(source)?.[1] ?? '';
-      return front.split('\n').some((l) => l.trim() === line);
-    })
-    .map((d) => d.name)
-    .sort();
+  return writeupDirs(dir).filter(
+    (name) =>
+      hasLocale(name, locale, dir) &&
+      frontOf(name, locale, dir)
+        .split('\n')
+        .some((l) => l.trim() === line),
+  );
 }
 
-/** Ký tự bao quanh từ "redacted" được coi là cách che: khoảng trắng, ngoặc, gạch dưới, gạch ngang, sao. */
-const WRAP = String.raw`[\s\[\]<>(){}_*-]*`;
-const REDACTED_FLAG = new RegExp(`^${WRAP}redacted${WRAP}$`, 'i');
-
 /**
- * Nội dung trong `THM{…}`/`HTB{…}` (đã giải mã HTML entity) có phải placeholder đã che không: đúng từ
- * `redacted` (không phân biệt hoa thường), tùy chọn bao bởi ngoặc/gạch dưới/gạch ngang, vd. `redacted`,
- * `[REDACTED]`, `<redacted>`, `__redacted__`, `-redacted-`. Có thêm bất kỳ ký tự nào khác (chuỗi hex,
- * `redacted_a1b2`) thì KHÔNG coi là đã che.
+ * Trường frontmatter phải giống nhau giữa `vi.mdx` và `en.mdx` của cùng một bài (hai dòng Notion soạn riêng
+ * dễ lệch). Được khác: `title`, `description`, `draft`, `translation`, `readingTime`.
  */
-export const isRedactedFlag = (inner: string): boolean => REDACTED_FLAG.test(inner.trim());
+export const PAIR_SCALAR_KEYS = [
+  'date',
+  'updated',
+  'platform',
+  'room',
+  'roomUrl',
+  'difficulty',
+  'retired',
+  'fixture',
+] as const;
+export const PAIR_LIST_KEYS = ['tags', 'vulnClasses'] as const;
+
+/** Slug có đủ cả `vi.mdx` lẫn `en.mdx`. */
+export function pairedSlugs(dir: URL = CONTENT): string[] {
+  return writeupDirs(dir).filter(
+    (name) => hasLocale(name, 'vi', dir) && hasLocale(name, 'en', dir),
+  );
+}
+
+/** Các trường lệch giữa hai bản của `slug` (rỗng = khớp). So sau khi bỏ dấu nháy bao quanh. */
+export function pairMismatches(slug: string, dir: URL = CONTENT): string[] {
+  const unquote = (s: string | undefined) => s?.trim().replace(/^(['"])(.*)\1$/, '$2');
+  const scalar = PAIR_SCALAR_KEYS.filter(
+    (key) =>
+      unquote(frontmatterValue(slug, 'vi', key, dir)) !==
+      unquote(frontmatterValue(slug, 'en', key, dir)),
+  );
+  const lists = PAIR_LIST_KEYS.filter(
+    (key) =>
+      JSON.stringify(frontmatterList(slug, 'vi', key, dir)) !==
+      JSON.stringify(frontmatterList(slug, 'en', key, dir)),
+  );
+  return [...scalar, ...lists];
+}
+
+/** Nguồn chung với bản quét của `pnpm notion:pull` (`packages/shared/src/redaction.ts`). */
+export { isRedactedFlag } from '@mintshell/shared';

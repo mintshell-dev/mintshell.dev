@@ -1,22 +1,25 @@
 /**
  * `pnpm notion:pull` — kéo bài Status = Ready từ database Notion "Mintshell" về
- * `content/writeups/_import/<slug>/` (gitignore, ngoài build), rồi in báo cáo cảnh báo.
+ * `content/writeups/_import/<slug>/<locale>.md` (gitignore, ngoài build), rồi in báo cáo cảnh báo.
+ * Song ngữ: mỗi bài là hai dòng Notion dùng chung `Slug`, phân biệt bằng cột `Version` (`VERSIONS`); key mỗi bản
+ * là cặp (slug, locale). Dòng Ready nào thiếu Version → dừng cả lần chạy, không ghi file nào.
  *
  * An toàn mặc định (ADR 0013): KHÔNG xuất bản, KHÔNG tự sửa/xóa khi thấy cảnh báo. Tác giả tự
  * soát rồi tự chuyển bài sang `content/writeups/<slug>/`. Chạy thủ công, ngoài CI; token chỉ
  * đọc từ `.env` (docs/workflow.md).
  */
 import { existsSync } from 'node:fs';
-import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { createClient, NotionError } from './notion/api.ts';
 import { applyImages, type ImageOutcome, renderPage } from './notion/blocks.ts';
-import { buildFrontmatter, COLUMNS } from './notion/frontmatter.ts';
+import { buildFrontmatter, COLUMNS, readVersion, VERSIONS } from './notion/frontmatter.ts';
 import { downloadImage, imageFileName } from './notion/images.ts';
-import { buildReport, type PostResult, type Skipped } from './notion/report.ts';
+import { buildAbortReport, buildReport, type PostResult, type Skipped } from './notion/report.ts';
 import { scanMarkdown } from './notion/scan.ts';
+import { ownedBy, replaceEntries, RollbackError } from './notion/swap.ts';
 import type { FetchFn } from './notion/types.ts';
 
 export const READY = 'Ready';
@@ -26,7 +29,7 @@ const PUBLISHED_DIR = 'content/writeups';
 export interface PullOptions {
   token: string;
   databaseId: string;
-  /** Ghi đè `_import/<slug>/` đã có (mặc định: bỏ qua để không mất phần đang soát). */
+  /** Ghi đè `_import/<slug>/<locale>.md` đã có (mặc định: bỏ qua để không mất phần đang soát). */
   force: boolean;
   /**
    * Tải cả ảnh `external` (host bất kỳ). Mặc định KHÔNG: tải từ host lạ làm lộ IP thật của tác giả cho
@@ -57,6 +60,18 @@ export async function pull(options: PullOptions): Promise<PullOutcome> {
   const rel = (p: string) => relative(options.root, p).split('\\').join('/');
 
   const pages = await client.queryByStatus(options.databaseId, COLUMNS.status, READY);
+
+  // Kiểm trước khi gọi block hay ghi gì: Version trống thì không đoán bản nào, dừng cả lần chạy.
+  const missingVersion = pages
+    .filter((page) => readVersion(page.properties).kind === 'empty')
+    .map((page) => {
+      const fm = buildFrontmatter(page.properties);
+      return { title: fm.title || page.id, slug: fm.rawSlug };
+    });
+  if (missingVersion.length) {
+    return { results: [], skipped: [], failed: true, report: buildAbortReport(missingVersion) };
+  }
+
   const results: PostResult[] = [];
   const skipped: Skipped[] = [];
   const seen = new Set<string>();
@@ -64,31 +79,43 @@ export async function pull(options: PullOptions): Promise<PullOutcome> {
 
   for (const page of pages) {
     const fm = buildFrontmatter(page.properties);
+    const version = readVersion(page.properties);
     const label = fm.title || fm.rawSlug || page.id;
+    if (version.kind !== 'ok') {
+      const raw = version.kind === 'unknown' ? version.raw : '';
+      skipped.push({
+        label,
+        reason: `Version "${raw}" không thuộc ${Object.keys(VERSIONS).join('|')}`,
+      });
+      continue;
+    }
+    const { locale } = version;
     if (!fm.slug) {
       skipped.push({ label, reason: `slug "${fm.rawSlug}" không hợp lệ (ASCII thường, gạch nối)` });
       continue;
     }
-    if (seen.has(fm.slug)) {
-      skipped.push({ label, reason: `slug "${fm.slug}" trùng với bài khác trong lần kéo này` });
+    const key = `${fm.slug}/${locale}`;
+    if (seen.has(key)) {
+      skipped.push({ label, reason: `${key} trùng với dòng khác trong lần kéo này` });
       continue;
     }
-    seen.add(fm.slug);
+    seen.add(key);
 
     const dir = join(options.root, IMPORT_DIR, fm.slug);
-    const exists = existsSync(dir);
+    const file = join(dir, `${locale}.md`);
+    const exists = existsSync(file);
     if (exists && !options.force) {
       skipped.push({
         label,
-        reason: `${rel(dir)} đã có (đang soát?); chạy lại với --force để ghi đè`,
+        reason: `${rel(file)} đã có (đang soát?); chạy lại với --force để ghi đè`,
       });
       continue;
     }
 
     const otherWarnings: string[] = [];
-    if (existsSync(join(options.root, PUBLISHED_DIR, fm.slug))) {
+    if (existsSync(join(options.root, PUBLISHED_DIR, fm.slug, `${locale}.mdx`))) {
       otherWarnings.push(
-        `slug đã xuất bản ở ${PUBLISHED_DIR}/${fm.slug}/ (slug vĩnh viễn; đây là bản cập nhật?)`,
+        `đã xuất bản ở ${PUBLISHED_DIR}/${fm.slug}/${locale}.mdx (slug vĩnh viễn; đây là bản cập nhật?)`,
       );
     }
 
@@ -105,16 +132,20 @@ export async function pull(options: PullOptions): Promise<PullOutcome> {
     }
     otherWarnings.push(...rendered.warnings);
 
-    // Ghi nguyên tử: viết toàn bộ vào thư mục tạm (cùng _import/, đã gitignore), chỉ thay bản nháp cũ
-    // (--force) khi đã ghi xong. Lỗi giữa chừng (tải ảnh, ghi file) không làm mất phần đang soát.
-    const tmp = join(options.root, IMPORT_DIR, `.tmp-${fm.slug}-${process.pid}-${Date.now()}`);
+    // Ghi nguyên tử theo từng bản: dựng `<locale>.md` + `images/<locale>-*` ở thư mục tạm (cùng _import/, đã
+    // gitignore), rồi chỉ thay đúng các file đó (bản ngôn ngữ kia giữ nguyên). Lỗi giữa chừng (tải ảnh, ghi
+    // file) không làm mất phần đang soát. Thư mục tạm tạo bằng `mkdtemp` (tên ngẫu nhiên, tạo độc quyền:
+    // không ghi xuyên một symlink dựng sẵn, review L2).
+    const importDir = join(options.root, IMPORT_DIR);
+    let tmp: string | null = null;
     const images: PostResult['images'] = [];
     const imageFailures: PostResult['imageFailures'] = [];
     const externalSkipped: PostResult['externalSkipped'] = [];
     const replacements = new Map<number, ImageOutcome>();
     let content: string;
     try {
-      await mkdir(tmp, { recursive: true });
+      await mkdir(importDir, { recursive: true });
+      tmp = await mkdtemp(join(importDir, `.tmp-${fm.slug}-${locale}-`));
       for (const img of rendered.images) {
         if (img.source === 'external' && !options.externalImages) {
           externalSkipped.push({ index: img.index, url: img.url });
@@ -139,30 +170,28 @@ export async function pull(options: PullOptions): Promise<PullOutcome> {
           replacements.set(img.index, { failure: dl.reason });
           continue;
         }
-        const name = imageFileName(img.index, img.url, dl.kind);
+        // Tiền tố ngôn ngữ: hai bản dùng chung `images/` mà không đè ảnh của nhau.
+        const name = `${locale}-${imageFileName(img.index, img.url, dl.kind)}`;
         await mkdir(join(tmp, 'images'), { recursive: true });
         await writeFile(join(tmp, 'images', name), dl.bytes);
         images.push({ path: rel(join(dir, 'images', name)), metadata: dl.metadata });
         replacements.set(img.index, { path: `./images/${name}` });
       }
       content = fm.yaml + '\n' + applyImages(rendered.markdown, replacements);
-      await writeFile(join(tmp, 'vi.md'), content, 'utf8');
-      if (exists) await rm(dir, { recursive: true, force: true });
-      await rename(tmp, dir);
+      await writeFile(join(tmp, `${locale}.md`), content, 'utf8');
+      // `legacy`: ảnh nháp cũ (trước song ngữ, không tiền tố) trong _import/ thuộc bản vi.
+      await replaceEntries(dir, tmp, ownedBy(locale, 'md', true));
     } catch (err) {
-      await rm(tmp, { recursive: true, force: true });
       failed = true;
-      const reason = err instanceof Error ? err.name : 'không rõ';
-      skipped.push({
-        label,
-        reason: `lỗi khi ghi bài (${reason}); bản nháp cũ (nếu có) giữ nguyên`,
-      });
+      skipped.push({ label, reason: writeFailure(err, dir, rel) });
       continue;
+    } finally {
+      if (tmp) await rm(tmp, { recursive: true, force: true });
     }
-    const file = join(dir, 'vi.md');
 
     results.push({
       slug: fm.slug,
+      locale,
       title: fm.title,
       file: rel(file),
       images,
@@ -178,10 +207,23 @@ export async function pull(options: PullOptions): Promise<PullOutcome> {
   return { results, skipped, failed, report: buildReport(results, skipped) };
 }
 
+/** Lý do khi ghi một bản thất bại; rollback không trọn thì nói rõ file cũ đang ở đâu (review M2). */
+export function writeFailure(err: unknown, dir: string, rel: (p: string) => string): string {
+  const name = (e: unknown) => (e instanceof Error ? e.name : 'không rõ');
+  if (err instanceof RollbackError) {
+    return (
+      `lỗi khi ghi bài (${name(err.cause)}) và KHÔI PHỤC CHƯA TRỌN: ${rel(dir)}/ có thể thiếu hoặc lẫn file; ` +
+      `bản cũ còn ở ${rel(err.backup)}/ (${err.pending.join(', ')}), tự chép về rồi xóa thư mục đó`
+    );
+  }
+  return `lỗi khi ghi bài (${name(err)}); bản nháp cũ (nếu có) giữ nguyên`;
+}
+
 const USAGE = `Dùng: pnpm notion:pull [--force] [--external-images]
 
-Kéo bài Status = ${READY} từ Notion về ${IMPORT_DIR}/<slug>/ để soát. Không xuất bản gì.
-  --force             ghi đè thư mục ${IMPORT_DIR}/<slug>/ đã có
+Kéo bài Status = ${READY} từ Notion về ${IMPORT_DIR}/<slug>/<vi|en>.md để soát. Không xuất bản gì.
+Cột Version (${Object.keys(VERSIONS).join(' | ')}) chọn bản; dòng Ready nào thiếu Version → dừng, không ghi gì.
+  --force             ghi đè ${IMPORT_DIR}/<slug>/<vi|en>.md đã có (chỉ bản được kéo)
   --external-images   tải cả ảnh external (host ngoài Notion; lộ IP của bạn cho host đó)
 Cần NOTION_TOKEN và NOTION_DATABASE_ID trong .env (xem .env.example, docs/workflow.md).`;
 

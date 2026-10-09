@@ -28,7 +28,19 @@ export const COLUMNS = {
   vulnClasses: 'Vuln classes',
   date: 'Date',
   description: 'Description',
+  version: 'Version',
 } as const;
+
+/**
+ * Mỗi bài là hai dòng Notion dùng chung `Slug`, phân biệt bằng cột `Version`. Map tường minh, so khớp chính xác
+ * (sau trim): giá trị khác bị bỏ qua kèm cảnh báo, không đoán.
+ */
+export const VERSIONS = { EN: 'en', VI: 'vi' } as const;
+export type Locale = (typeof VERSIONS)[keyof typeof VERSIONS];
+export const LOCALES: readonly Locale[] = ['vi', 'en'];
+
+export type VersionResult =
+  { kind: 'ok'; locale: Locale } | { kind: 'empty' } | { kind: 'unknown'; raw: string };
 
 type Prop = Record<string, unknown> & { type?: unknown };
 
@@ -80,6 +92,14 @@ export function readDate(props: Record<string, unknown>, name: string): string {
   const start = p?.type === 'date' ? (p.date as { start?: unknown } | null)?.start : undefined;
   const value = typeof start === 'string' ? start.slice(0, 10) : readText(props, name);
   return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : '';
+}
+
+export function readVersion(props: Record<string, unknown>): VersionResult {
+  const raw = readText(props, COLUMNS.version);
+  if (!raw) return { kind: 'empty' };
+  return Object.hasOwn(VERSIONS, raw)
+    ? { kind: 'ok', locale: VERSIONS[raw as keyof typeof VERSIONS] }
+    : { kind: 'unknown', raw };
 }
 
 /** Chuỗi YAML nháy kép. JSON là tập con của YAML 1.2 nên an toàn với `:`, `#`, xuống dòng, `---`… */
@@ -148,8 +168,7 @@ export function buildFrontmatter(props: Record<string, unknown>): FrontmatterRes
   const vulnClasses = readList(props, COLUMNS.vulnClasses);
   if (!vulnClasses.length) warnings.push('vulnClasses rỗng');
 
-  // Cột Description của Notion là tiếng Anh (bài gốc), đổ vào description của bản được kéo. Bản dịch
-  // tiếng Việt cần description tiếng Việt riêng, điền khi dịch (ngoài phạm vi script).
+  // Mỗi dòng Notion là một bản ngôn ngữ (cột Version), nên Description của dòng đó là description của bản đó.
   const description = readText(props, COLUMNS.description);
   if (!description) warnings.push('description rỗng');
 

