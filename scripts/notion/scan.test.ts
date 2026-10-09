@@ -27,6 +27,21 @@ describe('flag', () => {
     const md = 'THM{REDACTED} HTB{<redacted>} THM\\{\\<redacted>\\} flag{ redacted }';
     expect(kinds(md, 'flag')).toEqual([]);
   });
+
+  it('cùng nguồn với test:dist: THM{[REDACTED]}, __redacted__, dạng escape đều là đã che', () => {
+    const md = [
+      'THM{[REDACTED]}',
+      'HTB{__redacted__}',
+      'THM\\{\\[REDACTED\\]\\}',
+      '`THM{(redacted)}`',
+    ].join('\n');
+    expect(kinds(md, 'flag')).toEqual([]);
+  });
+
+  it('chữ redacted kèm ký tự khác vẫn bị báo', () => {
+    const md = 'THM{redacted_a1b2}\nHTB{[REDACTED]a1b2}';
+    expect(kinds(md, 'flag')).toEqual(['1:THM{redacted_a1b2}', '2:HTB{[REDACTED]a1b2}']);
+  });
 });
 
 describe('IPv4', () => {

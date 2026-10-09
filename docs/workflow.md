@@ -18,8 +18,8 @@ pnpm test               # chạy unit test
 pnpm test:dist          # build rồi kiểm tra bản build (apps/web/dist)
 pnpm format:check       # kiểm tra định dạng (pnpm format để sửa)
 pnpm --filter web <lệnh>  # chạy lệnh cho một gói
-pnpm notion:pull        # THỦ CÔNG: kéo bài Notion "Ready" về _import/ để soát (xem dưới)
-pnpm writeups:promote <slug>|--all   # THỦ CÔNG: chuyển cơ học _import/<slug>/vi.md → content/writeups/<slug>/vi.mdx (xem dưới)
+pnpm notion:pull        # THỦ CÔNG: kéo bài Notion "Ready" về _import/<slug>/<vi|en>.md để soát (xem dưới)
+pnpm writeups:promote <slug>|--all   # THỦ CÔNG: chuyển cơ học _import/<slug>/<vi|en>.md → content/writeups/<slug>/<vi|en>.mdx (xem dưới)
 pnpm build && pnpm --filter web exec wrangler dev   # thử header/routing như Cloudflare, ở local (xem dưới)
 ```
 
@@ -50,8 +50,20 @@ security, không deploy; chỉ `main` (protected) deploy bằng `wrangler deploy
 
 ## Đồng bộ Notion (`pnpm notion:pull`, thủ công)
 
-Kéo bài Status = Ready từ database Notion "Mintshell" về `content/writeups/_import/<slug>/` để soát.
+Kéo bài Status = Ready từ database Notion "Mintshell" về `content/writeups/_import/<slug>/<vi|en>.md` để soát.
 **Không xuất bản gì**, không tự sửa hay xóa khi thấy cảnh báo. Lý do thiết kế: [ADR 0013](adr/0013-notion-manual-pull.md).
+
+**Song ngữ (cột Version):** mỗi bài là **hai dòng Notion dùng chung `Slug`**, chọn bản bằng cột `Version`:
+`EN` → `en.md`, `VI` → `vi.md` (so khớp chính xác sau trim, phân biệt hoa thường: `en`, `Vi` là giá trị lạ). Mỗi bản được kéo, kiểm "đã có" và ghi đè
+(`--force`) **riêng**. Ảnh có tiền tố ngôn ngữ (`images/vi-01-….png`, `images/en-01-….png`) nên hai bản không đè ảnh
+của nhau.
+
+- Dòng Ready nào để **trống Version** → script **dừng cả lần chạy**, in tên bài + slug, **không ghi file nào**
+  (mã thoát 1). Điền Version trong Notion rồi chạy lại.
+- Version có giá trị khác hai giá trị trên → dòng đó bị bỏ qua, có cảnh báo ở mục "Bỏ qua"; các dòng khác vẫn kéo.
+- Hai dòng trùng cả Slug lẫn Version → dòng sau bị bỏ qua.
+- Báo cáo có dòng **"KHÔI PHỤC CHƯA TRỌN"** (pull hoặc promote) → thư mục bài có thể thiếu hoặc lẫn file; bản cũ còn
+  nguyên trong thư mục backup ghi trong báo cáo: tự chép về rồi xóa thư mục backup đó.
 
 **Chuẩn bị (một lần):**
 
@@ -69,9 +81,10 @@ Sau khi xuất bản một bài (chuyển từ `_import/` sang `content/writeups
 đó trong Notion thành **Published**. Nhờ vậy mỗi bài chỉ được kéo đúng một lần; lần `notion:pull` sau không kéo
 lại bài đã xuất bản.
 
-Lưu ý: bài đang nằm trong `_import/<slug>/` không bị kéo lại (script bỏ qua thư mục đã tồn tại) trừ khi chạy với
-`--force`. Nhưng sau khi đã xóa `_import/<slug>/` lúc xuất bản, nếu Notion vẫn để Ready thì bài sẽ bị kéo lại vào
-`_import/` kèm cảnh báo "slug đã xuất bản". Đổi sang Published để tránh điều này.
+Lưu ý: bản đang nằm trong `_import/<slug>/<vi|en>.md` không bị kéo lại (script bỏ qua file đã tồn tại) trừ khi chạy
+với `--force`; bản ngôn ngữ còn lại vẫn kéo bình thường. Nhưng sau khi đã xóa `_import/<slug>/` lúc xuất bản, nếu
+Notion vẫn để Ready thì bản đó sẽ bị kéo lại vào `_import/` kèm cảnh báo "đã xuất bản ở …". Đổi cả hai dòng sang
+Published để tránh điều này.
 
 **Tường lửa:** 2 host đã được mở sẵn trong `.devcontainer/init-firewall.sh`: `api.notion.com` và
 `prod-files-secure.s3.us-west-2.amazonaws.com` (ảnh Notion), không cần sửa gì trước khi chạy. Lý do và đánh đổi:
@@ -86,7 +99,7 @@ Claude Code (không chạy ngoài container). Lý do: token và dữ liệu Noti
 
 ```sh
 pnpm notion:pull            # bỏ qua bài đã có trong _import/ (đang soát dở)
-pnpm notion:pull --force    # ghi đè _import/<slug>/ đã có
+pnpm notion:pull --force    # ghi đè _import/<slug>/<vi|en>.md đã có (chỉ file của bản được kéo)
 pnpm notion:pull --external-images   # tải cả ảnh external (mặc định KHÔNG: lộ IP của bạn cho host đó)
 ```
 
@@ -98,24 +111,28 @@ ADR 0013) để chặn cả `git add -f`. Agent không sửa file đó.
 
 **Đọc báo cáo:** bảng mỗi bài (ảnh tải/lỗi/external không tải, flag, IP, prompt `user@host`, đường dẫn home, metadata ảnh, block chưa
 hỗ trợ, frontmatter, khác),
-rồi danh sách `content/writeups/_import/<slug>/vi.md:<dòng>` để nhảy tới, rồi danh sách ảnh để **tự mở xem** (script
+rồi danh sách `content/writeups/_import/<slug>/<vi|en>.md:<dòng>` để nhảy tới (mỗi bản một mục `slug/vi`, `slug/en`), rồi danh sách ảnh để **tự mở xem** (script
 không đọc được nội dung ảnh: chữ trong ảnh chụp màn hình phải tự kiểm). Dòng cuối là **TỔNG KẾT**. Cảnh báo cố ý báo
 thừa (vd. mọi `user@host` trong code, mọi IPv4): tự loại những cái vô hại.
 
 **Chuyển một bài sang `content/` (sau khi soát):**
 
-- [ ] Che flag (`THM{REDACTED}`), IP, dấu nhắc terminal, email, đường dẫn home lộ tên máy/người dùng thật,
+- [ ] Che flag (`THM{[REDACTED]}`; giá trị đã che hợp lệ dùng chung với `test:dist`: `packages/shared/src/redaction.ts`), IP, dấu nhắc terminal, email, đường dẫn home lộ tên máy/người dùng thật,
       chuỗi 32 hex (flag HackTheBox), mention người dùng Notion.
 - [ ] Mở từng ảnh: che thông tin nhạy cảm trong ảnh; xóa metadata nếu báo cáo có ghi `[metadata: …]`.
-- [ ] Điền `[[THIẾU ALT]]`, `[[THIẾU MÔ TẢ]]` (cột Notion `Description` là tiếng Anh; `vi.mdx` cần description
-      tiếng Việt riêng); xử lý `[[ẢNH CHƯA TẢI…]]`, `[[ẢNH EXTERNAL KHÔNG TẢI…]]`, `[chưa hỗ trợ: …]`, link nội bộ Notion.
+- [ ] Điền `[[THIẾU ALT]]`, `[[THIẾU MÔ TẢ]]` (mỗi dòng Notion có `Description` theo ngôn ngữ của dòng đó); xử lý `[[ẢNH CHƯA TẢI…]]`, `[[ẢNH EXTERNAL KHÔNG TẢI…]]`, `[chưa hỗ trợ: …]`, link nội bộ Notion.
 - [ ] Đổi `> **[Callout …]**` thành `<Callout type="…">` (ADR 0012): `pnpm writeups:promote <slug>` đổi cú pháp thành
       `type="note"`, bạn tự chọn đúng loại (tldr/critical/insight/fix).
 - [ ] Soát dòng có `&#101;xport`/`&#105;mport` (script đã vô hiệu dòng ESM, MDX sẽ chạy nếu là `export` thô); giữ
       character reference hoặc viết lại câu.
 - [ ] HackTheBox: xác nhận phòng đã retired rồi đặt `retired: true`.
-- [ ] Chuyển `_import/<slug>/vi.md` thành `content/writeups/<slug>/vi.mdx` (kèm `images/`) bằng
-      `pnpm writeups:promote <slug>` (hoặc `--all`; đích đã có thì bỏ qua, `--force` để ghi đè). Script chỉ đổi
-      cú pháp callout, chuẩn hóa alt rỗng thành `[[THIẾU ALT]]` và copy ảnh; KHÔNG đổi `draft`, KHÔNG xóa `_import/`,
-      và in danh sách việc tay (description, alt, loại callout). Đặt `draft: false` khi sẵn sàng.
+- [ ] Chuyển `_import/<slug>/<vi|en>.md` thành `content/writeups/<slug>/<vi|en>.mdx` (kèm ảnh của bản đó) bằng
+      `pnpm writeups:promote <slug>` (hoặc `--all`). Mỗi bản xử lý riêng: bản đích đã có thì bỏ qua (bản kia vẫn
+      chuyển), `--force` để ghi đè và chỉ thay `<locale>.mdx` + `images/<locale>-*`. Ảnh không tiền tố đã có ở
+      đích không bao giờ bị xóa hay ghi đè (báo "giữ images/… đã có ở đích"). Script chỉ đổi cú pháp callout,
+      chuẩn hóa alt rỗng thành `[[THIẾU ALT]]` và copy ảnh; KHÔNG đổi `draft`/`translation`, KHÔNG xóa `_import/`,
+      và in danh sách việc tay (description, alt, loại callout). Soát xong mới đặt `translation: done` và
+      `draft: false`.
+- [ ] Hai bản vi/en phải khớp `date`, `updated`, `platform`, `room`, `roomUrl`, `difficulty`, `retired`, `fixture`,
+      `tags`, `vulnClasses` (`pnpm test` báo lệch: `apps/web/test-dist/writeup-pairs.test.ts`).
 - [ ] Chạy đủ định nghĩa hoàn thành (`test:dist` chặn flag chưa che lần nữa), rồi mở MR.

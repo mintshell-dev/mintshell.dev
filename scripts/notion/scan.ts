@@ -1,14 +1,16 @@
 /**
  * Quét bài nháp để cảnh báo (hàm thuần, chỉ báo, không sửa). Cố ý báo thừa: thà để tác giả tự loại
  * còn hơn bỏ sót một chi tiết lộ danh tính hay lộ đáp án.
- * - flag: THM{…}, HTB{…}, flag{…} chưa che (cả dạng đã escape `\{`); giá trị đã che hợp lệ giống
- *   `apps/web/test-dist/writeups.check.ts`: `<redacted>`, `redacted` (không phân biệt hoa thường);
+ * - flag: THM{…}, HTB{…}, flag{…} chưa che (cả dạng đã escape `\{`); giá trị đã che hợp lệ dùng CHUNG
+ *   `isRedactedFlag` với `test:dist` (`packages/shared/src/redaction.ts`: `[REDACTED]`, `<redacted>`…);
  *   cả chuỗi 32 hex (dạng flag user.txt/root.txt của HackTheBox, cũng có thể là hash)
  * - ip: mọi IPv4 hợp lệ, gắn nhãn loại địa chỉ
  * - prompt: MỌI chuỗi user@host / user㉿host ở bất kỳ đâu (dấu nhắc terminal, email)
  * - path: đường dẫn home lộ tên người dùng (`/home/<tên>`, `/Users/<tên>`, `C:\Users\<tên>`)
  * Chữ ngoài code được bỏ escape Markdown trước khi quét (`user\_1@host` vẫn khớp).
  */
+
+import { isRedactedFlag } from '../../packages/shared/src/redaction.ts';
 
 export type FindingKind = 'flag' | 'ip' | 'prompt' | 'path';
 
@@ -20,7 +22,6 @@ export interface Finding {
   note?: string;
 }
 
-const REDACTED = /^<?redacted>?$/i;
 const FLAG = /\b(THM|HTB|flag)\\?\{([^}\n]*?)\\?\}/gi;
 const HEX32 = /(?<![0-9a-f])[0-9a-f]{32}(?![0-9a-f])/gi;
 const IPV4 = /(?<![\d.])(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?!\d|\.\d)/g;
@@ -65,7 +66,7 @@ export function scanMarkdown(markdown: string): Finding[] {
 
     for (const m of raw.matchAll(FLAG)) {
       const inner = (m[2] ?? '').replace(/\\(.)/g, '$1').trim();
-      if (!REDACTED.test(inner)) findings.push({ kind: 'flag', line, match: m[0] });
+      if (!isRedactedFlag(inner)) findings.push({ kind: 'flag', line, match: m[0] });
     }
     for (const m of text.matchAll(HEX32)) {
       findings.push({ kind: 'flag', line, match: m[0], note: '32 hex: flag HTB hay hash?' });

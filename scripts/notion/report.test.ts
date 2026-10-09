@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  buildAbortReport,
   buildReport,
   type PostResult,
   REMINDER,
@@ -12,6 +13,7 @@ import {
 function post(slug: string, over: Partial<PostResult> = {}): PostResult {
   return {
     slug,
+    locale: 'vi',
     title: `Bài ${slug}`,
     file: `content/writeups/_import/${slug}/vi.md`,
     images: [],
@@ -73,7 +75,7 @@ describe('báo cáo', () => {
     expect(report).toContain('content/writeups/_import/a/images/01-x.png  [metadata: tEXt]');
     expect(report).toContain('[ảnh lỗi] 01: HTTP 403');
     expect(report).toContain('- Bài lỗi: slug "Bad" không hợp lệ');
-    expect(report).toMatch(/\| a +\| 2\/0\/0 +\| 1 +\| 1 +\| 0 +\| 0 +\| 1 /);
+    expect(report).toMatch(/\| a\/vi +\| 2\/0\/0 +\| 1 +\| 1 +\| 0 +\| 0 +\| 1 /);
     expect(report).toContain(
       '[ảnh external không tải] 02: https://img.example/x.png (tự tải nếu tin host, hoặc chạy lại với --external-images)',
     );
@@ -92,5 +94,43 @@ describe('báo cáo', () => {
     expect(report).not.toMatch(/[\x00-\x09\x0b-\x1f\x7f-\x9f]/);
     expect(report).toContain('Tiêu đề');
     expect(sanitizeTerminal('a\nb\x9bc')).toBe('a\nb\uFFFDc');
+  });
+
+  it('hai bản cùng slug hiện riêng theo slug/locale', () => {
+    const report = buildReport(
+      [post('a'), post('a', { locale: 'en', file: 'content/writeups/_import/a/en.md' })],
+      [],
+    );
+    expect(report).toContain('## a/vi — Bài a');
+    expect(report).toContain('## a/en — Bài a');
+  });
+});
+
+describe('báo cáo dừng (dòng Ready thiếu Version)', () => {
+  it('liệt kê tên bài + slug, nói rõ chưa ghi gì, lọc ký tự điều khiển', () => {
+    const report = buildAbortReport([
+      { title: 'Phòng A', slug: 'phong-a' },
+      { title: 'Ác\x1b[2K', slug: '' },
+    ]);
+    expect(report).toContain('2 dòng Status = Ready chưa chọn Version (EN | VI)');
+    expect(report).toContain('  - Phòng A — slug "phong-a"');
+    expect(report).toContain('slug ""');
+    expect(report.trimEnd().split('\n').at(-1)).toMatch(/CHƯA ghi file nào/);
+    // eslint-disable-next-line no-control-regex -- cố ý: kiểm báo cáo không còn ký tự điều khiển
+    expect(report).not.toMatch(/[\x00-\x09\x0b-\x1f\x7f-\x9f]/);
+  });
+
+  it('chuỗi Notion có xuống dòng/bidi/zero-width không giả được dòng báo cáo (review L3)', () => {
+    const fake = 'Bài\n  - bai-khac: đã soát xong, an toàn';
+    const report = buildReport(
+      [post('a', { title: fake })],
+      [{ label: 'x\u202eTXT.exe', reason: 'Version "EN\u200b" lạ' }],
+    );
+    expect(report.split('\n').filter((l) => l.startsWith('  - bai-khac'))).toEqual([]);
+    expect(report).toContain('## a/vi — Bài⏎  - bai-khac: đã soát xong, an toàn');
+    expect(report).not.toMatch(/[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/);
+    const abort = buildAbortReport([{ title: 'A\r\n  - B — slug "b"', slug: 'a\u2066' }]);
+    expect(abort.split('\n').filter((l) => l.startsWith('  - B'))).toEqual([]);
+    expect(abort).toContain('slug "a\uFFFD"');
   });
 });

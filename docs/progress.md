@@ -2,7 +2,8 @@
 
 Quỹ thời gian: 5–10 giờ/tuần, mỗi mốc khoảng 1 tuần. Định nghĩa hoàn thành: [workflow.md](workflow.md).
 
-**Tiếp theo: duyệt M6a-2 (SEO), merge; sau deploy gửi sitemap lên Search Console và chạy checklist sau deploy của M5.**
+**Tiếp theo: duyệt nhánh `feat/notion-bilingual-pull` (Notion song ngữ, chưa commit); sau đó tác giả điền cột Version
+cho mọi dòng Ready rồi chạy thử `notion:pull` + `writeups:promote` trên một bài thật.**
 
 | Mốc   | Mục tiêu                                                  | Trạng thái | ADR                                                                          |
 | ----- | --------------------------------------------------------- | ---------- | ---------------------------------------------------------------------------- |
@@ -22,6 +23,7 @@ Quỹ thời gian: 5–10 giờ/tuần, mỗi mốc khoảng 1 tuần. Định n
 | M6b-B | Rewrite tác giả, ký lại 72 commit, GitHub public (08/10)  | Xong       | —                                                                            |
 | M6b-B | Link repo cho người đọc chuyển sang GitHub công khai      | Xong       | —                                                                            |
 | M6b-C | Thông báo ra mắt                                          | Xong       | —                                                                            |
+| M4b   | Notion song ngữ: hai dòng một Slug, cột Version           | Chờ duyệt  | [0013](adr/0013-notion-manual-pull.md) (bổ sung)                             |
 | M6    | Email Brevo, chính sách quyền riêng tư, analytics, ra mắt | Chưa làm   | —                                                                            |
 
 ## Mốc đã xong (tóm tắt)
@@ -198,6 +200,65 @@ Mỗi trang danh sách chỉ liệt kê bài có bản ngôn ngữ đó thật (
       translation với `nax/vi.mdx` draft:false; với `tryheartme/en.mdx` pending draft:false) đều fail đúng chỗ, đối chứng qua
 - [x] Đã chốt: không làm noindex/link cho trang vi pending. Chiến lược: bài chưa dịch giữ `vi.mdx` `draft: true` (không build
       trang vi), chỉ xuất bản `en.mdx`; dịch xong mới đổi vi sang `draft: false`. Nên không có trang vi pending nào tồn tại
+
+## M4b — Notion song ngữ (hai dòng một Slug, cột Version)
+
+Mỗi write-up là hai dòng Notion dùng chung `Slug`, phân biệt bằng cột `Version`. Giữ nguyên ADR 0013: chỉ ghi
+`_import/`, `draft: true`; `draft: false` chỉ có sau khi tác giả promote và soát (bổ sung vào ADR 0013, mục ghi ngày
+2026-10-09). Nhánh `feat/notion-bilingual-pull`, chưa commit.
+
+- [x] `frontmatter.ts`: cột `Version`, map tường minh `VERSIONS` (`EN` → en, `VI` → vi, so khớp chính xác sau trim,
+      phân biệt hoa thường), `readVersion` trả về ok/empty/unknown; comment `Description` theo ngôn ngữ của dòng
+- [x] Đổi map Version cho khớp tên option thực tế trong Notion (`EN`/`VI`, trước đó viết theo nhãn
+      `EN - English`/`VI - Vietnamese`): test và thông điệp "không thuộc EN|VI" cập nhật theo; nhãn cũ, `en`, `Vi`
+      được test là giá trị lạ
+- [x] `notion-pull.ts`: key (slug, locale) → `_import/<slug>/<locale>.md`. Dòng Ready thiếu Version → **dừng trước
+      khi gọi block/ghi file**, báo tên bài + slug (`buildAbortReport`), mã thoát 1. Version lạ → bỏ qua kèm cảnh
+      báo. Trùng (slug, locale) → bỏ qua. "Đã có"/`--force` theo từng file, cảnh báo "đã xuất bản" theo từng
+      `<locale>.mdx`. Ảnh có tiền tố `vi-`/`en-`. Báo cáo ghi `slug/locale`
+- [x] `scripts/notion/swap.ts` (`replaceEntries`, `ownedBy`): thay đúng file của một bản (`<locale>.md[x]` +
+      `images/<locale>-*`), rollback khi lỗi, không ghi xuyên symlink. Cả pull và promote dùng helper này (bỏ
+      đoạn rename + backup viết tay trong promote)
+- [x] `writeups:promote`: chuyển cả `vi.md` lẫn `en.md` (có bản nào chuyển bản đó); đích `<locale>.mdx` đã có thì
+      bỏ qua bản đó, bản kia vẫn chuyển; `--force` chỉ thay file của bản được chuyển; ảnh chỉ copy của bản đó
+- [x] Một nguồn cho "flag đã che": `isRedactedFlag` chuyển sang `packages/shared/src/redaction.ts`. `scan.ts` của pull
+      và `test:dist` (`dist-files.ts` re-export) cùng dùng, nên pull không còn báo nhầm `THM{[REDACTED]}`
+- [x] `test:dist`: `publicSlugs`/`slugsWithFlag` bỏ qua thư mục thiếu bản ngôn ngữ đó (trước đây ném ENOENT)
+- [x] Kiểm tra đối chiếu cặp vi/en (`apps/web/test-dist/writeup-pairs.test.ts`, chạy trong `pnpm test`, áp cả bài
+      draft): phải khớp `date`, `updated`, `platform`, `room`, `roomUrl`, `difficulty`, `retired`, `fixture`, `tags`,
+      `vulnClasses`. 14 cặp hiện có (11 bài + 3 fixture) đều khớp. Đột biến trên bản chép ở thư mục tạm (đổi `date`
+      của en, `tags` của vi ở `dogcat`) → báo đúng `['date', 'tags']`
+- [x] Test: 444 → 492 unit test (pull song ngữ end-to-end với Notion giả: hai bản cùng slug, Version trống thì
+      dừng mà không có request `/blocks/` và không tạo `_import/`, Version lạ, giữ bản đang soát, `--force` không đụng
+      bản kia; promote vi/en; swap; readVersion; scan `[REDACTED]`; thư mục một bản; cặp vi/en)
+- [x] Review bảo mật (security-reviewer; trọng tâm `swap.ts`, Slug/Version từ Notion, `redaction.ts`): không có
+      Critical/High. Path traversal qua Slug/Version: không có (kiểm Version trống rồi `SLUG_RE` trước mọi thao tác
+      file, `Object.hasOwn` chặn `__proto__`/`toString`). `isRedactedFlag`: không flag thật nào lọt, không ReDoS.
+      Đã sửa:
+  - **M1** ảnh không tiền tố bị coi là của vi nên bị xóa (ảnh bản en đang dùng, ảnh tác giả thêm tay): `replaceEntries`
+    giờ chỉ đụng file `owns` nhận, file mới trùng tên một file không thuộc bản này → dừng trước khi đổi gì. Ở
+    `_import/`, bản vi chỉ nhận ảnh khớp đúng mẫu tên pull cũ (`01-<tên>.<ext>`); ở `content/` promote không bao giờ
+    xóa/ghi đè ảnh không tiền tố (báo "giữ images/… đã có ở đích")
+  - **M2** rollback tự lỗi: khôi phục cố hết sức từng file; chưa trả đủ thì ném `RollbackError`, GIỮ backup và báo
+    đúng ("KHÔI PHỤC CHƯA TRỌN", chỉ đường dẫn backup) thay cho "giữ nguyên". Backup đặt cạnh thư mục tạm
+    (`<staging>-old-*`: `_import/` hoặc `content/writeups/.promote-*`, đều đã gitignore), không còn
+    `content/writeups/.swap-*` (chưa ignore). **I1** dùng giá trị trả về của `mkdir`, rollback chỉ `rmdir` thư mục
+    rỗng (không xóa đệ quy file của lần chạy khác)
+  - **L1** promote đọc `<locale>.md` và ảnh bằng `O_NOFOLLOW | O_NONBLOCK` + `fstat` trên cùng fd (không khe TOCTOU,
+    FIFO không treo)
+  - **L2** thư mục tạm của pull tạo bằng `mkdtemp` (tên ngẫu nhiên, tạo độc quyền)
+  - **L3** báo cáo: xuống dòng trong chuỗi Notion hiện thành `⏎` (không giả được dòng báo cáo); lọc thêm ký tự
+    bidi/zero-width
+- [x] `lint`, `typecheck` (gồm `tsc -p scripts`), `test` (492), `build`, `test:dist` (752), `format:check` đều qua.
+      Không gọi Notion thật; không đụng `content/writeups/**`
+- [ ] Tác giả điền Version cho mọi dòng Ready trong Notion, chạy thử trên một bài thật (terminal riêng)
+- Chưa làm (ngoài phạm vi): kiểm cấu trúc callout chỉ có ở `valenfind` + `sample-writeup`; `scripts/promote/transform.ts`
+  chưa được review lại trong lượt này
+- Còn mở từ review (Info, không sửa ở nhánh này):
+  - **I2** (có từ trước) bộ kiểm flag của `test:dist` chỉ bắt `THM`/`HTB`, không bắt `flag{`, và sót flag bị bộ tô
+    màu code tách qua nhiều thẻ HTML; cân nhắc kiểm thêm trên văn bản đã bỏ thẻ
+  - **I3** `THM{redacted\}secret}` qua được cả bản quét của pull lẫn `test:dist` (`\}` bị đọc là dấu đóng); chỉ xảy ra
+    khi tác giả tự gõ như vậy
 
 ## Việc còn mở từ các mốc đã xong
 

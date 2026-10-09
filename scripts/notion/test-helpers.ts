@@ -49,6 +49,7 @@ export function properties(over: Partial<Record<string, unknown>> = {}): Record<
       type: 'rich_text',
       rich_text: [rt('SQL injection chained into RCE on a sample room.')],
     },
+    Version: { type: 'select', select: { name: 'VI' } },
     ...over,
   };
 }

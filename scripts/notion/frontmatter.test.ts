@@ -7,6 +7,7 @@ import {
   MISSING_DESCRIPTION,
   PLATFORMS,
   readList,
+  readVersion,
   SLUG_RE,
   TITLE_MAX,
 } from './frontmatter.ts';
@@ -175,5 +176,47 @@ describe('buildFrontmatter', () => {
     expect(
       readList({ Tags: { type: 'rich_text', rich_text: [rt('web, xss ,')] } }, 'Tags'),
     ).toEqual(['web', 'xss']);
+  });
+});
+
+describe('readVersion (cột Version, map tường minh)', () => {
+  const version = (value: unknown) => readVersion(properties({ Version: value }));
+  const select = (name: string) => ({ type: 'select', select: { name } });
+
+  it('hai giá trị hợp lệ → locale', () => {
+    expect(version(select('EN'))).toEqual({ kind: 'ok', locale: 'en' });
+    expect(version(select('VI'))).toEqual({ kind: 'ok', locale: 'vi' });
+    expect(version(select('  EN '))).toEqual({ kind: 'ok', locale: 'en' });
+    expect(version({ type: 'rich_text', rich_text: [rt('VI')] })).toEqual({
+      kind: 'ok',
+      locale: 'vi',
+    });
+  });
+
+  it('trống, chỉ khoảng trắng, thiếu cột, sai kiểu → empty', () => {
+    for (const v of [
+      { type: 'select', select: null },
+      select('   '),
+      undefined,
+      { type: 'number', number: 1 },
+    ]) {
+      expect(version(v)).toEqual({ kind: 'empty' });
+    }
+  });
+
+  it('giá trị gần đúng (sai hoa thường, tên option cũ) không được đoán → unknown kèm giá trị thô', () => {
+    for (const raw of [
+      'en',
+      'vi',
+      'Vi',
+      'EN - English',
+      'VI - Vietnamese',
+      'E N',
+      'VIE',
+      'English',
+      'toString',
+    ]) {
+      expect(version(select(raw))).toEqual({ kind: 'unknown', raw });
+    }
   });
 });

@@ -1,8 +1,11 @@
+import { type Locale, VERSIONS } from './frontmatter.ts';
 import type { Finding } from './scan.ts';
 
 /** Kết quả kéo một bài, đủ để dựng báo cáo (hàm thuần). Đường dẫn tương đối gốc repo. */
 export interface PostResult {
   slug: string;
+  /** Bản ngôn ngữ (cột Version): mỗi bài có thể có hai bản cùng slug. */
+  locale: Locale;
   title: string;
   file: string;
   images: { path: string; metadata: string[] }[];
@@ -37,6 +40,9 @@ export interface Totals {
 
 export const REMINDER =
   'CHƯA xuất bản gì; hãy soát _import/ trước khi chuyển sang content/writeups/';
+
+/** Nhãn một bản: `slug/locale`. */
+const key = (r: PostResult) => `${r.slug}/${r.locale}`;
 
 const count = (r: PostResult, kind: Finding['kind']) =>
   r.findings.filter((f) => f.kind === kind).length;
@@ -93,7 +99,7 @@ function table(results: PostResult[]): string[] {
     'Khác',
   ];
   const rows = results.map((r) => [
-    r.slug,
+    key(r),
     `${r.images.length}/${r.imageFailures.length}/${r.externalSkipped.length}`,
     String(count(r, 'flag')),
     String(count(r, 'ip')),
@@ -112,12 +118,22 @@ function table(results: PostResult[]): string[] {
 
 /**
  * Lọc ký tự điều khiển C0/C1 (trừ xuống dòng): tiêu đề hay link từ Notion chứa escape ANSI có thể xóa
- * dòng cảnh báo trên terminal, OSC 52 có thể ghi vào clipboard.
+ * dòng cảnh báo trên terminal, OSC 52 có thể ghi vào clipboard. Lọc cả ký tự định hướng bidi (U+202A–202E,
+ * U+2066–2069, U+200E/200F) và zero-width (U+200B–200D, U+FEFF): đảo hay giấu chữ trên terminal (review L3).
  */
 export function sanitizeTerminal(text: string): string {
-  // eslint-disable-next-line no-control-regex
-  return text.replace(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/g, '\uFFFD');
+  return text.replace(
+    // eslint-disable-next-line no-control-regex
+    /[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g,
+    '\uFFFD',
+  );
 }
+
+/**
+ * Mỗi phần tử báo cáo là MỘT dòng; xuống dòng chỉ có thể đến từ chuỗi Notion (tiêu đề, slug, Version…) và
+ * có thể dùng để giả một dòng báo cáo hợp lệ → hiện thành `⏎` (review L3).
+ */
+const oneLine = (line: string) => line.replace(/\r\n|\r|\n/g, '⏎');
 
 export function buildReport(results: PostResult[], skipped: Skipped[]): string {
   const out: string[] = ['', '=== notion:pull — báo cáo ===', ''];
@@ -126,7 +142,7 @@ export function buildReport(results: PostResult[], skipped: Skipped[]): string {
   else out.push('Không có bài nào được kéo về.');
 
   for (const r of results) {
-    out.push('', `## ${r.slug} — ${r.title || '(không tiêu đề)'}`);
+    out.push('', `## ${key(r)} — ${r.title || '(không tiêu đề)'}`);
     for (const f of r.findings) {
       out.push(`  ${r.file}:${f.line}  [${f.kind}] ${f.match}${f.note ? ` (${f.note})` : ''}`);
     }
@@ -158,5 +174,25 @@ export function buildReport(results: PostResult[], skipped: Skipped[]): string {
   }
 
   out.push('', summaryLine(totals(results, skipped)));
-  return sanitizeTerminal(out.join('\n'));
+  return sanitizeTerminal(out.map(oneLine).join('\n'));
+}
+
+/** Dòng Ready thiếu cột Version (dừng cả lần chạy). */
+export interface MissingVersion {
+  title: string;
+  slug: string;
+}
+
+/** Báo cáo khi dừng vì có dòng Ready thiếu Version: không đoán bản nào, không ghi file nào. */
+export function buildAbortReport(rows: MissingVersion[]): string {
+  const out = [
+    '',
+    '=== notion:pull — DỪNG ===',
+    '',
+    `${rows.length} dòng Status = Ready chưa chọn Version (${Object.keys(VERSIONS).join(' | ')}):`,
+    ...rows.map((r) => `  - ${r.title} — slug "${r.slug}"`),
+    '',
+    'Điền cột Version trong Notion rồi chạy lại. CHƯA ghi file nào, CHƯA xuất bản gì.',
+  ];
+  return sanitizeTerminal(out.map(oneLine).join('\n'));
 }
