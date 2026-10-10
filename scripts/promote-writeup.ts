@@ -27,6 +27,10 @@ const IMAGE_NAME = /^\w[\w-]*(\.[\w-]+)*\.(png|jpe?g|gif|webp)$/i;
 /** Lọc ký tự điều khiển/không in được trước khi in nội dung bài ra terminal. */
 const printable = (s: string): string => s.replace(/[^\x20-\x7e]/g, '?');
 
+/** Như `printable` nhưng giữ nguyên Unicode in được (emoji) để tác giả nhận ra nhãn callout lạ; chỉ
+ *  chặn ký tự điều khiển/định dạng vô hình (cùng cách lọc `\p{Cc}`/`\p{Cf}` của chữ trên ảnh OG, ADR 0012). */
+const safeLabel = (s: string): string => s.replace(/[\p{Cc}\p{Cf}]/gu, '?');
+
 export interface PromoteOptions {
   root: string;
   /** Rỗng + `all` → mọi thư mục hợp lệ trong `_import/`. */
@@ -125,8 +129,17 @@ function manualWork(locale: Locale, result: PromoteResult): string[] {
     lines.push(`    ! MDX ${md}:${r.line}: ${r.reason}`);
   if (result.mdxRisks.length > 20)
     lines.push(`    ! … và ${result.mdxRisks.length - 20} dòng khác`);
-  if (result.callouts > 0)
-    lines.push(`    việc tay: chọn type cho ${result.callouts} khối <Callout type="note">`);
+  if (result.callouts > 0) {
+    const breakdown = Object.entries(result.calloutsByType)
+      .filter(([, n]) => n > 0)
+      .map(([type, n]) => `${type}:${n}`)
+      .join(', ');
+    lines.push(`    đã gán type cho ${result.callouts} khối callout (${breakdown})`);
+  }
+  for (const emoji of result.unknownCalloutEmojis)
+    lines.push(
+      `    ! callout emoji lạ "${safeLabel(emoji)}" (${md}), đã dùng type="note" — tự soát lại`,
+    );
   if (result.leftoverCallouts > 0)
     lines.push(
       `    việc tay: còn ${result.leftoverCallouts} marker **[Callout chưa đổi (lồng trong danh sách/blockquote?)`,

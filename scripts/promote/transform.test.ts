@@ -10,11 +10,55 @@ import {
 } from './transform.ts';
 
 describe('convertCallouts', () => {
-  it('đổi callout có emoji thành <Callout type="note">, thân là Markdown', () => {
+  it('đổi callout có emoji thành <Callout type="insight"> theo map, thân là Markdown', () => {
     const r = convertCallouts('trước\n\n> **[Callout 💡]** Nội dung mẫu\n\nsau');
-    expect(r.markdown).toBe('trước\n\n<Callout type="note">\n\nNội dung mẫu\n\n</Callout>\n\nsau');
+    expect(r.markdown).toBe(
+      'trước\n\n<Callout type="insight">\n\nNội dung mẫu\n\n</Callout>\n\nsau',
+    );
     expect(r.count).toBe(1);
     expect(r.leftover).toBe(0);
+  });
+
+  it('map mỗi emoji trong bảng sang đúng type', () => {
+    const cases: [string, string][] = [
+      ['🧭', 'tldr'],
+      ['🚨', 'critical'],
+      ['💡', 'insight'],
+      ['🛠️', 'fix'],
+      ['📝', 'note'],
+    ];
+    for (const [emoji, type] of cases) {
+      const r = convertCallouts(`> **[Callout ${emoji}]** x`);
+      expect(r.markdown).toContain(`<Callout type="${type}">`);
+      expect(r.unknownEmojis).toEqual([]);
+    }
+  });
+
+  it('không emoji → note', () => {
+    const r = convertCallouts('> **[Callout]** x');
+    expect(r.markdown).toContain('<Callout type="note">');
+    expect(r.unknownEmojis).toEqual([]);
+  });
+
+  it('emoji lạ → note, kèm cảnh báo trong unknownEmojis', () => {
+    const r = convertCallouts('> **[Callout ❓]** x');
+    expect(r.markdown).toContain('<Callout type="note">');
+    expect(r.unknownEmojis).toEqual(['❓']);
+  });
+
+  it('🛠️ (có U+FE0F) và 🛠 (không có) đều map ra fix', () => {
+    const withSelector = convertCallouts('> **[Callout 🛠️]** a');
+    const withoutSelector = convertCallouts('> **[Callout 🛠]** b');
+    expect(withSelector.markdown).toContain('<Callout type="fix">');
+    expect(withoutSelector.markdown).toContain('<Callout type="fix">');
+  });
+
+  it('byType cộng đúng khi có nhiều type khác nhau', () => {
+    const md = ['> **[Callout 🧭]** a', '', '> **[Callout 🚨]** b', '', '> **[Callout]** c'].join(
+      '\n',
+    );
+    const r = convertCallouts(md);
+    expect(r.byType).toEqual({ tldr: 1, critical: 1, insight: 0, fix: 0, note: 1 });
   });
 
   it('đổi callout không emoji, nhiều đoạn và danh sách', () => {

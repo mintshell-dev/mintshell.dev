@@ -170,13 +170,16 @@ Sitemap tự sinh theo cùng `isListed`, hreflang chỉ cho bản có thật, fi
 `pnpm writeups:promote <slug>|--all [--force]` chuyển cơ học `_import/<slug>/vi.md` sang `content/writeups/<slug>/vi.mdx`
 (0 dependency). Chỉ thay thế văn bản, không đọc hiểu nội dung; hướng dẫn trong [workflow.md](workflow.md).
 
-- [x] `scripts/promote/transform.ts`: `> **[Callout …]**` → `<Callout type="note">` (không đoán loại), alt rỗng →
-      `[[THIẾU ALT]]`, bỏ qua fenced code, frontmatter (cả `draft`, `translation`) và mọi dòng khác giữ nguyên byte
+- [x] `scripts/promote/transform.ts`: `> **[Callout …]**` → `<Callout type="…">`, emoji nhãn (do agent gắn ở Notion)
+      map sang 1 trong 5 type hợp lệ (`🧭 tldr`, `🚨 critical`, `💡 insight`, `🛠️ fix`, `📝`/không có → `note`; dung
+      sai `U+FE0F`); nhãn lạ vẫn ra `note` nhưng được báo riêng (không làm fail). Alt rỗng → `[[THIẾU ALT]]`, bỏ qua
+      fenced code, frontmatter (cả `draft`, `translation`) và mọi dòng khác giữ nguyên byte
 - [x] `scripts/promote-writeup.ts`: slug kiểm `SLUG_RE`, đường dẫn phải nằm trong thư mục cho phép, `vi.md` phải là file
       thường, đích đã có thì bỏ qua (trừ `--force`), ghi nguyên tử qua thư mục tạm, ảnh chỉ copy file thường tên an toàn,
       không bao giờ xóa `_import/`
 - [x] Báo cáo mỗi bài: description còn `[[THIẾU MÔ TẢ]]`, ảnh còn `[[THIẾU ALT]]` (kèm `vi.md:<dòng>`), số khối
-      callout cần chọn type, marker callout còn sót; dòng TỔNG KẾT "CHƯA đổi draft, CHƯA xóa _import/"
+      callout theo từng type đã gán, callout emoji lạ (tự soát lại), marker callout còn sót; dòng TỔNG KẾT "CHƯA đổi
+      draft, CHƯA xóa _import/"
 - [x] 23 unit test (input mẫu tự viết, thư mục tạm); chưa chạy trên bài thật
 - [x] Review bảo mật (security-reviewer): không có Critical. Đã sửa: **H1** `--force` không còn xóa trước (đổi tên bản cũ, thay,
       rollback khi lỗi, giữ `en.mdx` và file anh em, chỉ thay `vi.mdx` + `images/`); **H2** quét và báo dòng MDX nguy hiểm
@@ -185,7 +188,8 @@ Sitemap tự sinh theo cùng `isListed`, hreflang chỉ cho bản có thật, fi
       **M4** bổ sung test; **L1** từ chối `vi.md` CRLF; **L3** lọc ký tự điều khiển trong báo cáo; **L4** `.promote-*` vào
       `.gitignore`, thư mục đích chmod 0755. Chưa làm: **L2** (IMAGE bậc hai trên dòng cực dài), **L5** (quét flag; đã có
       `test:dist`), **L6** (chạy song song), TOCTOU `lstat`→`copyFile` (chạy thủ công, rủi ro thấp)
-- [ ] Tác giả tự chạy trên bài thật rồi làm tay: loại callout, description, alt
+- [ ] Tác giả tự chạy trên bài thật rồi làm tay: description, alt, callout emoji lạ (nếu có; loại
+      còn lại đã tự gán theo emoji)
 
 ## Lọc danh sách write-up theo bản ngôn ngữ
 

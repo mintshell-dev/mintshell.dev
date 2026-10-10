@@ -46,14 +46,14 @@ describe('promote', () => {
     expect(r.failed).toBe(false);
     const out = await readFile(pub('mau', 'vi.mdx'), 'utf8');
     expect(out).toContain('draft: true');
-    expect(out).toContain('<Callout type="note">');
+    expect(out).toContain('<Callout type="insight">');
     expect(out).toContain('![[[THIẾU ALT]]](./images/a.png)');
     expect(existsSync(pub('mau', 'images', 'a.png'))).toBe(true);
     expect(existsSync(imp('mau', 'vi.md'))).toBe(true);
     expect(await readFile(imp('mau', 'vi.md'), 'utf8')).toBe(SAMPLE);
     expect(r.report).toContain('description còn [[THIẾU MÔ TẢ]]');
     expect(r.report).toContain('./images/a.png (vi.md:8)');
-    expect(r.report).toContain('chọn type cho 1 khối');
+    expect(r.report).toContain('đã gán type cho 1 khối callout (insight:1)');
     expect(r.report).toContain('CHƯA đổi draft, CHƯA xóa _import/');
     expect((await readdir(pub())).filter((n) => n.startsWith('.promote-'))).toEqual([]);
   });
@@ -91,6 +91,17 @@ describe('promote', () => {
     for (const n of ['x.svg', 'y.html', 'w..png'])
       expect(existsSync(pub('mau', 'images', n))).toBe(false);
     expect(r.report).toContain('bỏ qua images/x.svg');
+  });
+
+  it('callout emoji lạ → type="note" + cảnh báo trong report', async () => {
+    await writeFile(
+      imp('mau', 'vi.md'),
+      '---\ndescription: ok\n---\n> **[Callout ❓]** nội dung lạ\n',
+    );
+    const r = await promote(opts());
+    expect(r.failed).toBe(false);
+    expect(await readFile(pub('mau', 'vi.mdx'), 'utf8')).toContain('<Callout type="note">');
+    expect(r.report).toContain('callout emoji lạ "❓" (vi.md), đã dùng type="note"');
   });
 
   it('báo dòng có cú pháp MDX chưa escape nhưng vẫn chuyển', async () => {
@@ -160,7 +171,7 @@ describe('promote song ngữ (vi.md / en.md)', () => {
     const r = await promote(opts());
     expect(r.failed).toBe(false);
     expect(await readFile(pub('mau', 'en.mdx'), 'utf8')).toContain("title: 'Sample'");
-    expect(await readFile(pub('mau', 'en.mdx'), 'utf8')).toContain('<Callout type="note">');
+    expect(await readFile(pub('mau', 'en.mdx'), 'utf8')).toContain('<Callout type="insight">');
     expect(await readFile(pub('mau', 'vi.mdx'), 'utf8')).toContain("title: 'Mẫu'");
     expect((await readdir(pub('mau', 'images'))).sort()).toEqual([
       'a.png',
