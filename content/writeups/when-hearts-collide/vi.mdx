@@ -1,0 +1,150 @@
+---
+title: 'When Hearts Collide'
+description: 'Phiên bản tiếng Việt: Một "Matchmaker" ảnh chó quyết định hai bức ảnh có giống nhau không bằng cách so sánh MD5; fastcoll tạo hai ảnh khác nhau cùng một MD5, bộ so khớp chấp nhận, và flag rơi ra — một ví dụ thực tế về va chạm MD5 phá kiểm tra toàn vẹn.'
+date: 2026-10-05
+platform: tryhackme
+room: 'When Hearts Collide'
+roomUrl: 'https://tryhackme.com/room/lunizzctfnd'
+difficulty: medium
+tags:
+  - 'web'
+  - 'crypto'
+  - 'md5'
+  - 'hash-collision'
+  - 'file-upload'
+vulnClasses:
+  - 'md5 hash collision'
+  - 'weak cryptographic hash'
+  - 'insecure integrity check'
+translation: done
+draft: false
+---
+
+## **TryHackMe: When Hearts Collide — Phá một "Matchmaker" ảnh bằng va chạm MD5**
+
+_Bài hướng dẫn giải challenge "When Hearts Collide" trong sự kiện Love at First Breach 2026 của TryHackMe. Trang web là một "Matchmaker" ảnh chó, quyết định hai bức ảnh có giống nhau hay không bằng cách so sánh mã băm MD5. MD5 đã bị phá va chạm từ 2004, nên ta dùng fastcoll tạo hai ảnh JPEG khác nhau rõ rệt nhưng chung một MD5, đưa vào bộ so khớp, và nó vui vẻ tuyên bố "trùng khớp" — trao luôn flag._
+
+> Flag và IP mục tiêu đã được ẩn. When Hearts Collide là challenge huấn luyện hợp pháp trên TryHackMe; mọi thao tác thực hiện trên mục tiêu luyện tập được phép. Flag hiển thị dạng `THM{<redacted>}`; giá trị thật có trên box nhưng được giữ kín ở đây.
+
+---
+
+### **TL;DR — toàn bộ chuỗi tấn công**
+
+<Callout type="tldr">
+
+Matchmaker định danh và so sánh ảnh bằng **mã băm MD5** → MD5 đã **bị phá va chạm** (Wang et al., 2004), và ứng dụng còn tự lộ gợi ý khi hiển thị MD5 của ảnh chó mẫu `79054025255fb1a26e4bc422aef54eb4` — đúng digest từ vụ va chạm nổi tiếng năm 2004 → ta chạy **fastcoll** để tạo hai ảnh khác nhau rõ rệt (`twin1.jpg`, `twin2.jpg`) với **MD5 giống hệt nhau** → upload chúng lên Matchmaker → nó so sánh MD5, thấy bằng nhau, và tuyên bố **"Match complete"** tại `/upload_success/<uuid>` → trang kết quả lộ **flag**.
+
+Ảnh khác nhau, một mã băm, một lần "trùng khớp" (giả) ngay lập tức.
+
+</Callout>
+
+### **Mục tiêu**
+
+```text
+export IP=<target-ip>
+```
+
+When Hearts Collide là một web app "Matchmaker" ảnh chó chạy trên cổng 80:
+
+```text
+http://$IP/             →  Matchmaker homepage (upload a photo to "match")
+http://$IP/view/<uuid>  →  a stored match, serving /static/uploads/<uuid>.jpg
+```
+
+Trang chủ dẫn tới một match mẫu với ảnh được phục vụ từ `/static/uploads/00795a8b-….jpg`, và ứng dụng in ra MD5 của ảnh đó:
+
+```text
+79054025255fb1a26e4bc422aef54eb4
+```
+
+Giá trị đó không ngẫu nhiên. Đó là MD5 từ **vụ va chạm năm 2004 của Xiaoyun Wang et al.** — bằng chứng công khai đầu tiên rằng MD5 đã bị phá. Một mã băm va chạm nổi tiếng được in ngay trên trang là một gợi ý rõ ràng: **logic so khớp tin tưởng vào MD5.**
+
+### **Lỗ hổng — MD5 bị dùng như một dấu hiệu định danh**
+
+Matchmaker quyết định hai bức ảnh có "trùng khớp" hay không bằng cách so sánh **digest MD5**. MD5 đã được chứng minh dễ va chạm từ 2004, khi Wang et al. tạo ra hai thông điệp 128-byte khác nhau với _cùng_ một MD5 — nghĩa là MD5 không còn phân biệt được hai tệp một cách đáng tin cậy nữa.
+
+<Callout type="insight">
+
+Vì ứng dụng coi **"cùng MD5" là "cùng/khớp ảnh"**, bất kỳ ai cung cấp được hai tệp va chạm đều có thể khiến ứng dụng coi hai bức ảnh _khác nhau_ là trùng khớp. Và việc tạo va chạm MD5 cùng tiền tố trên máy tính phổ thông chỉ mất vài giây với công cụ công khai — nên đây là lỗi khai thác dễ dàng, không phải lo ngại lý thuyết.
+
+</Callout>
+
+### **Bước 1 — build công cụ tạo va chạm (fastcoll)**
+
+```text
+sudo apt install build-essential libboost-all-dev git
+git clone https://github.com/upbit/clone-fastcoll.git
+cd clone-fastcoll
+make
+```
+
+### **Bước 2 — tạo hai ảnh cùng MD5**
+
+Trỏ fastcoll vào một ảnh mầm; nó xuất ra hai tệp khác nhau vài byte nhưng chung một MD5:
+
+```text
+./fastcoll dog.jpg
+# Generating first block: ...
+# Generating second block: ...
+# use 'md5sum md5_data*' check MD5
+
+md5sum md5_data*
+# 7f493964558792b6931345242fd1718d  md5_data1
+# 7f493964558792b6931345242fd1718d  md5_data2   <- identical MD5, different files
+```
+
+Đổi tên hai tệp output thành ảnh upload hợp lệ:
+
+```text
+mv md5_data1 twin1.jpg
+mv md5_data2 twin2.jpg
+```
+
+Giờ ta có hai ảnh JPEG khác nhau từng byte nhưng băm ra **cùng** một MD5.
+
+### **Bước 3 — đưa cặp ảnh sinh đôi vào Matchmaker**
+
+Upload hai ảnh va chạm qua form upload của Matchmaker. Ứng dụng băm từng tệp, so sánh digest, thấy chúng **bằng nhau**, và tuyên bố trùng khớp — đúng cái quyết định về tính toàn vẹn mà MD5 không còn đáng tin để đưa ra. Kết quả hiện ở trang match:
+
+```text
+http://$IP/upload_success/<uuid>
+# "Match complete"  —  YOUR UPLOAD  <->  DOGGY DATABASE
+```
+
+Hai ảnh chó khác nhau, được tuyên bố trùng khớp chỉ dựa trên việc băm bằng nhau. Trang match in ra flag:
+
+```text
+THM{<redacted>}
+```
+
+Ảnh khác nhau → một MD5 → "trùng khớp" giả → flag. Toàn bộ mánh dựa trên việc ứng dụng tin vào một hàm băm đã mất khả năng chống va chạm từ hai thập kỷ trước.
+
+### **Impact**
+
+<Callout type="critical">
+
+**Medium — CVSS 3.1 5.3** (`AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N`). Trong challenge này phần thưởng chỉ là flag, nhưng lỗi gốc — **dùng MD5 để quyết định hai tệp có giống nhau hay không** — là một lỗi toàn vẹn thực sự:
+
+- **Vượt qua kiểm tra toàn vẹn (integrity bypass).** Một attacker kiểm soát được đầu vào có thể khiến hai tệp _khác nhau_ đi qua như là giống hệt. Bất cứ đâu MD5 gác cổng tin cậy — khử trùng (dedup), danh sách "known-good", kiểm tra checksum/chữ ký, lưu trữ content-addressed — một tệp lành tính và một tệp độc hại có thể bị tráo dưới cùng một mã băm.
+- **Rẻ và chắc chắn.** Va chạm MD5 cùng tiền tố chỉ mất vài giây với công cụ công khai; va chạm chosen-prefix (như từng bị lợi dụng với MD5 trong mã độc Flame, và với SHA-1 trong "SHAttered") mở rộng ý tưởng này ra các nội dung tệp thực tế do attacker chọn.
+
+</Callout>
+
+### **Khắc phục đề xuất — ngừng tin vào MD5**
+
+<Callout type="fix">
+
+1. **Thay MD5 cho mọi quyết định về toàn vẹn hoặc định danh** bằng một hàm băm chống va chạm — **SHA-256** hoặc mạnh hơn. MD5 (và SHA-1) không được dùng để quyết định hai tệp có "giống nhau" hay "known good".
+2. **Đừng đánh đồng "cùng mã băm" với "cùng nội dung"** cho các quyết định bảo mật. Nếu cần phát hiện trùng lặp, hãy so sánh byte sau khi mã băm khớp, và dùng các cấu trúc có khóa, được xác thực (HMAC) khi có bí mật tham gia.
+3. **Với chữ ký / allow-listing**, hãy xác minh bằng một sơ đồ chữ ký hiện đại trên một hàm băm mạnh, không phải so sánh digest trần.
+
+</Callout>
+
+### **Bài học rút ra**
+
+- **MD5 không phải là một dấu hiệu định danh.** "MD5 bằng nhau" đã có nghĩa là "có thể là một va chạm được chế tác" từ 2004 — nó không chứng minh hai tệp là giống nhau.
+- **Đọc những gợi ý mà ứng dụng làm lộ.** Một mã băm `79054025255fb1a26e4bc422aef54eb4` được in ra _chính là_ bản tóm tắt khai thác: đó là digest va chạm Wang kinh điển.
+- **Va chạm là hàng phổ thông.** `fastcoll` biến lý thuyết thành hai tệp trong vài giây — cuộc tấn công là thực tế, không phải hàn lâm.
+- **Dùng SHA-256 cho toàn vẹn.** Toàn bộ lớp lỗi này biến mất khi việc so khớp và xác minh dùng một hàm băm chống va chạm.
+
+Cảm ơn bạn đã đọc. "When Hearts Collide" là một lời nhắc gọn gàng rằng va chạm MD5 không phải là đồ cổ trong bảo tàng — bất cứ đâu một hệ thống quyết định "cùng tệp?" bằng cách so sánh MD5, hai trái tim (và hai tệp rất khác nhau) có thể bị làm cho va vào nhau.
