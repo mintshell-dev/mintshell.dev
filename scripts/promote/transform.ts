@@ -57,26 +57,60 @@ export function hasMissingDescription(md: string): boolean {
 }
 
 // `> **[Callout]** nội dung` hoặc `> **[Callout 💡]** nội dung` (do `notion:pull` sinh, ADR 0013).
-const CALLOUT_START = /^> \*\*\[Callout(?: [^\]\n]*)?\]\*\*(?: (.*))?$/;
+// Nhãn trong `[Callout …]` được bắt riêng (group 1) để suy ra `type`; nội dung dòng đầu là group 2.
+const CALLOUT_START = /^> \*\*\[Callout(?: ([^\]\n]*))?\]\*\*(?: (.*))?$/;
+
+// Phải khớp `calloutTypes` ở `apps/web/src/lib/mdx.ts` (ADR 0012). Không import chéo package: đây là
+// một CLI script độc lập, không phụ thuộc vào `apps/web`.
+export type CalloutType = 'tldr' | 'critical' | 'insight' | 'fix' | 'note';
+
+// Emoji agent gắn ở Notion để gợi ý loại callout. So khớp sau khi đã bỏ `U+FE0F` (variation selector)
+// khỏi nhãn, nên cả hai dạng của một emoji (có/không `️`, ví dụ `🛠️`/`🛠`) đều ra cùng type.
+const EMOJI_TYPE: Record<string, CalloutType> = {
+  '🧭': 'tldr',
+  '🚨': 'critical',
+  '💡': 'insight',
+  '🛠': 'fix',
+  '📝': 'note',
+};
+
+/** Không nhãn (không emoji) hoặc nhãn không có trong `EMOJI_TYPE` đều ra `note`; `unknown` chỉ được
+ *  đặt ở trường hợp sau, để gọi nơi báo cáo cảnh báo cho tác giả (không làm build/promote fail). */
+function calloutType(label: string | undefined): { type: CalloutType; unknown: string | null } {
+  const trimmed = (label ?? '').trim();
+  if (trimmed === '') return { type: 'note', unknown: null };
+  const stripped = trimmed.replace(/\uFE0F/g, '');
+  const type = EMOJI_TYPE[stripped];
+  if (type) return { type, unknown: null };
+  return { type: 'note', unknown: trimmed };
+}
 
 export interface CalloutResult {
   markdown: string;
-  /** Số khối đã đổi thành `<Callout type="note">`. */
+  /** Tổng số khối callout đã đổi (mọi type). */
   count: number;
+  /** Số khối theo từng type đã gán (xem `EMOJI_TYPE`). */
+  byType: Record<CalloutType, number>;
+  /** Nhãn lạ (không rỗng, không khớp `EMOJI_TYPE`) gặp phải, theo thứ tự xuất hiện; khối tương ứng
+   *  vẫn ra `type="note"` nhưng cần tác giả soát lại (báo trong report, không làm fail). */
+  unknownEmojis: string[];
   /** Marker `**[Callout` còn sót ngoài code (lồng trong danh sách/blockquote…) cần tự xử lý. */
   leftover: number;
 }
 
 /**
  * Đổi `> **[Callout …]** X` (cùng các dòng `>` liền sau) thành
- * `<Callout type="note">` + dòng trống + nội dung + dòng trống + `</Callout>`. Loại luôn là `note`:
- * script không đoán loại. Blockquote thường được giữ nguyên.
+ * `<Callout type="…">` + dòng trống + nội dung + dòng trống + `</Callout>`. Nhãn emoji trong
+ * `[Callout …]` được map sang type qua `EMOJI_TYPE`; không nhãn hoặc nhãn lạ ra `note` (nhãn lạ được
+ * báo qua `unknownEmojis` để tác giả soát). Blockquote thường được giữ nguyên.
  */
 export function convertCallouts(md: string): CalloutResult {
   const lines = md.split('\n');
   const out: string[] = [];
   const fence = new FenceTracker();
   let count = 0;
+  const byType: Record<CalloutType, number> = { tldr: 0, critical: 0, insight: 0, fix: 0, note: 0 };
+  const unknownEmojis: string[] = [];
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
@@ -90,7 +124,7 @@ export function convertCallouts(md: string): CalloutResult {
       continue;
     }
 
-    const body: string[] = [start[1] ?? ''];
+    const body: string[] = [start[2] ?? ''];
     const inner = new FenceTracker();
     inner.inCode(body[0]!);
     while (i + 1 < lines.length) {
@@ -107,14 +141,24 @@ export function convertCallouts(md: string): CalloutResult {
     while (body.length && body[0]!.trim() === '') body.shift();
     while (body.length && body[body.length - 1]!.trim() === '') body.pop();
 
+    const { type, unknown } = calloutType(start[1]);
+    byType[type]++;
+    if (unknown !== null) unknownEmojis.push(unknown);
+
     if (out.length && out[out.length - 1]!.trim() !== '') out.push('');
-    out.push('<Callout type="note">', '', ...body, '', '</Callout>');
+    out.push(`<Callout type="${type}">`, '', ...body, '', '</Callout>');
     if (i + 1 < lines.length && lines[i + 1]!.trim() !== '') out.push('');
     count++;
   }
 
   const markdown = out.join('\n');
-  return { markdown, count, leftover: countOutsideCode(markdown, /\*\*\[Callout/g) };
+  return {
+    markdown,
+    count,
+    byType,
+    unknownEmojis,
+    leftover: countOutsideCode(markdown, /\*\*\[Callout/g),
+  };
 }
 
 function countOutsideCode(md: string, re: RegExp): number {
@@ -154,6 +198,8 @@ export function normalizeImageAlts(md: string): AltResult {
 export interface PromoteResult {
   markdown: string;
   callouts: number;
+  calloutsByType: Record<CalloutType, number>;
+  unknownCalloutEmojis: string[];
   leftoverCallouts: number;
   missingDescription: boolean;
   missingAlts: AltResult['missing'];
@@ -169,6 +215,8 @@ export function promoteMarkdown(md: string): PromoteResult {
   return {
     markdown: frontmatter + alts.markdown,
     callouts: callouts.count,
+    calloutsByType: callouts.byType,
+    unknownCalloutEmojis: callouts.unknownEmojis,
     leftoverCallouts: callouts.leftover,
     missingDescription: hasMissingDescription(md),
     mdxRisks: findMdxRisks(md),
