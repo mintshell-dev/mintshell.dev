@@ -4,7 +4,7 @@ description: 'An open WiFi leaks cleartext creds, a Craft CMS patch-bypass CVE g
 date: 2026-10-02
 platform: hackthebox
 room: 'Layover'
-roomUrl: 'https://app.hackthebox.com/machines/Layover'
+roomUrl: 'https://app.hackthebox.com/machines/Layove'
 difficulty: medium
 tags:
   - 'linux'
@@ -204,7 +204,7 @@ ss -tlnp
 # 127.0.0.1:631  LISTEN   (cupsd, running as root)
 ```
 
-<Callout type="note">
+<Callout type="insight">
 
 **CVE-2026-34990** abuses how `cupsd` authenticates "local" IPP requests. When CUPS validates a printer against an IPP backend, it retries with an `Authorization: Local <token>` header. A **rogue IPP server** on loopback answers `401` once to trigger that retry, then captures the token. With the token we drive privileged CUPS operations — create a printer whose `device-uri` is `file:///etc/sudoers.d/...`, flip it out of temporary state so it persists, then **Print-Job** our own content: CUPS writes the "document" to that file **as root**.
 

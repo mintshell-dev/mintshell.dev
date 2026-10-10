@@ -4,7 +4,7 @@ description: 'Phiên bản tiếng Việt: WiFi mở lộ creds dạng cleartext
 date: 2026-10-02
 platform: hackthebox
 room: 'Layover'
-roomUrl: 'https://app.hackthebox.com/machines/Layover'
+roomUrl: 'https://app.hackthebox.com/machines/Layove'
 difficulty: medium
 tags:
   - 'linux'
@@ -204,7 +204,7 @@ ss -tlnp
 # 127.0.0.1:631  LISTEN   (cupsd, running as root)
 ```
 
-<Callout type="note">
+<Callout type="insight">
 
 **CVE-2026-34990** lạm dụng cách `cupsd` xác thực các yêu cầu IPP "local". Khi CUPS kiểm tra một printer với backend IPP, nó retry kèm header `Authorization: Local <token>`. Một **rogue IPP server** trên loopback trả `401` một lần để kích retry đó, rồi bắt lấy token. Có token, ta điều khiển các thao tác CUPS có đặc quyền — tạo một printer có `device-uri` là `file:///etc/sudoers.d/...`, lật nó ra khỏi trạng thái tạm thời để nó tồn tại, rồi **Print-Job** nội dung của ta: CUPS ghi "document" vào file đó **với quyền root**.
 

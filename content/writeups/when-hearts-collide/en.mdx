@@ -1,0 +1,150 @@
+---
+title: 'When Hearts Collide'
+description: 'A dog-photo "Matchmaker" decides if two pictures are the same by comparing MD5 hashes; fastcoll crafts two different images with one MD5, the matcher accepts them, and the flag drops — a practical MD5 collision integrity bypass.'
+date: 2026-10-05
+platform: tryhackme
+room: 'When Hearts Collide'
+roomUrl: 'https://tryhackme.com/room/lunizzctfnd'
+difficulty: medium
+tags:
+  - 'web'
+  - 'crypto'
+  - 'md5'
+  - 'hash-collision'
+  - 'file-upload'
+vulnClasses:
+  - 'md5 hash collision'
+  - 'weak cryptographic hash'
+  - 'insecure integrity check'
+translation: done
+draft: false
+---
+
+## **TryHackMe: When Hearts Collide — Breaking a Photo Matchmaker with an MD5 Collision**
+
+_A walkthrough of the "When Hearts Collide" challenge from TryHackMe's Love at First Breach 2026 event. The site is a dog-photo "Matchmaker" that decides whether two pictures are the same by comparing their MD5 hashes. MD5 has been collision-broken since 2004, so we generate two visibly different JPEGs that share one MD5 with fastcoll, feed them to the matcher, and it happily declares a "match" — handing over the flag._
+
+> The flag and the target IP are redacted. When Hearts Collide is an authorized training challenge on TryHackMe; everything here was performed against a legal practice target. The flag is shown as `THM{<redacted>}`; the real value was recovered on the box but is withheld here.
+
+---
+
+### **TL;DR — the whole chain**
+
+<Callout type="tldr">
+
+The Matchmaker identifies and compares photos by their **MD5 hash** → MD5 is **collision-broken** (Wang et al., 2004), and the app even leaks the hint by displaying the sample dog's MD5 `79054025255fb1a26e4bc422aef54eb4` — the exact digest from the famous 2004 collision → we run **fastcoll** to produce two visibly different images (`twin1.jpg`, `twin2.jpg`) with an **identical MD5** → upload them to the Matchmaker → it compares MD5s, sees them equal, and declares **"Match complete"** at `/upload_success/<uuid>` → the match page reveals the **flag**.
+
+Different pictures, one hash, an instant (bogus) match.
+
+</Callout>
+
+### **The target**
+
+```text
+export IP=<target-ip>
+```
+
+When Hearts Collide is a dog-photo "Matchmaker" web app served on port 80:
+
+```text
+http://$IP/             →  Matchmaker homepage (upload a photo to "match")
+http://$IP/view/<uuid>  →  a stored match, serving /static/uploads/<uuid>.jpg
+```
+
+The homepage links a sample match whose photo is served from `/static/uploads/00795a8b-….jpg`, and the app prints that photo's MD5:
+
+```text
+79054025255fb1a26e4bc422aef54eb4
+```
+
+That value is not random. It's the MD5 from **Xiaoyun Wang et al.'s 2004 collision** — the first public proof that MD5 is broken. A known collision hash printed right on the page is a loud hint: **the matching logic trusts MD5.**
+
+### **The vulnerability — MD5 used as an identity check**
+
+The Matchmaker decides whether two photos "match" by comparing their **MD5 digests**. MD5 was proven collision-vulnerable in 2004, when Wang et al. produced two different 128-byte messages with the _same_ MD5 hash — meaning MD5 can no longer reliably tell two files apart.
+
+<Callout type="insight">
+
+Because the app treats **"same MD5" as "same / matching image"**, anyone who can supply two files that collide can make the app call two _different_ pictures a match. And generating identical-prefix MD5 collisions on commodity hardware takes seconds with public tooling — so this is trivial to weaponize, not a theoretical worry.
+
+</Callout>
+
+### **Step 1 — build the collision tool (fastcoll)**
+
+```text
+sudo apt install build-essential libboost-all-dev git
+git clone https://github.com/upbit/clone-fastcoll.git
+cd clone-fastcoll
+make
+```
+
+### **Step 2 — generate two images with the same MD5**
+
+Point fastcoll at a seed image; it emits two outputs that differ in a few bytes but share one MD5:
+
+```text
+./fastcoll dog.jpg
+# Generating first block: ...
+# Generating second block: ...
+# use 'md5sum md5_data*' check MD5
+
+md5sum md5_data*
+# 7f493964558792b6931345242fd1718d  md5_data1
+# 7f493964558792b6931345242fd1718d  md5_data2   <- identical MD5, different files
+```
+
+Rename the two outputs to valid-looking image uploads:
+
+```text
+mv md5_data1 twin1.jpg
+mv md5_data2 twin2.jpg
+```
+
+We now hold two JPEGs that are byte-for-byte different yet hash to the **same** MD5.
+
+### **Step 3 — feed the twins to the Matchmaker**
+
+Upload the two colliding images through the Matchmaker's upload form. The app hashes each file, compares the digests, finds them **equal**, and declares a match — exactly the integrity decision MD5 can no longer be trusted to make. The result lands on a match page:
+
+```text
+http://$IP/upload_success/<uuid>
+# "Match complete"  —  YOUR UPLOAD  <->  DOGGY DATABASE
+```
+
+Two different dog photos, declared a match on hash equality alone. The match page prints the flag:
+
+```text
+THM{<redacted>}
+```
+
+Different images → one MD5 → bogus "match" → flag. The entire trick rests on the app trusting a hash that stopped being collision-resistant two decades ago.
+
+### **Impact**
+
+<Callout type="critical">
+
+**Medium — CVSS 3.1 5.3** (`AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N`). In this challenge the payoff is just the flag, but the underlying flaw — **using MD5 to decide whether two files are the same** — is a genuine integrity failure:
+
+- **Integrity bypass.** An attacker who controls the inputs can make two _different_ files pass as identical. Wherever MD5 gates trust — deduplication, "known-good" allow-lists, checksum/signature verification, content-addressed storage — a benign file and a malicious one can be swapped under one hash.
+- **Cheap and deterministic.** Identical-prefix MD5 collisions take seconds with public tools; chosen-prefix collisions (as weaponized against MD5 in the Flame malware, and against SHA-1 in "SHAttered") extend the same idea to realistic, attacker-chosen file contents.
+
+</Callout>
+
+### **Recommended fix — stop trusting MD5**
+
+<Callout type="fix">
+
+1. **Replace MD5 for any integrity or identity decision** with a collision-resistant hash — **SHA-256** or stronger. MD5 (and SHA-1) must not be used to decide whether two files are "the same" or "known good."
+2. **Don't equate "same hash" with "same content"** for security decisions. If you must detect duplicates, compare the bytes once hashes match, and use authenticated, keyed constructions (HMAC) where a secret is involved.
+3. **For signatures / allow-listing**, verify with a modern signature scheme over a strong hash, never a bare digest comparison.
+
+</Callout>
+
+### **Takeaways**
+
+- **MD5 is not an identity.** "Equal MD5" has meant "possibly a crafted collision" since 2004 — it is no proof that two files are the same.
+- **Read the hints the app leaks.** A printed hash of `79054025255fb1a26e4bc422aef54eb4` _is_ the exploit brief: it's the canonical Wang collision digest.
+- **Collisions are a commodity.** `fastcoll` turns the theory into two files in seconds — the attack is practical, not academic.
+- **Use SHA-256 for integrity.** The whole bug class disappears when matching and verification use a collision-resistant hash.
+
+Thanks for reading. "When Hearts Collide" is a tidy reminder that MD5 collisions aren't a museum piece — anywhere a system decides "same file?" by comparing MD5, two hearts (and two very different files) can be made to collide.

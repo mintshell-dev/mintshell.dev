@@ -160,7 +160,7 @@ Cái bẫy tinh vi nằm ở vòng thứ hai: assembly nạp trước ký tự _
 
 Có code đúng rồi, `ARM` (`EXECUTE 0x4f0`) đáng lẽ mở khoá supervisor mode — nhưng payload JSON hiển nhiên cứ trả `WFS_ERR_CDM_INVALIDCODE`.
 
-<Callout type="note">
+<Callout type="insight">
 
 **Khi một payload "đúng nội dung" bị từ chối** **_y hệt_** **một payload rỗng, hãy nghi framing/encoding, không phải nội dung.** Gửi code dạng `{"activation_code":"..."}` thất bại y hệt gửi `{}` — bằng chứng server không hề parse JSON của ta. Banner chỉ hứa _reply_ là JSON; **DATA của request là bytes thô**. `ARM` muốn đúng 8 ký tự ASCII của code (ví dụ `b"86961047"`), `SET_MONITOR` muốn `b"off"`, `DISPENSE` muốn số tờ dạng ASCII. Đọc lại đặc tả; đừng mặc định JSON ở cả hai chiều.
 
@@ -191,7 +191,7 @@ Cái deadlock bề ngoài (monitor chặn dispense, mà tắt monitor lại cầ
 
 `GET_FLAG` cứ trả "no proof of cashout on record" ngay cả sau các lần dispense thành công, vì dispense của ta mang null transaction id và không lần nào được tính là bằng chứng. DATA của `DISPENSE` chỉ là số tờ, và không có cách nào gán transaction id — nên bằng chứng đúng ý là một jackpot _thật_: vét cạn két.
 
-<Callout type="note">
+<Callout type="insight">
 
 Điều kiện ra flag không phải "một giao dịch hợp lệ" mà là **`dispensed_total == vault_total_notes`** — máy phải nhả ra _mọi_ tờ. Với fraud monitor đã tắt, không gì cản một vòng lặp `DISPENSE 40` tới khi `remaining_notes` về `0`; đúng lúc đó `flag_released` lật sang `true`. Đó chính là đúng nghĩa đen của _jackpotting_: ATM tự làm rỗng chính mình.
 
