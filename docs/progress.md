@@ -2,8 +2,9 @@
 
 Quỹ thời gian: 5–10 giờ/tuần, mỗi mốc khoảng 1 tuần. Định nghĩa hoàn thành: [workflow.md](workflow.md).
 
-**Tiếp theo: duyệt nhánh `feat/notion-bilingual-pull` (Notion song ngữ, chưa commit); sau đó tác giả điền cột Version
-cho mọi dòng Ready rồi chạy thử `notion:pull` + `writeups:promote` trên một bài thật.**
+**Tiếp theo: điền cột Version (`EN`/`VI`) cho mọi dòng Ready trong Notion và đổi Status của Cupid's Matchmaker sang
+Published; sau deploy, xác nhận trang `cupids-matchmaker` (vi + en) với callout tldr/insight/critical/fix hiển thị đúng.
+Còn mở từ review M4b: I2 (bộ kiểm flag của `test:dist`), I3.**
 
 | Mốc   | Mục tiêu                                                  | Trạng thái | ADR                                                                          |
 | ----- | --------------------------------------------------------- | ---------- | ---------------------------------------------------------------------------- |
@@ -23,7 +24,7 @@ cho mọi dòng Ready rồi chạy thử `notion:pull` + `writeups:promote` trê
 | M6b-B | Rewrite tác giả, ký lại 72 commit, GitHub public (08/10)  | Xong       | —                                                                            |
 | M6b-B | Link repo cho người đọc chuyển sang GitHub công khai      | Xong       | —                                                                            |
 | M6b-C | Thông báo ra mắt                                          | Xong       | —                                                                            |
-| M4b   | Notion song ngữ: hai dòng một Slug, cột Version           | Chờ duyệt  | [0013](adr/0013-notion-manual-pull.md) (bổ sung)                             |
+| M4b   | Notion song ngữ: hai dòng một Slug, cột Version (09/10)   | Xong       | [0013](adr/0013-notion-manual-pull.md) (bổ sung)                             |
 | M6    | Email Brevo, chính sách quyền riêng tư, analytics, ra mắt | Chưa làm   | —                                                                            |
 
 ## Mốc đã xong (tóm tắt)
@@ -205,7 +206,8 @@ Mỗi trang danh sách chỉ liệt kê bài có bản ngôn ngữ đó thật (
 
 Mỗi write-up là hai dòng Notion dùng chung `Slug`, phân biệt bằng cột `Version`. Giữ nguyên ADR 0013: chỉ ghi
 `_import/`, `draft: true`; `draft: false` chỉ có sau khi tác giả promote và soát (bổ sung vào ADR 0013, mục ghi ngày
-2026-10-09). Nhánh `feat/notion-bilingual-pull`, chưa commit.
+2026-10-09). Nhánh `feat/notion-bilingual-pull` đã merge vào `main` (`7614c27`, 09/10), gồm commit `22cef65`
+(tính năng) và `a7aac64` (xuất bản `cupids-matchmaker`, xem dưới).
 
 - [x] `frontmatter.ts`: cột `Version`, map tường minh `VERSIONS` (`EN` → en, `VI` → vi, so khớp chính xác sau trim,
       phân biệt hoa thường), `readVersion` trả về ok/empty/unknown; comment `Description` theo ngôn ngữ của dòng
@@ -251,7 +253,13 @@ Mỗi write-up là hai dòng Notion dùng chung `Slug`, phân biệt bằng cộ
     bidi/zero-width
 - [x] `lint`, `typecheck` (gồm `tsc -p scripts`), `test` (492), `build`, `test:dist` (752), `format:check` đều qua.
       Không gọi Notion thật; không đụng `content/writeups/**`
-- [ ] Tác giả điền Version cho mọi dòng Ready trong Notion, chạy thử trên một bài thật (terminal riêng)
+- [x] Bài song ngữ đầu tiên theo mô hình này: `cupids-matchmaker` (vi + en, `translation: done`, `draft: false`).
+      Callout chọn type theo thứ tự tldr → insight → critical → fix, giống hệt ở hai bản; đã kiểm 4 cặp
+      `<Callout>…</Callout>` tách bạch, không lồng nhau (yêu cầu ban đầu nói khối critical thiếu thẻ đóng, nhưng
+      file thực tế đã có thẻ đóng nên không thêm). Đã kiểm trên `main` sau merge: `build` qua, `test:dist` 786 test
+      qua, trang vi và en render đúng 4 callout `tldr`, `insight`, `critical`, `fix` theo thứ tự
+- [ ] Tác giả điền Version (`EN`/`VI`) cho mọi dòng Ready còn lại trong Notion; đổi Status các bài đã xuất bản sang
+      Published
 - Chưa làm (ngoài phạm vi): kiểm cấu trúc callout chỉ có ở `valenfind` + `sample-writeup`; `scripts/promote/transform.ts`
   chưa được review lại trong lượt này
 - Còn mở từ review (Info, không sửa ở nhánh này):
