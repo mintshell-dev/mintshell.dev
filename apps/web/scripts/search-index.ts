@@ -50,15 +50,22 @@ const { index, errors } = await createIndex();
 if (!index) fail('tạo chỉ mục', errors);
 
 const added = await index.addDirectory({ path: SITE, glob: GLOB });
+console.log(
+  `[debug] expected=${expected} added.page_count=${added.page_count} errors=${added.errors.length}`,
+);
 if (added.errors.length > 0) fail('đọc dist', added.errors);
 
 const written = await index.writeFiles({ outputPath: OUTPUT });
+console.log(`[debug] writeFiles errors=${written.errors.length} outputPath=${OUTPUT}`);
 if (written.errors.length > 0) fail('ghi chỉ mục', written.errors);
 await close();
 
-const entry = JSON.parse(readFileSync(`${OUTPUT}pagefind-entry.json`, 'utf8')) as {
+const raw = readFileSync(`${OUTPUT}pagefind-entry.json`, 'utf8');
+console.log(`[debug] pagefind-entry.json length=${raw.length} content=${raw.slice(0, 200)}`);
+const entry = JSON.parse(raw) as {
   languages: Record<string, { page_count: number }>;
 };
+
 const indexed = Object.values(entry.languages).reduce((sum, l) => sum + l.page_count, 0);
 if (indexed !== expected) {
   fail('đối chiếu', [`Đã index ${indexed} trang, nhưng có ${expected} trang data-pagefind-body.`]);
