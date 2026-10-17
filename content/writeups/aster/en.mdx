@@ -1,0 +1,150 @@
+---
+title: 'Aster'
+description: 'A decompiled .pyc hints at an Asterisk PBX; brute-forcing the Asterisk Manager and reading SIP users exposes an SSH password, and a root cron that runs a Java class on a trigger file is abused to write out the root flag.'
+date: 2026-02-26
+platform: tryhackme
+room: 'Aster'
+roomUrl: 'https://tryhackme.com/room/aster'
+difficulty: medium
+tags:
+  - 'reverse-engineering'
+  - 'password-cracking'
+  - 'network-protocol'
+  - 'linux'
+  - 'privesc'
+  - 'scheduled-tasks'
+vulnClasses:
+  - 'weak credentials'
+  - 'insecure privileged service'
+translation: done
+draft: false
+---
+
+_A walkthrough of the "Aster" room from TryHackMe. A compiled Python file on the web server decompiles to a hint pointing at Asterisk, the open-source PBX. We brute-force the Asterisk Manager Interface, read the SIP users to recover an SSH password, and finish with a root cron that runs a Java class whenever a trigger file exists — which we use to have the root flag written out for us._
+
+> Aster is an authorized training challenge on TryHackMe; everything here was performed against a legal practice target. Both flags and the recovered passwords are shown as `THM{<redacted>}` / `<redacted>` — real on the box, withheld here.
+
+---
+
+### **TL;DR**
+
+<Callout type="tldr">
+
+The web server offers a `.pyc`; decompile it (`uncompyle6`) and decode its hex strings to a hint naming the “open source framework for building communications” → that's **Asterisk** on port 5038 (Asterisk Call Manager) → brute the AMI login (`admin`) with Metasploit → log in over telnet and run `sip show users` to read **harry**'s SIP secret → SSH as **harry** (user flag) → harry's home has `Example_Root.jar`; decompiling it shows a root cron writes the root flag to `/home/harry/root.txt` **whenever** **`/tmp/flag.dat`** **exists** → `touch /tmp/flag.dat`, wait a minute, read the **root flag**.
+
+</Callout>
+
+### **The target**
+
+```text
+export IP=<target-ip>
+export ATTACKER_IP=<your-ip>
+```
+
+`nmap` shows SSH, a web server, and — the giveaway — the Asterisk Call Manager plus VoIP-adjacent ports:
+
+```text
+22/tcp   open  ssh         OpenSSH 7.2p2 Ubuntu
+80/tcp   open  http        Apache 2.4.18   # Aster CTF
+1720/tcp open  h323q931?
+2000/tcp open  cisco-sccp?
+5038/tcp open  asterisk    Asterisk Call Manager 5.0.2
+```
+
+### **The vulnerability**
+
+Aster is a chain of exposed, weakly-protected privileged services. The web server leaks a compiled Python file that hands us a hint; the Asterisk Manager Interface accepts a weak password and lets an authenticated user read every SIP peer's secret in cleartext; and a root cron trusts a world-writable trigger file.
+
+<Callout type="insight">
+
+The Asterisk Manager Interface is the pivot. Once you brute a manager login, `sip show users` prints every SIP peer **with its secret in plaintext** — and here a SIP user's secret is reused as a Linux SSH password. A telephony management port that most people ignore is a full credential store if its login is weak.
+
+</Callout>
+
+### **Step 1 — decompile the .pyc → identify Asterisk**
+
+Download the `.pyc` the web app serves and decompile it; the embedded hex strings decode to a hint:
+
+```text
+uncompyle6 output.pyc
+# hex -> "Good job, user 'admin' the open source framework for building communications, installed in the server."
+```
+
+That names the `admin` manager user and points squarely at Asterisk (port 5038).
+
+### **Step 2 — brute the Asterisk Manager → read SIP secrets**
+
+Metasploit's `auxiliary/voip/asterisk_login` brute-forces the manager password:
+
+```text
+msf > use auxiliary/voip/asterisk_login
+msf > set USERNAME admin
+msf > set RHOSTS $IP
+msf > run      # admin : <redacted>
+```
+
+Log in over telnet and list SIP users:
+
+```text
+telnet $IP 5038
+# Action: Login / Username: admin / Secret: <redacted>
+# Action: Command / Command: sip show users
+# -> harry   <redacted>   (SIP secret)
+```
+
+### **Step 3 — SSH as harry (user flag)**
+
+`harry`'s SIP secret is reused for SSH:
+
+```text
+ssh harry@$IP
+harry@ubuntu:~$ cat user.txt
+THM{<redacted>}
+```
+
+### **Step 4 — root cron + trigger file → root flag**
+
+`harry`'s home holds `Example_Root.jar`. Unzip it, pull the `.class` to the attacker box and decompile (Ghidra): it writes the root flag to `/home/harry/root.txt` **only if** **`/tmp/flag.dat`** **exists**. `/etc/crontab` confirms a root job runs the real Java every minute:
+
+```text
+# /etc/crontab
+*  *  * * *  root  cd /root/java/ && bash run.sh
+```
+
+So create the trigger file and wait one tick — the root-run Java writes the flag into harry's readable home:
+
+```text
+harry@ubuntu:~$ echo "go" > /tmp/flag.dat
+# ~1 min later, root.txt appears, owned by root but world-readable:
+harry@ubuntu:~$ cat root.txt
+THM{<redacted>}
+```
+
+Note: this recovers the **root flag** via a root-run process; it is a privileged file-write triggered by an attacker-controllable condition, not an interactive root shell. A full shell would require writing to the cron's script or the Java in `/root/java/`, which was not done here.
+
+### **Impact**
+
+<Callout type="critical">
+
+**High — CVSS 3.1 \~8.1** (`AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:L`). A weak Asterisk Manager password exposes every SIP peer's cleartext secret, one of which is reused for SSH — remote interactive access as a real user. A root cron that acts on a world-writable trigger file then leaks root-owned data to a low-privileged user, demonstrating a privileged-service design flaw that a small change would turn into full root.
+
+</Callout>
+
+### **Recommended fix**
+
+<Callout type="fix">
+
+- **Harden the Asterisk Manager Interface:** strong unique `manager.conf` secrets, bind AMI to loopback or trusted management hosts only, and never reuse SIP secrets as OS passwords.
+- **Don't expose compiled source on the web root** — the `.pyc` leaked the first hint.
+- **Fix the cron/trigger design.** A root job must not act on a world-writable path (`/tmp/flag.dat`); validate inputs, run with least privilege, and keep privileged scripts and their triggers out of user-writable locations.
+
+</Callout>
+
+### **Takeaways**
+
+- **Decompile everything.** A `.pyc` or `.jar` often hands you the next step for free — here, the service to target and the trigger to privesc.
+- **Telephony ports are credential stores.** A weak AMI login plus `sip show users` is a cleartext password dump.
+- **Credential reuse bridges services.** A SIP secret became an SSH login.
+- **Watch what a root cron trusts.** A world-writable trigger file is a privilege boundary.
+
+Aster is a reminder that “boring” infrastructure ports — a PBX manager interface — can be the softest way in. Thanks for reading.

